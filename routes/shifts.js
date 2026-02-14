@@ -1,0 +1,389 @@
+import express from 'express';
+import crypto from 'crypto';
+import { config } from '../config.js';
+import { pool } from '../db.js';
+import { getSession } from '../auth.js';
+import {
+  getShifts,
+  getShiftById,
+  createShift,
+  updateShift,
+  deleteShift,
+  createBulkShifts,
+  getShiftStats,
+  checkShiftConflict,
+  calculateEndTime,
+  approveShift,
+  approveShifts,
+  unapproveShift
+} from '../shifts.js';
+import {
+  createSwapRequest,
+  getSwapRequestsForStaff,
+  getSwapRequestsForCompany,
+  acceptSwapRequest,
+  rejectSwapRequest,
+  cancelSwapRequest,
+  getSwapRequestById
+} from '../shift-swaps.js';
+import { requireAuth, requireStaffAuth, authenticateStaffOrUser } from '../middleware/auth.js';
+import { hasActiveSubscription } from '../subscription.js';
+import { logShiftActivity } from '../activity.js';
+
+const router = express.Router();
+
+// GET /shifts - API key or session+CSRF, then staff or user
+router.get('/shifts', async (req, res) => {
+  try {
+    const apiKey = req.headers['x-api-key'] ||
+      (req.headers.authorization && req.headers.authorization.startsWith('Bearer wak_')
+        ? req.headers.authorization.replace('Bearer ', '')
+        : null);
+
+    if (apiKey && apiKey.startsWith('wak_')) {
+      const { verifyApiKey } = await import('../api-security.js');
+      const keyData = await verifyApiKey(apiKey);
+      if (keyData) {
+        req.userId = keyData.user_id;
+        req.apiKey = keyData;
+      } else {
+        return res.status(401).json({ error: 'Invalid or expired API key' });
+      }
+    } else {
+      let sessionId = req.cookies.sessionId;
+      if (!sessionId && req.headers.authorization) {
+        sessionId = req.headers.authorization.replace('Bearer ', '');
+      }
+      if (!sessionId || sessionId === 'undefined' || sessionId === 'null') {
+        return res.status(401).json({ error: 'No valid session provided' });
+      }
+      const session = await getSession(sessionId);
+      if (!session) {
+        return res.status(401).json({ error: 'Invalid or expired session' });
+      }
+      const csrfToken = req.headers['x-csrf-token'];
+      if (!csrfToken) {
+        return res.status(403).json({
+          error: 'CSRF token required. Include X-CSRF-Token header. Get token from /api/auth/csrf-token endpoint.'
+        });
+      }
+      const expectedToken = crypto
+        .createHash('sha256')
+        .update(sessionId + (process.env.SESSION_SECRET || config.sessionSecret || 'change-this-secret-key-in-production'))
+        .digest('hex');
+      if (csrfToken !== expectedToken) {
+        return res.status(403).json({ error: 'Invalid CSRF token' });
+      }
+      req.userId = session.user_id;
+    }
+
+    const authResult = await authenticateStaffOrUser(req, res);
+    if (!authResult && !req.userId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const { startDate, endDate, status } = req.query;
+
+    if (authResult && authResult.isStaff && authResult.staffId) {
+      let query = `
+        SELECT s.id, s.user_id, s.staff_id, s.shift_date, s.start_time, s.hours, s.break_minutes,
+          s.shift_type, s.pay_type, s.status, s.location, s.notes, s.created_at, s.updated_at,
+          s.time_entry_id, s.clocked_in_time, s.clocked_out_time,
+          st.name as staff_name, st.role, st.hourly_rate
+        FROM shifts s JOIN staff st ON s.staff_id = st.id WHERE s.user_id = $1`;
+      const params = [req.userId];
+      let paramCount = 1;
+      if (startDate) { paramCount++; query += ` AND s.shift_date >= $${paramCount}`; params.push(startDate); }
+      if (endDate) { paramCount++; query += ` AND s.shift_date <= $${paramCount}`; params.push(endDate); }
+      if (status) { paramCount++; query += ` AND s.status = $${paramCount}`; params.push(status); }
+      query += ' ORDER BY s.shift_date DESC, s.start_time ASC';
+      const result = await pool.query(query, params);
+      const shifts = result.rows.map(shift => {
+        const cleaned = { ...shift };
+        cleaned.clocked_in_time = (shift.clocked_in_time == null || shift.clocked_in_time === '') ? null : shift.clocked_in_time;
+        cleaned.clocked_out_time = (shift.clocked_out_time == null || shift.clocked_out_time === '') ? null : shift.clocked_out_time;
+        delete cleaned.approved_at;
+        delete cleaned.approved_by;
+        return cleaned;
+      });
+      return res.json({ shifts });
+    }
+
+    const { staffId: filterStaffId } = req.query;
+    const shifts = await getShifts(req.userId, { startDate, endDate, staffId: filterStaffId, status });
+    res.json({ shifts });
+  } catch (error) {
+    console.error('Get shifts error:', error);
+    res.status(500).json({ error: 'Failed to get shifts' });
+  }
+});
+
+router.get('/shifts/stats', requireAuth, async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    const stats = await getShiftStats(req.userId, { startDate, endDate });
+    res.json(stats);
+  } catch (error) {
+    console.error('Get shift stats error:', error);
+    res.status(500).json({ error: 'Failed to get shift statistics' });
+  }
+});
+
+router.get('/shifts/:id', requireAuth, async (req, res) => {
+  try {
+    const shift = await getShiftById(req.params.id, req.userId);
+    if (!shift) return res.status(404).json({ error: 'Shift not found' });
+    res.json({ shift });
+  } catch (error) {
+    console.error('Get shift error:', error);
+    res.status(500).json({ error: 'Failed to get shift' });
+  }
+});
+
+router.post('/shifts', requireAuth, async (req, res) => {
+  try {
+    const { staffId, shiftDate, startTime, hours, breakMinutes, shiftType, payType, location, notes } = req.body;
+    if (!staffId || !shiftDate || !startTime || !hours) {
+      return res.status(400).json({ error: 'Staff ID, date, start time, and hours are required' });
+    }
+    const normalizedDate = shiftDate.split('T')[0];
+    const calculatedEndTime = calculateEndTime(startTime, parseFloat(hours));
+    const conflictResult = await checkShiftConflict(req.userId, staffId, normalizedDate, startTime, calculatedEndTime);
+    if (conflictResult.hasConflict) {
+      const conflicts = conflictResult.conflictingShifts;
+      const conflictTimes = conflicts.map(c => `${c.start}-${c.end}`).join(', ');
+      return res.status(409).json({
+        error: `This shift conflicts with an existing shift for this staff member. Conflicting shift time(s): ${conflictTimes}`,
+        conflictingShifts: conflicts
+      });
+    }
+    const shift = await createShift(req.userId, {
+      staffId,
+      shiftDate: normalizedDate,
+      startTime,
+      hours: parseFloat(hours),
+      breakMinutes,
+      shiftType,
+      payType,
+      location,
+      notes
+    });
+    res.status(201).json({ message: 'Shift created successfully', shift });
+  } catch (error) {
+    console.error('Create shift error:', error);
+    res.status(500).json({ error: 'Failed to create shift', details: error.message });
+  }
+});
+
+router.post('/shifts/bulk', requireAuth, async (req, res) => {
+  try {
+    const isPaid = await hasActiveSubscription(req.userId);
+    if (!isPaid) {
+      return res.status(403).json({
+        error: 'Bulk shift creation requires a Professional subscription',
+        code: 'SUBSCRIPTION_REQUIRED',
+        upgradeUrl: '/plans'
+      });
+    }
+    const { shifts } = req.body;
+    if (!shifts || !Array.isArray(shifts) || shifts.length === 0) {
+      return res.status(400).json({ error: 'Shifts array is required' });
+    }
+    const validatedShifts = shifts.map(shift => {
+      if (!shift.staffId || !shift.shiftDate || !shift.startTime || !shift.hours) {
+        throw new Error('Each shift must have staffId, shiftDate, startTime, and hours');
+      }
+      return { ...shift, hours: parseFloat(shift.hours) };
+    });
+    const createdShifts = await createBulkShifts(req.userId, validatedShifts);
+    res.status(201).json({ message: `${createdShifts.length} shifts created successfully`, shifts: createdShifts });
+  } catch (error) {
+    console.error('Create bulk shifts error:', error);
+    res.status(500).json({ error: 'Failed to create shifts' });
+  }
+});
+
+router.put('/shifts/:id', requireAuth, async (req, res) => {
+  try {
+    const { staffId, shiftDate, startTime, hours, breakMinutes, shiftType, payType, status, location, notes, clockedInTime, clockedOutTime } = req.body;
+    let calculatedEndTime = null;
+    if (startTime && hours) {
+      calculatedEndTime = calculateEndTime(startTime, parseFloat(hours));
+    }
+    if (staffId && shiftDate && startTime && calculatedEndTime) {
+      const conflictResult = await checkShiftConflict(req.userId, staffId, shiftDate, startTime, calculatedEndTime, req.params.id);
+      if (conflictResult.hasConflict) {
+        const conflicts = conflictResult.conflictingShifts;
+        const conflictTimes = conflicts.map(c => `${c.start}-${c.end}`).join(', ');
+        return res.status(409).json({
+          error: `This shift conflicts with an existing shift for this staff member. Conflicting shift time(s): ${conflictTimes}`,
+          conflictingShifts: conflicts
+        });
+      }
+    }
+    const shift = await updateShift(req.params.id, req.userId, {
+      staffId,
+      shiftDate,
+      startTime,
+      hours: hours ? parseFloat(hours) : undefined,
+      breakMinutes,
+      shiftType,
+      payType,
+      status,
+      location,
+      notes,
+      clockedInTime,
+      clockedOutTime
+    });
+    if (!shift) return res.status(404).json({ error: 'Shift not found' });
+    res.json({ message: 'Shift updated successfully', shift });
+  } catch (error) {
+    console.error('Update shift error:', error);
+    res.status(500).json({ error: 'Failed to update shift' });
+  }
+});
+
+router.delete('/shifts/:id', requireAuth, async (req, res) => {
+  try {
+    await deleteShift(req.params.id, req.userId);
+    res.json({ message: 'Shift deleted successfully' });
+  } catch (error) {
+    console.error('Delete shift error:', error);
+    if (error.message === 'Shift not found or you do not have permission to delete it') {
+      return res.status(404).json({ error: error.message });
+    }
+    res.status(500).json({ error: 'Failed to delete shift' });
+  }
+});
+
+router.post('/shifts/:id/approve', requireAuth, async (req, res) => {
+  try {
+    const result = await approveShift(req.params.id, req.userId, req.userId);
+    await logShiftActivity(
+      req.userId,
+      result.shift.staff_id,
+      result.shift.id,
+      'approved',
+      `Approved shift for ${result.shift.staff_name} on ${new Date(result.shift.shift_date).toLocaleDateString()}`
+    );
+    res.json({
+      message: 'Shift approved and hours logged successfully',
+      timeEntryId: result.timeEntryId,
+      regularHours: result.regularHours,
+      overtimeHours: result.overtimeHours,
+      scheduledHours: result.scheduledHours,
+      actualHoursWorked: result.actualHoursWorked
+    });
+  } catch (error) {
+    console.error('Approve shift error:', error);
+    res.status(400).json({ error: error.message || 'Failed to approve shift' });
+  }
+});
+
+router.post('/shifts/approve-bulk', requireAuth, async (req, res) => {
+  try {
+    const { shiftIds } = req.body;
+    if (!shiftIds || !Array.isArray(shiftIds) || shiftIds.length === 0) {
+      return res.status(400).json({ error: 'Shift IDs array is required' });
+    }
+    const { results, errors } = await approveShifts(shiftIds, req.userId, req.userId);
+    for (const result of results) {
+      await logShiftActivity(req.userId, result.shift.staff_id, result.shift.id, 'approved', `Approved shift for ${result.shift.staff_name}`);
+    }
+    res.json({
+      message: `${results.length} shifts approved successfully`,
+      results,
+      errors: errors.length > 0 ? errors : undefined
+    });
+  } catch (error) {
+    console.error('Bulk approve shifts error:', error);
+    res.status(500).json({ error: 'Failed to approve shifts' });
+  }
+});
+
+router.post('/shifts/:id/unapprove', requireAuth, async (req, res) => {
+  try {
+    await unapproveShift(req.params.id, req.userId);
+    res.json({ message: 'Shift approval reversed successfully' });
+  } catch (error) {
+    console.error('Unapprove shift error:', error);
+    res.status(500).json({ error: error.message || 'Failed to reverse shift approval' });
+  }
+});
+
+router.post('/shifts/:id/swap-request', requireStaffAuth, async (req, res) => {
+  try {
+    const { requestedShiftId, message } = req.body;
+    if (!requestedShiftId) return res.status(400).json({ error: 'requestedShiftId is required' });
+    const swapRequest = await createSwapRequest(req.staffId, req.params.id, requestedShiftId, message);
+    res.status(201).json({ message: 'Swap request created successfully', swapRequest });
+  } catch (error) {
+    console.error('Create swap request error:', error);
+    res.status(400).json({ error: error.message || 'Failed to create swap request' });
+  }
+});
+
+router.get('/shift-swaps', async (req, res) => {
+  try {
+    const authResult = await authenticateStaffOrUser(req, res);
+    if (!authResult) return res.status(401).json({ error: 'Authentication required' });
+    const { status } = req.query;
+    const filters = status ? { status } : {};
+    if (authResult.isStaff) {
+      const swapRequests = await getSwapRequestsForStaff(authResult.staffId, filters);
+      return res.json({ swapRequests });
+    }
+    const swapRequests = await getSwapRequestsForCompany(req.userId, filters);
+    res.json({ swapRequests });
+  } catch (error) {
+    console.error('Get swap requests error:', error);
+    res.status(500).json({ error: 'Failed to get swap requests' });
+  }
+});
+
+router.get('/shift-swaps/:id', async (req, res) => {
+  try {
+    const authResult = await authenticateStaffOrUser(req, res);
+    if (!authResult) return res.status(401).json({ error: 'Authentication required' });
+    const swapRequest = authResult.isStaff
+      ? await getSwapRequestById(req.params.id, authResult.staffId)
+      : await getSwapRequestById(req.params.id, null, req.userId);
+    if (!swapRequest) return res.status(404).json({ error: 'Swap request not found' });
+    res.json({ swapRequest });
+  } catch (error) {
+    console.error('Get swap request error:', error);
+    res.status(500).json({ error: 'Failed to get swap request' });
+  }
+});
+
+router.post('/shift-swaps/:id/accept', requireStaffAuth, async (req, res) => {
+  try {
+    const swapRequest = await acceptSwapRequest(req.params.id, req.staffId);
+    res.json({ message: 'Swap request accepted successfully. Shifts have been swapped.', swapRequest });
+  } catch (error) {
+    console.error('Accept swap request error:', error);
+    res.status(400).json({ error: error.message || 'Failed to accept swap request' });
+  }
+});
+
+router.post('/shift-swaps/:id/reject', requireStaffAuth, async (req, res) => {
+  try {
+    const swapRequest = await rejectSwapRequest(req.params.id, req.staffId);
+    res.json({ message: 'Swap request rejected successfully', swapRequest });
+  } catch (error) {
+    console.error('Reject swap request error:', error);
+    res.status(400).json({ error: error.message || 'Failed to reject swap request' });
+  }
+});
+
+router.delete('/shift-swaps/:id', requireStaffAuth, async (req, res) => {
+  try {
+    const swapRequest = await cancelSwapRequest(req.params.id, req.staffId);
+    res.json({ message: 'Swap request cancelled successfully', swapRequest });
+  } catch (error) {
+    console.error('Cancel swap request error:', error);
+    res.status(400).json({ error: error.message || 'Failed to cancel swap request' });
+  }
+});
+
+export default router;

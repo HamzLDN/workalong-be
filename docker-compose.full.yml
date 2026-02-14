@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: workalong-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: workalong
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: users
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-workalong-db.sh:/docker-entrypoint-initdb.d/init-workalong-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workalong -d users || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    networks:
+      - workalong-network
+
+  frontend:
+    build:
+      context: ../workalong-frontend
+      dockerfile: Dockerfile.frontend.ubuntu
+    container_name: workalong-frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    restart: unless-stopped
+    environment:
+      - PUBLIC_API_URL=https://workalong.co.uk/api
+    volumes:
+      - ../workalong-frontend/docker/ssl:/etc/nginx/ssl:ro
+      # Hot-swap volume: mount local dist/ to container's nginx html directory
+      # Build locally with 'npm run build', then files appear instantly in container
+      - ../workalong-frontend/dist:/usr/share/nginx/html:ro
+    depends_on:
+      - backend
+    networks:
+      - workalong-network
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend.ubuntu
+    container_name: workalong-backend
+    ports:
+      - "8080:8080"
+      - "8443:443"
+    restart: unless-stopped
+    env_file:
+     - .env
+    environment:
+      - PORT=8080
+      - NODE_ENV=production
+      - DOCKER=true
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=workalong
+      - DB_PASSWORD=admin
+      - DB_NAME=users
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+    volumes:
+      - ../workalong-frontend/docker/ssl:/etc/nginx/ssl:ro
+      - ../workalong-frontend/certs:/app/certs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    networks:
+      - workalong-network
+
+volumes:
+  postgres_data:
+    external: true
+    name: workalong-backend_postgres_data
+
+networks:
+  workalong-network:
+    driver: bridge

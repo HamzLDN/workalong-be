@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend.ubuntu
+    container_name: workalong-backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "3443:3443"
+    environment:
+      - PORT=8080
+      - NODE_ENV=development
+      - DB_HOST=workalong-postgres
+      - DB_PORT=5432
+      - DB_USER=workalong
+      - DB_PASSWORD=admin
+      - DB_NAME=users
+    volumes:
+      - ../workalong-frontend/certs:/app/certs:ro
+      - ../workalong-frontend/docker/ssl:/etc/nginx/ssl:ro
+    networks:
+      - workalong-backend_workalong-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  workalong-backend_workalong-network:
+    external: true

@@ -1,0 +1,61 @@
+# Backend Dockerfile - Ubuntu-based
+FROM ubuntu:22.04
+
+# Avoid prompts from apt
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Fix GPG signature issues and free space
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* && \
+    apt-get update -o Acquire::AllowInsecureRepositories=true 2>&1 | grep -v "^W:" || true && \
+    apt-get install -y --allow-unauthenticated ca-certificates 2>&1 | grep -v "^W:" || true && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* && \
+    apt-get update
+
+# Install Node.js 18 (LTS) and build dependencies
+RUN apt-get install -y \
+    curl \
+    ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && apt-get install -y \
+    nodejs \
+    build-essential \
+    python3 \
+    && apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci --only=production
+
+# Rebuild bcrypt for Linux (critical - native module must match container architecture)
+RUN rm -rf node_modules/bcrypt && npm install bcrypt --no-save
+
+# Copy server code files (excluding node_modules which is already installed)
+COPY *.js ./
+COPY middleware/ ./middleware/
+COPY routes/ ./routes/
+COPY lib/ ./lib/
+RUN mkdir -p ./certs
+
+# Create SSL directory for certificates
+RUN mkdir -p /app/certs /etc/letsencrypt/live/workalong.co.uk /etc/nginx/ssl
+
+# Verify bcrypt is working
+RUN node -e "const bcrypt = require('bcrypt'); console.log('✅ bcrypt verified')"
+
+# Expose backend ports (HTTP and HTTPS)
+EXPOSE 8080 443
+
+# Health check (check HTTPS first, fallback to HTTP)
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -f -k https://localhost:443/api/health 2>/dev/null || curl -f http://localhost:8080/api/health || exit 1
+
+# Start backend server with production mode to use port 443
+CMD ["node", "index.js"]

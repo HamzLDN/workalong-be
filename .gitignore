@@ -1,0 +1,49 @@
+# Dependencies
+node_modules
+npm-debug.log
+
+# Environment files
+.env
+.env.local
+.env.development
+.env.production
+.env*.local
+
+# SSL certificates
+certs/
+*.pem
+*.key
+*.crt
+*.csr
+
+# Logs
+*.log
+logs
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Junk folder (temporary/outdated documentation)
+junk/
+
+# Backups (database backups and server backups)
+backups/
+*.sql
+*.sql.gz
+*.tar.gz
+*.tar
+
+# Sensitive configuration files
+*secret*
+*password*
+*private*
+
+# Docker SSL certificates
+docker/ssl/
