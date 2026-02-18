@@ -1,4 +1,4 @@
-import { pool } from './db.js';
+import { pool } from '../lib/db.js';
 
 /**
  * Check if user has an active paid subscription

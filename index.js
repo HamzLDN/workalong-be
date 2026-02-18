@@ -4,13 +4,19 @@ import http from 'http';
 import fs from 'fs';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
-import { config } from './config.js';
-import { cleanupExpiredSessions } from './auth.js';
+import swaggerUi from 'swagger-ui-express';
+import { swaggerSpec } from './lib/swagger.js';
+import { config } from './lib/config.js';
+import { cleanupExpiredSessions } from './services/auth.js';
 import {
   requestFingerprinting,
   detectSessionTokenMisuse,
   securityHeaders
 } from './middleware/security.js';
+import {
+  verifyObfuscatedRequest,
+  obfuscateResponse
+} from './middleware/obfuscation.js';
 import { registerRoutes } from './routes/index.js';
 
 const app = express();
@@ -20,10 +26,10 @@ const allowedOrigins = [
   'https://localhost',
   'http://localhost:3000',
   'https://localhost:3000',
+  'http://localhost:3001',
+  'https://localhost:3001',
   'http://localhost:3443',
   'https://localhost:3443',
-  'http://localhost:8080',
-  'https://localhost:8080',
   'https://workalong.co.uk',
   'https://www.workalong.co.uk',
   'http://workalong.co.uk',
@@ -69,7 +75,7 @@ app.use(cors({
   },
   credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ type: ['application/json', 'application/x-obfuscated'] }));
 app.use(cookieParser());
 
 app.set('trust proxy', 1);
@@ -77,54 +83,49 @@ app.set('trust proxy', 1);
 app.use(securityHeaders);
 app.use(requestFingerprinting);
 app.use(detectSessionTokenMisuse);
+app.use(verifyObfuscatedRequest);
+app.use(obfuscateResponse);
+
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  customCss: '.swagger-ui .topbar { display: none }',
+  customSiteTitle: 'WorkAlong API Documentation'
+}));
 
 setInterval(cleanupExpiredSessions, 60 * 60 * 1000);
 
 registerRoutes(app);
 
-
-
-// Start servers (HTTP and HTTPS)
-const HTTP_PORT = config.port || 8080;
+const HTTP_PORT = config.port || 3001;
 const HTTPS_PORT = 443;
 
-// Start HTTP server (for development/fallback)
 const httpServer = http.createServer(app);
 httpServer.listen(HTTP_PORT, () => {
   console.log(`?? HTTP Server running on http://localhost:${HTTP_PORT}`);
   console.log(`?? API available at http://localhost:${HTTP_PORT}/api`);
 });
 
-// Try to start HTTPS server if certificates exist
-// Priority: Let's Encrypt (production) > Dev certificates
 let httpsOptions = null;
 const LETSENCRYPT_KEY = '/etc/letsencrypt/live/workalong.co.uk/privkey.pem';
 const LETSENCRYPT_CERT = '/etc/letsencrypt/live/workalong.co.uk/fullchain.pem';
-// Docker-mounted SSL certificates (from docker/ssl volume)
 const DOCKER_SSL_KEY = '/etc/nginx/ssl/privkey.pem';
 const DOCKER_SSL_CERT = '/etc/nginx/ssl/fullchain.pem';
 const DEV_KEY = './certs/key.pem';
 const DEV_CERT = './certs/cert.pem';
 
 try {
-  // Try Let's Encrypt first (production)
   if (fs.existsSync(LETSENCRYPT_KEY) && fs.existsSync(LETSENCRYPT_CERT)) {
     httpsOptions = {
       key: fs.readFileSync(LETSENCRYPT_KEY),
       cert: fs.readFileSync(LETSENCRYPT_CERT)
     };
     console.log('Using Let\'s Encrypt certificates for workalong.co.uk');
-  } 
-  // Try Docker-mounted SSL certificates
-  else if (fs.existsSync(DOCKER_SSL_KEY) && fs.existsSync(DOCKER_SSL_CERT)) {
+  } else if (fs.existsSync(DOCKER_SSL_KEY) && fs.existsSync(DOCKER_SSL_CERT)) {
     httpsOptions = {
       key: fs.readFileSync(DOCKER_SSL_KEY),
       cert: fs.readFileSync(DOCKER_SSL_CERT)
     };
     console.log('Using Docker-mounted SSL certificates');
-  }
-  // Fall back to dev certificates
-  else if (fs.existsSync(DEV_KEY) && fs.existsSync(DEV_CERT)) {
+  } else if (fs.existsSync(DEV_KEY) && fs.existsSync(DEV_CERT)) {
     httpsOptions = {
       key: fs.readFileSync(DEV_KEY),
       cert: fs.readFileSync(DEV_CERT)
@@ -136,8 +137,6 @@ try {
   
   const httpsServer = https.createServer(httpsOptions, app);
   
-  // In Docker, always use port 443 (no sudo needed in container)
-  // Use 3443 for development on host without sudo
   const HTTPS_DEV_PORT = (process.env.NODE_ENV === 'production' || process.env.DOCKER === 'true') ? HTTPS_PORT : 3443;
   const DOMAIN = process.env.NODE_ENV === 'production' ? 'workalong.co.uk' : 'localhost';
   

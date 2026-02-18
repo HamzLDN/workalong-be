@@ -11,7 +11,7 @@ const mockPool = {
   on: jest.fn(),
 };
 
-jest.unstable_mockModule('../db.js', () => ({
+jest.unstable_mockModule('../lib/db.js', () => ({
   pool: mockPool,
   default: mockPool,
 }));
@@ -29,7 +29,7 @@ const {
   getActiveBudget,
   createBudget,
   updateBudget,
-} = await import('../staff.js');
+} = await import('../services/staff.js');
 
 const {
   getShifts,
@@ -37,14 +37,14 @@ const {
   updateShift,
   deleteShift,
   approveShift,
-} = await import('../shifts.js');
+} = await import('../services/shifts.js');
 
 const {
   getUserApiKeys,
   revokeApiKey,
   deleteApiKey,
   getSecurityAuditLogs,
-} = await import('../api-security.js');
+} = await import('../lib/api-security.js');
 
 const { createMockDbResult, createMockStaff, createMockShift } = await import('./setup.js');
 

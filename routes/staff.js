@@ -1,11 +1,11 @@
 import express from 'express';
-import { pool } from '../db.js';
+import { pool } from '../lib/db.js';
 import {
   findStaffByUsername,
   verifyStaffPassword,
   createStaffSession,
   deleteStaffSession
-} from '../staff-auth.js';
+} from '../services/staff-auth.js';
 import {
   getStaff,
   getStaffById,
@@ -16,15 +16,14 @@ import {
   validatePasswordToken,
   setPasswordWithToken,
   resetStaffPassword
-} from '../staff.js';
-import { logStaffActivity } from '../activity.js';
+} from '../services/staff.js';
+import { logStaffActivity } from '../lib/activity.js';
 import { requireAuth, requireStaffAuth } from '../middleware/auth.js';
 import { checkGeofence } from '../lib/geofence.js';
-import { calculateEndTime } from '../shifts.js';
+import { calculateEndTime } from '../services/shifts.js';
 
 const router = express.Router();
 
-// ----- Auth (must be before /:id) -----
 router.post('/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -172,6 +171,34 @@ router.post('/:id/reset-password', requireAuth, async (req, res) => {
 });
 
 // ----- List & stats -----
+/**
+ * @swagger
+ * /staff:
+ *   get:
+ *     summary: Get all staff members
+ *     description: Retrieve a list of all staff members for the authenticated user
+ *     tags: [Staff]
+ *     security:
+ *       - bearerAuth: []
+ *       - cookieAuth: []
+ *       - apiKeyAuth: []
+ *     responses:
+ *       200:
+ *         description: List of staff members
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 staff:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Staff'
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Server error
+ */
 router.get('/', requireAuth, async (req, res) => {
   try {
     const staff = await getStaff(req.userId);
@@ -440,7 +467,6 @@ router.post('/clock-out', requireStaffAuth, async (req, res) => {
            notes = CASE WHEN notes IS NOT NULL AND TRIM(notes) != '' THEN notes || E'\n' || $3 ELSE $3 END WHERE id = $4`,
           [now, totalHoursWorked, fallbackNote, entry.id]
         );
-        // Close any other open entries for this staff so they can't clock out again
         await client.query(
           `UPDATE time_entries SET clock_out_time = $1, hours_worked = EXTRACT(EPOCH FROM ($1::timestamptz - clock_in_time))/3600
            WHERE staff_id = $2 AND id != $3 AND clock_in_time IS NOT NULL AND clock_out_time IS NULL AND date >= $4::date - INTERVAL '7 days'`,
@@ -549,7 +575,6 @@ router.post('/clock-out', requireStaffAuth, async (req, res) => {
       timeEntryId = updateEntryResult.rows[0].id;
       await client.query('UPDATE shifts SET time_entry_id = $1 WHERE id = $2', [timeEntryId, shiftId]);
     }
-    // Close any other open entries for this staff so they can't clock out again
     await client.query(
       `UPDATE time_entries SET clock_out_time = $1, hours_worked = EXTRACT(EPOCH FROM ($1::timestamptz - clock_in_time))/3600
        WHERE staff_id = $2 AND clock_in_time IS NOT NULL AND clock_out_time IS NULL AND date >= $3::date - INTERVAL '7 days'`,
@@ -629,7 +654,6 @@ router.get('/clock-status', requireStaffAuth, async (req, res) => {
   }
 });
 
-// ----- CRUD (/:id must be after /:id/reset-password and other specific paths) -----
 router.get('/:id', requireAuth, async (req, res) => {
   try {
     const staff = await getStaffById(req.params.id, req.userId);
@@ -641,6 +665,65 @@ router.get('/:id', requireAuth, async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /staff:
+ *   post:
+ *     summary: Create a new staff member
+ *     description: Create a new staff member for the authenticated user. A password setup email will be sent to the staff member's email address.
+ *     tags: [Staff]
+ *     security:
+ *       - bearerAuth: []
+ *       - cookieAuth: []
+ *       - apiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - role
+ *               - hourlyRate
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 example: "John Doe"
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: "john@example.com"
+ *               role:
+ *                 type: string
+ *                 example: "Manager"
+ *               hourlyRate:
+ *                 type: number
+ *                 format: float
+ *                 minimum: 0
+ *                 example: 15.50
+ *               employmentType:
+ *                 type: string
+ *                 example: "full-time"
+ *     responses:
+ *       201:
+ *         description: Staff member created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                 staff:
+ *                   $ref: '#/components/schemas/Staff'
+ *       400:
+ *         description: Bad request (missing required fields or invalid hourly rate)
+ *       403:
+ *         description: Staff limit reached (subscription limit)
+ *       500:
+ *         description: Server error
+ */
 router.post('/', requireAuth, async (req, res) => {
   try {
     const { name, email, role, hourlyRate, employmentType } = req.body;

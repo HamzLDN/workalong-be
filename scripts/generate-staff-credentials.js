@@ -10,8 +10,8 @@
  *   node generate-staff-credentials.js 1 --generate  # Generate new credentials for staff ID 1
  */
 
-import pool from './db.js';
-import { hashPassword } from './auth.js';
+import pool from '../lib/db.js';
+import { hashPassword } from '../services/auth.js';
 import crypto from 'crypto';
 
 const staffId = process.argv[2];

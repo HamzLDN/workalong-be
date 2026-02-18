@@ -1,8 +1,8 @@
 import express from 'express';
 import crypto from 'crypto';
-import { config } from '../config.js';
-import { pool } from '../db.js';
-import { getSession } from '../auth.js';
+import { config } from '../lib/config.js';
+import { pool } from '../lib/db.js';
+import { getSession } from '../services/auth.js';
 import {
   getShifts,
   getShiftById,
@@ -16,7 +16,7 @@ import {
   approveShift,
   approveShifts,
   unapproveShift
-} from '../shifts.js';
+} from '../services/shifts.js';
 import {
   createSwapRequest,
   getSwapRequestsForStaff,
@@ -25,14 +25,65 @@ import {
   rejectSwapRequest,
   cancelSwapRequest,
   getSwapRequestById
-} from '../shift-swaps.js';
+} from '../services/shift-swaps.js';
 import { requireAuth, requireStaffAuth, authenticateStaffOrUser } from '../middleware/auth.js';
-import { hasActiveSubscription } from '../subscription.js';
-import { logShiftActivity } from '../activity.js';
+import { requireSubscription } from '../middleware/obfuscation.js';
+import { logShiftActivity } from '../lib/activity.js';
 
 const router = express.Router();
 
-// GET /shifts - API key or session+CSRF, then staff or user
+/**
+ * @swagger
+ * /shifts:
+ *   get:
+ *     summary: Get all shifts
+ *     description: Retrieve a list of shifts. Supports filtering by date range, staff ID, and status. Can be accessed via session token, API key, or staff authentication.
+ *     tags: [Shifts]
+ *     security:
+ *       - bearerAuth: []
+ *       - cookieAuth: []
+ *       - apiKeyAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: startDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Filter shifts from this date (YYYY-MM-DD)
+ *       - in: query
+ *         name: endDate
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Filter shifts until this date (YYYY-MM-DD)
+ *       - in: query
+ *         name: staffId
+ *         schema:
+ *           type: integer
+ *         description: Filter shifts for a specific staff member
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [scheduled, completed, approved, cancelled, late, unattended]
+ *         description: Filter shifts by status
+ *     responses:
+ *       200:
+ *         description: List of shifts
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 shifts:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Shift'
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Server error
+ */
 router.get('/shifts', async (req, res) => {
   try {
     const apiKey = req.headers['x-api-key'] ||
@@ -175,16 +226,8 @@ router.post('/shifts', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/shifts/bulk', requireAuth, async (req, res) => {
+router.post('/shifts/bulk', requireAuth, requireSubscription, async (req, res) => {
   try {
-    const isPaid = await hasActiveSubscription(req.userId);
-    if (!isPaid) {
-      return res.status(403).json({
-        error: 'Bulk shift creation requires a Professional subscription',
-        code: 'SUBSCRIPTION_REQUIRED',
-        upgradeUrl: '/plans'
-      });
-    }
     const { shifts } = req.body;
     if (!shifts || !Array.isArray(shifts) || shifts.length === 0) {
       return res.status(400).json({ error: 'Shifts array is required' });
@@ -280,7 +323,7 @@ router.post('/shifts/:id/approve', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/shifts/approve-bulk', requireAuth, async (req, res) => {
+router.post('/shifts/approve-bulk', requireAuth, requireSubscription, async (req, res) => {
   try {
     const { shiftIds } = req.body;
     if (!shiftIds || !Array.isArray(shiftIds) || shiftIds.length === 0) {

@@ -9,14 +9,14 @@ const mockPool = {
   on: jest.fn(),
 };
 
-jest.unstable_mockModule('../db.js', () => ({
+jest.unstable_mockModule('../lib/db.js', () => ({
   pool: mockPool,
   default: mockPool,
 }));
 
 // Now import modules using dynamic import
-const { analyzeFraudPatterns } = await import('../fraud-detection.js');
-const dbModule = await import('../db.js');
+const { analyzeFraudPatterns } = await import('../lib/fraud-detection.js');
+const dbModule = await import('../lib/db.js');
 const pool = dbModule.pool || dbModule.default;
 const { createMockDbResult } = await import('./setup.js');
 

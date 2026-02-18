@@ -1,0 +1,378 @@
+import crypto from 'crypto';
+import { getSession } from '../services/auth.js';
+import { logSecurityEvent } from '../lib/api-security.js';
+import { pool } from '../lib/db.js';
+
+function generateObfuscationKey(sessionId) {
+  if (!sessionId) {
+    throw new Error('Session required for API obfuscation');
+  }
+  const timeComponent = Math.floor(Date.now() / 60000);
+  return `${sessionId}_${timeComponent}`.substring(0, 32);
+}
+
+function deobfuscateData(obfuscated, key) {
+  try {
+    const dataArray = new Uint8Array(Buffer.from(obfuscated, 'base64'));
+    const keyArray = Buffer.from(key, 'utf8');
+    const result = new Uint8Array(dataArray.length);
+    
+    for (let i = 0; i < dataArray.length; i++) {
+      result[i] = dataArray[i] ^ keyArray[i % keyArray.length];
+    }
+    
+    return Buffer.from(result).toString('utf8');
+  } catch (error) {
+    throw new Error('Failed to deobfuscate data');
+  }
+}
+
+function obfuscateData(data, key) {
+  const dataArray = Buffer.from(data, 'utf8');
+  const keyArray = Buffer.from(key, 'utf8');
+  const result = new Uint8Array(dataArray.length);
+  
+  for (let i = 0; i < dataArray.length; i++) {
+    result[i] = dataArray[i] ^ keyArray[i % keyArray.length];
+  }
+  
+  return Buffer.from(result).toString('base64');
+}
+
+function generateRequestSignature(method, url, body, sessionId, timestamp, nonce) {
+  const key = generateObfuscationKey(sessionId);
+  const payload = `${method}:${url}:${body || ''}:${timestamp}:${nonce}`;
+  
+  let hash = 0;
+  for (let i = 0; i < payload.length; i++) {
+    const char = payload.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  
+  const combined = `${hash}:${key}`;
+  let finalHash = 0;
+  for (let i = 0; i < combined.length; i++) {
+    const char = combined.charCodeAt(i);
+    finalHash = ((finalHash << 5) - finalHash) + char;
+    finalHash = finalHash & finalHash;
+  }
+  
+  return Math.abs(finalHash).toString(36);
+}
+
+function verifyRequestSignature(method, endpoint, body, sessionId, timestamp, nonce, signature) {
+  const expectedSignature = generateRequestSignature(
+    method,
+    endpoint,
+    body || '',
+    sessionId,
+    timestamp,
+    nonce
+  );
+  
+  return expectedSignature === signature;
+}
+
+function deobfuscateEndpoint(obfuscated) {
+  try {
+    const derotated = obfuscated.split('').map((char, idx) => {
+      const code = char.charCodeAt(0);
+      if (code >= 65 && code <= 90) {
+        return String.fromCharCode(((code - 65 - idx + 26) % 26) + 65);
+      }
+      if (code >= 97 && code <= 122) {
+        return String.fromCharCode(((code - 97 - idx + 26) % 26) + 97);
+      }
+      return char;
+    }).join('');
+    
+    return '/' + Buffer.from(derotated, 'base64').toString('utf8');
+  } catch (error) {
+    throw new Error('Invalid obfuscated endpoint');
+  }
+}
+
+export async function verifyObfuscatedRequest(req, res, next) {
+  try {
+    const obfuscationEnabled = req.headers['x-obfuscation-enabled'] === 'true';
+    
+    if (!obfuscationEnabled) {
+      return next();
+    }
+
+    let sessionId = req.cookies.sessionId;
+    if (!sessionId && req.headers.authorization) {
+      const authHeader = req.headers.authorization;
+      if (authHeader.startsWith('Bearer ')) {
+        sessionId = authHeader.replace('Bearer ', '').trim();
+      }
+    }
+
+    if (!sessionId || sessionId === 'undefined' || sessionId === 'null') {
+      await logSecurityEvent('obfuscation_no_session', {
+        ipAddress: req.ip,
+        endpoint: req.path,
+        requestMethod: req.method,
+        details: { 
+          hasCookie: !!req.cookies.sessionId,
+          hasAuthHeader: !!req.headers.authorization,
+          authHeader: req.headers.authorization ? 'present' : 'missing'
+        },
+        severity: 'warning'
+      });
+      return res.status(401).json({ error: 'Session required for obfuscated requests' });
+    }
+
+    const timestamp = req.headers['x-request-timestamp'];
+    const nonce = req.headers['x-request-nonce'];
+    const signature = req.headers['x-request-signature'];
+
+    if (!timestamp || !nonce || !signature) {
+      await logSecurityEvent('obfuscation_missing_headers', {
+        ipAddress: req.ip,
+        endpoint: req.path,
+        requestMethod: req.method,
+        severity: 'warning'
+      });
+      return res.status(400).json({ error: 'Missing obfuscation headers' });
+    }
+
+    const requestTime = parseInt(timestamp, 10);
+    const now = Date.now();
+    if (Math.abs(now - requestTime) > 5 * 60 * 1000) {
+      await logSecurityEvent('obfuscation_timestamp_invalid', {
+        ipAddress: req.ip,
+        endpoint: req.path,
+        requestMethod: req.method,
+        details: { timestamp, now },
+        severity: 'warning'
+      });
+      return res.status(400).json({ error: 'Request timestamp too old or invalid' });
+    }
+
+    let parsedBody = req.body;
+    if (!parsedBody && req.headers['content-type'] === 'application/x-obfuscated') {
+      try {
+        if (typeof req.body === 'string') {
+          parsedBody = JSON.parse(req.body);
+        } else if (Buffer.isBuffer(req.body)) {
+          parsedBody = JSON.parse(req.body.toString());
+        }
+      } catch (error) {
+        parsedBody = {};
+      }
+    }
+    
+    let bodyString = '';
+    
+    if (parsedBody && typeof parsedBody === 'object') {
+      if (parsedBody.format === 'information' && parsedBody.data) {
+        bodyString = parsedBody.data;
+      } else {
+        const keys = Object.keys(parsedBody);
+        if (keys.length === 0) {
+          bodyString = '';
+        } else {
+          bodyString = JSON.stringify(parsedBody);
+        }
+      }
+    } else if (parsedBody !== undefined && parsedBody !== null) {
+      bodyString = String(parsedBody);
+    }
+    
+    let endpointPath = req.path;
+    
+    if (endpointPath.includes('?')) {
+      endpointPath = endpointPath.split('?')[0];
+    }
+    
+    if (!endpointPath.startsWith('/')) {
+      endpointPath = '/' + endpointPath;
+    }
+    
+    if (endpointPath.startsWith('/api/')) {
+      endpointPath = endpointPath.substring(4);
+    }
+    
+    const isValid = verifyRequestSignature(
+      req.method,
+      endpointPath,
+      bodyString,
+      sessionId,
+      timestamp,
+      nonce,
+      signature
+    );
+
+    if (!isValid) {
+      const expectedSignature = generateRequestSignature(
+        req.method,
+        endpointPath,
+        bodyString,
+        sessionId,
+        timestamp,
+        nonce
+      );
+      
+      console.error('Signature verification failed:', {
+        method: req.method,
+        originalPath: req.path,
+        normalizedPath: endpointPath,
+        receivedSignature: signature,
+        expectedSignature: expectedSignature,
+        bodyLength: bodyString ? bodyString.length : 0,
+        sessionIdPrefix: sessionId ? sessionId.substring(0, 8) : 'none'
+      });
+      
+      await logSecurityEvent('obfuscation_signature_invalid', {
+        ipAddress: req.ip,
+        endpoint: req.path,
+        normalizedEndpoint: endpointPath,
+        requestMethod: req.method,
+        details: {
+          receivedSignature: signature,
+          expectedSignature: expectedSignature,
+          bodyType: typeof bodyString,
+          bodyLength: bodyString ? bodyString.length : 0
+        },
+        severity: 'warning'
+      });
+      return res.status(401).json({ error: 'Invalid request signature' });
+    }
+
+    if (parsedBody && parsedBody.format === 'information' && parsedBody.data) {
+      try {
+        const key = generateObfuscationKey(sessionId);
+        const deobfuscated = deobfuscateData(parsedBody.data, key);
+        req.body = JSON.parse(deobfuscated);
+      } catch (error) {
+        await logSecurityEvent('obfuscation_deobfuscate_failed', {
+          ipAddress: req.ip,
+          endpoint: req.path,
+          requestMethod: req.method,
+          severity: 'error'
+        });
+        return res.status(400).json({ error: 'Failed to deobfuscate request body' });
+      }
+    } else if (parsedBody && typeof parsedBody === 'object') {
+      req.body = parsedBody;
+    }
+
+    req.obfuscation = {
+      enabled: true,
+      sessionId,
+      key: generateObfuscationKey(sessionId)
+    };
+
+    next();
+  } catch (error) {
+    console.error('Obfuscation verification error:', error);
+    await logSecurityEvent('obfuscation_error', {
+      ipAddress: req.ip,
+      endpoint: req.path,
+      requestMethod: req.method,
+      details: { error: error.message },
+      severity: 'error'
+    });
+    res.status(500).json({ error: 'Obfuscation verification failed' });
+  }
+}
+
+export function obfuscateResponse(req, res, next) {
+  if (!req.obfuscation || !req.obfuscation.enabled) {
+    return next();
+  }
+
+  const originalJson = res.json.bind(res);
+  
+  res.json = function(data) {
+    try {
+      const obfuscated = obfuscateData(JSON.stringify(data), req.obfuscation.key);
+      return originalJson({
+        format: 'information',
+        data: obfuscated
+      });
+    } catch (error) {
+      console.error('Failed to obfuscate response:', error);
+      return originalJson(data);
+    }
+  };
+
+  next();
+}
+
+export async function requireSubscription(req, res, next) {
+  try {
+    const subscriptionPlan = req.headers['x-subscription-plan'];
+    const subscriptionVerified = req.headers['x-subscription-verified'] === 'true';
+
+    if (subscriptionPlan && subscriptionPlan !== 'free') {
+      if (!req.userId) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+
+      const result = await pool.query(
+        `SELECT subscription_plan, subscription_status 
+         FROM users 
+         WHERE id = $1`,
+        [req.userId]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(401).json({ error: 'User not found' });
+      }
+
+      const user = result.rows[0];
+      const userPlan = user.subscription_plan || 'free';
+      const status = user.subscription_status || 'inactive';
+
+      if (userPlan === 'free' || status !== 'active') {
+        await logSecurityEvent('subscription_required', {
+          userId: req.userId,
+          ipAddress: req.ip,
+          endpoint: req.path,
+          requestMethod: req.method,
+          details: { userPlan, status },
+          severity: 'info'
+        });
+        return res.status(403).json({ 
+          error: 'Premium subscription required',
+          currentPlan: userPlan,
+          requiredPlan: 'professional'
+        });
+      }
+
+      if (subscriptionPlan && subscriptionPlan !== userPlan) {
+        await logSecurityEvent('subscription_header_mismatch', {
+          userId: req.userId,
+          ipAddress: req.ip,
+          endpoint: req.path,
+          requestMethod: req.method,
+          details: { headerPlan: subscriptionPlan, dbPlan: userPlan },
+          severity: 'warning'
+        });
+      }
+
+      req.subscriptionPlan = userPlan;
+      next();
+    } else {
+      await logSecurityEvent('subscription_required', {
+        userId: req.userId || null,
+        ipAddress: req.ip,
+        endpoint: req.path,
+        requestMethod: req.method,
+        severity: 'info'
+      });
+      return res.status(403).json({ 
+        error: 'Premium subscription required',
+        currentPlan: subscriptionPlan || 'free',
+        requiredPlan: 'professional'
+      });
+    }
+  } catch (error) {
+    console.error('Subscription check error:', error);
+    res.status(500).json({ error: 'Subscription verification failed' });
+  }
+}
+

@@ -1,7 +1,7 @@
 import express from 'express';
-import { pool } from '../db.js';
+import { pool } from '../lib/db.js';
 import { requireAuth } from '../middleware/auth.js';
-import { getSubscriptionDetails } from '../stripe.js';
+import { getSubscriptionDetails } from '../services/stripe.js';
 
 const router = express.Router();
 

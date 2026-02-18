@@ -9,7 +9,7 @@ import {
   getUserWhitelistedIps,
   logSecurityEvent,
   getSecurityAuditLogs
-} from '../api-security.js';
+} from '../lib/api-security.js';
 import { createRateLimiter } from '../middleware/security.js';
 import { requireAuth } from '../middleware/auth.js';
 

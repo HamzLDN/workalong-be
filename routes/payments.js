@@ -1,7 +1,7 @@
 import express from 'express';
 import Stripe from 'stripe';
-import { config } from './config.js';
-import { pool } from './db.js';
+import { config } from '../lib/config.js';
+import { pool } from '../lib/db.js';
 
 const router = express.Router();
 const stripe = new Stripe(config.stripe.secretKey);

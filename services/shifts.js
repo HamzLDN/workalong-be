@@ -1,4 +1,4 @@
-import pool from './db.js';
+import { pool } from '../lib/db.js';
 
 export function calculateEndTime(startTime, hours) {
   const [startHour, startMin] = startTime.split(':').map(Number);
@@ -126,25 +126,17 @@ export async function getShifts(userId, filters = {}) {
         shiftEnd.setUTCDate(shiftEnd.getUTCDate() + 1);
       }
       
-      // Check current time vs shift times
       const nowTimestamp = now.getTime();
       const shiftStartTimestamp = shiftStart.getTime();
       const shiftEndTimestamp = shiftEnd.getTime();
       const hasClockIn = row.clocked_in_time && row.clocked_in_time !== null;
       
-      // Check if shift has ended
-      // IMPORTANT: Only mark as completed/unattended if the shift has actually ended AND they're not currently clocked in
-      // The check above already skips shifts that are clocked in, but we add an extra safety check here
       if (nowTimestamp > shiftEndTimestamp && !row.clocked_in_time) {
-        // Determine status:
-        // - If the shift has a full pair of clock-in and clock-out times, mark as 'completed'
-        // - Otherwise (no actual completed hours), mark as 'unattended'
         const hasClockOut = row.clocked_out_time && row.clocked_out_time !== null;
         const hasCompletedHours = hasClockIn && hasClockOut;
         const newStatus = hasCompletedHours ? 'completed' : 'unattended';
         
         console.log(`[getShifts] Auto-marking shift ${row.id} as ${newStatus} (ended at ${shiftEnd.toISOString()}, now is ${now.toISOString()}, clocked in: ${hasClockIn}, clocked out: ${hasClockOut})`);
-        // Update shift status in database
         updatePromises.push(
           pool.query(
             `UPDATE shifts SET status = $1, updated_at = NOW() WHERE id = $2 AND status IN ('scheduled', 'late')`,
@@ -159,11 +151,8 @@ export async function getShifts(userId, filters = {}) {
             console.error(`[getShifts] Error updating shift ${row.id}:`, err);
           })
         );
-        // Update the row object immediately for this response
         row.status = newStatus;
       } else if (nowTimestamp > shiftStartTimestamp && nowTimestamp < shiftEndTimestamp && !hasClockIn) {
-        // Shift has started but not ended, and staff hasn't clocked in yet - mark as 'late'
-        // Only mark as late if shift is in progress (between start and end time)
         console.log(`[getShifts] Auto-marking shift ${row.id} as late (started at ${shiftStart.toISOString()}, now is ${now.toISOString()}, no clock-in)`);
         updatePromises.push(
           pool.query(
@@ -179,7 +168,6 @@ export async function getShifts(userId, filters = {}) {
             console.error(`[getShifts] Error updating shift ${row.id} to late:`, err);
           })
         );
-        // Update the row object immediately for this response
         row.status = 'late';
       }
     } catch (err) {
@@ -187,8 +175,6 @@ export async function getShifts(userId, filters = {}) {
     }
   }
   
-  // Execute all updates in parallel and WAIT for them to complete before returning
-  // This ensures the database is updated before the client receives the response
   if (updatePromises.length > 0) {
     console.log(`[getShifts] Executing ${updatePromises.length} status update(s) before returning data`);
     await Promise.all(updatePromises).catch(err => {
@@ -197,8 +183,6 @@ export async function getShifts(userId, filters = {}) {
     console.log(`[getShifts] All status updates completed`);
   }
   
-  // After updates complete, fetch the updated statuses from the database to ensure accuracy
-  // This guarantees the client receives the latest status
   if (updatePromises.length > 0) {
     const updatedShiftIds = [];
     for (const row of result.rows) {
@@ -213,7 +197,6 @@ export async function getShifts(userId, filters = {}) {
         [updatedShiftIds]
       );
       
-      // Update the result rows with the actual database status
       const statusMap = {};
       statusResult.rows.forEach(s => {
         statusMap[s.id] = s.status;
@@ -227,11 +210,8 @@ export async function getShifts(userId, filters = {}) {
     }
   }
   
-  // Explicitly ensure NULL values are returned as null (not empty strings or undefined)
-  // Also calculate end_time for each shift and normalize shift_date
   return result.rows.map(shift => {
     const cleaned = { ...shift };
-    // Force NULL values to be null (not undefined or empty string)
     cleaned.clocked_in_time = (shift.clocked_in_time === null || shift.clocked_in_time === undefined || shift.clocked_in_time === '') ? null : shift.clocked_in_time;
     cleaned.clocked_out_time = (shift.clocked_out_time === null || shift.clocked_out_time === undefined || shift.clocked_out_time === '') ? null : shift.clocked_out_time;
     cleaned.actual_hours_worked = shift.actual_hours_worked != null ? parseFloat(shift.actual_hours_worked) : 0;
@@ -243,16 +223,13 @@ export async function getShifts(userId, filters = {}) {
       const day = String(shift.shift_date.getDate()).padStart(2, '0');
       cleaned.shift_date = `${year}-${month}-${day}`;
     } else if (typeof shift.shift_date === 'string') {
-      // Extract just the date part (YYYY-MM-DD) if it includes time
       cleaned.shift_date = shift.shift_date.split('T')[0];
     }
-    // Calculate end_time from start_time + hours for frontend compatibility
     cleaned.end_time = calculateEndTime(shift.start_time, shift.hours);
     return cleaned;
   });
 }
 
-// Get single shift
 export async function getShiftById(shiftId, userId) {
   const result = await pool.query(
     `SELECT s.*, s.shift_date::text as shift_date, st.name as staff_name, st.role, st.hourly_rate
@@ -263,7 +240,6 @@ export async function getShiftById(shiftId, userId) {
   );
   
   if (result.rows[0]) {
-    // Normalize shift_date to YYYY-MM-DD format
     const shift = result.rows[0];
     if (shift.shift_date) {
       shift.shift_date = shift.shift_date.split('T')[0];
@@ -273,7 +249,6 @@ export async function getShiftById(shiftId, userId) {
   return result.rows[0];
 }
 
-// Create shift
 export async function createShift(userId, data) {
   const {
     staffId,
@@ -287,15 +262,10 @@ export async function createShift(userId, data) {
     notes
   } = data;
   
-  // Ensure shiftDate is in YYYY-MM-DD format (no time component)
   const normalizedDate = shiftDate.split('T')[0];
   console.log('[createShift] Creating shift with date:', normalizedDate, 'original:', shiftDate);
   
-  // Hours are now provided directly, no need to calculate from endTime
   const shiftHours = parseFloat(hours) || 0;
-  
-  // Calculate end_time for database storage (if end_time column still exists during migration)
-  // Note: After migration, end_time column will be removed
   const calculatedEndTime = calculateEndTime(startTime, shiftHours);
   
   const result = await pool.query(
@@ -323,7 +293,6 @@ export async function createShift(userId, data) {
   return result.rows[0];
 }
 
-// Update shift
 export async function updateShift(shiftId, userId, data) {
   const {
     staffId,
@@ -340,10 +309,8 @@ export async function updateShift(shiftId, userId, data) {
     clockedOutTime
   } = data;
   
-  // Hours are now provided directly, no need to calculate from endTime
   const shiftHours = hours !== undefined ? parseFloat(hours) : undefined;
   
-  // Build dynamic UPDATE query based on which fields are provided
   const updates = [];
   const values = [];
   let paramCount = 1;
@@ -392,7 +359,7 @@ export async function updateShift(shiftId, userId, data) {
     values.push(notes);
   }
   if (clockedInTime !== undefined || clockedOutTime !== undefined) {
-    updates.push(`clock_source = 'manager'`); // manager manually set times, not actual staff clock-in
+    updates.push(`clock_source = 'manager'`);
   }
   if (clockedInTime !== undefined) {
     updates.push(`clocked_in_time = $${paramCount++}`);
@@ -407,7 +374,6 @@ export async function updateShift(shiftId, userId, data) {
     throw new Error('No fields to update');
   }
   
-  // Always update the updated_at timestamp
   updates.push(`updated_at = NOW()`);
   
   values.push(shiftId);
@@ -437,7 +403,6 @@ export async function updateShift(shiftId, userId, data) {
 export async function deleteShift(shiftId, userId) {
   console.log(`[Delete Shift] Deleting shift ${shiftId} for user ${userId}`);
   
-  // Delete associated time entries so hours from this shift are no longer counted in payroll
   const teResult = await pool.query(
     'DELETE FROM time_entries WHERE shift_id = $1 RETURNING id',
     [shiftId]
@@ -460,7 +425,6 @@ export async function deleteShift(shiftId, userId) {
   return result.rows[0];
 }
 
-// Bulk create shifts (for recurring schedules)
 export async function createBulkShifts(userId, shifts) {
   const client = await pool.connect();
   
@@ -470,7 +434,6 @@ export async function createBulkShifts(userId, shifts) {
     const createdShifts = [];
     
     for (const shift of shifts) {
-      // Hours are now provided directly
       const shiftHours = parseFloat(shift.hours) || 0;
       
       const result = await client.query(
@@ -507,7 +470,6 @@ export async function createBulkShifts(userId, shifts) {
   }
 }
 
-// Get shift statistics
 export async function getShiftStats(userId, filters = {}) {
   let query = `
     SELECT 
@@ -540,14 +502,9 @@ export async function getShiftStats(userId, filters = {}) {
   return result.rows[0];
 }
 
-// Check for shift conflicts
-// Returns { hasConflict: boolean, conflictingShifts: array }
 export async function checkShiftConflict(userId, staffId, shiftDate, startTime, endTime, excludeShiftId = null) {
-  // Handle overnight shifts: if endTime < startTime, the shift spans to next day
   const isOvernight = endTime < startTime;
   
-  // Get all shifts for this staff member on the relevant dates
-  // Calculate end_time from hours for existing shifts (since we're moving away from storing end_time)
   let query = `
     SELECT 
       id, 
@@ -575,23 +532,18 @@ export async function checkShiftConflict(userId, staffId, shiftDate, startTime, 
   
   const result = await pool.query(query, params);
   
-  // Calculate end_time for each existing shift and check for conflicts
   const conflictingShifts = [];
   
   for (const existingShift of result.rows) {
-    // Calculate end_time from start_time + hours for existing shift
     const existingEndTime = calculateEndTime(existingShift.start_time, parseFloat(existingShift.hours));
     const existingIsOvernight = existingEndTime < existingShift.start_time;
     const existingShiftDate = existingShift.shift_date.split('T')[0];
     
-    // Determine if dates could overlap (considering overnight shifts)
     let checkConflict = false;
     
     if (existingShiftDate === shiftDate) {
-      // Same date - always check
       checkConflict = true;
     } else if (isOvernight) {
-      // New shift is overnight - check if existing is on next day
       const nextDay = new Date(shiftDate + 'T00:00:00');
       nextDay.setDate(nextDay.getDate() + 1);
       const nextDayStr = formatLocalDate(nextDay);
@@ -599,7 +551,6 @@ export async function checkShiftConflict(userId, staffId, shiftDate, startTime, 
         checkConflict = true;
       }
     } else if (existingIsOvernight) {
-      // Existing shift is overnight - check if it's on previous day
       const prevDay = new Date(shiftDate + 'T00:00:00');
       prevDay.setDate(prevDay.getDate() - 1);
       const prevDayStr = formatLocalDate(prevDay);
@@ -705,7 +656,6 @@ export async function approveShift(shiftId, userId, approvedBy) {
     const scheduledHours = parseFloat(shift.hours) || 0;
     console.log(`[Approve] Shift found: id=${shift.id}, staff_id=${shift.staff_id}, status=${shift.status}, scheduled hours=${scheduledHours}`);
     
-    // Check if already approved
     if (shift.status === 'approved') {
       throw new Error('Shift has already been approved');
     }
@@ -715,7 +665,6 @@ export async function approveShift(shiftId, userId, approvedBy) {
     let timeEntryId = null;
     let actualHoursWorked = null;
     
-    // Prefer actual hours from time_entries (clock_in/clock_out) for this shift, then shift.clocked_* times
     const teResult = await client.query(
       `SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (clock_out_time - clock_in_time)) / 3600.0), 0)::numeric(10,2) as total
        FROM time_entries WHERE shift_id = $1 AND clock_in_time IS NOT NULL AND clock_out_time IS NOT NULL`,
@@ -740,17 +689,12 @@ export async function approveShift(shiftId, userId, approvedBy) {
         overtimeHours = 0;
       }
       console.log(`[Approve] Actual hours worked: ${actualHoursWorked}h (scheduled: ${scheduledHours}h) → regular: ${regularHours}h, OT: ${overtimeHours}h`);
-      // If actual hours came from time_entries (staff actually clocked in), we're done - payroll uses those.
-      // If from shift.clocked_* but no time_entry from staff: manager manually set times (clock_source=manager).
-      // Create approved_shift with hours only, NO clock_in/clock_out - so "Hours This Week" and payroll
-      // (which require clock times) won't count it. Only actual staff clock-in counts.
       if (fromTimeEntries <= 0 && shift.clocked_in_time && shift.clocked_out_time) {
         const existing = await client.query(
           `SELECT id FROM time_entries WHERE shift_id = $1 ORDER BY id DESC LIMIT 1`,
           [shiftId]
         );
         const clockSource = shift.clock_source || null;
-        // Existing time_entry = staff clocked in (created by clock-in flow); update with clock times
         if (existing.rows.length > 0 && clockSource !== 'manager') {
           await client.query(
             `UPDATE time_entries SET clock_in_time = $1, clock_out_time = $2, hours_worked = $3, overtime_hours = $4, entry_type = 'clock_in_out'

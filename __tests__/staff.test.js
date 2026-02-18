@@ -12,16 +12,16 @@ const mockPool = {
   on: jest.fn(),
 };
 
-jest.unstable_mockModule('../db.js', () => ({
+jest.unstable_mockModule('../lib/db.js', () => ({
   pool: mockPool,
   default: mockPool,
 }));
 
-jest.unstable_mockModule('../auth.js', () => ({
+jest.unstable_mockModule('../services/auth.js', () => ({
   hashPassword: mockHashPasswordFn,
 }));
 
-jest.unstable_mockModule('../email.js', () => ({
+jest.unstable_mockModule('../lib/email.js', () => ({
   sendStaffPasswordSetupEmail: jest.fn().mockResolvedValue(true),
 }));
 
@@ -42,10 +42,10 @@ const {
   getBudgets,
   updateBudget,
   getBudgetStats,
-} = await import('../staff.js');
-const dbModule = await import('../db.js');
+} = await import('../services/staff.js');
+const dbModule = await import('../lib/db.js');
 const pool = dbModule.pool || dbModule.default;
-const { hashPassword } = await import('../auth.js');
+const { hashPassword } = await import('../services/auth.js');
 const { createMockDbResult, createMockStaff, createMockTimeEntry } = await import('./setup.js');
 
 describe('Staff Functions', () => {

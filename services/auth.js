@@ -1,6 +1,6 @@
 import bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
-import { pool } from './db.js';
+import { pool } from '../lib/db.js';
 
 export async function createUser(email, password, name, company = null) {
   const passwordHash = await bcrypt.hash(password, 10);

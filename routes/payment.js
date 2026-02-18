@@ -1,6 +1,6 @@
 import express from 'express';
-import { config } from '../config.js';
-import { pool } from '../db.js';
+import { config } from '../lib/config.js';
+import { pool } from '../lib/db.js';
 import { requireAuth } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -22,7 +22,7 @@ router.post('/create-checkout-session', requireAuth, async (req, res) => {
     if (!email || !email.trim()) {
       return res.status(400).json({ error: 'Account email is required for checkout. Please complete your profile.' });
     }
-    const { createCheckoutSessionWithAmount } = await import('../stripe.js');
+    const { createCheckoutSessionWithAmount } = await import('../services/stripe.js');
     const session = await createCheckoutSessionWithAmount(req.userId, email.trim(), {
       totalPrice: parseFloat(totalPrice),
       billingCycle,
@@ -47,7 +47,7 @@ router.post('/update-subscription', requireAuth, async (req, res) => {
     if (!billingCycle || !['monthly', 'yearly'].includes(billingCycle)) {
       return res.status(400).json({ error: 'Billing cycle must be monthly or yearly' });
     }
-    const { updateSubscription } = await import('../stripe.js');
+    const { updateSubscription } = await import('../services/stripe.js');
     const result = await updateSubscription(req.userId, {
       totalPrice: parseFloat(totalPrice),
       billingCycle,
@@ -80,7 +80,7 @@ router.post('/verify-session', requireAuth, async (req, res) => {
     if (!sessionId) {
       return res.status(400).json({ error: 'Session ID is required' });
     }
-    const { retrieveCheckoutSession, handleSubscriptionSuccess, getPaymentReferenceNumbers } = await import('../stripe.js');
+    const { retrieveCheckoutSession, handleSubscriptionSuccess, getPaymentReferenceNumbers } = await import('../services/stripe.js');
     const session = await retrieveCheckoutSession(sessionId);
     if (session.payment_status !== 'paid') {
       return res.status(400).json({ error: 'Payment not completed' });
@@ -113,7 +113,7 @@ router.post('/verify-session', requireAuth, async (req, res) => {
 router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   try {
     const signature = req.headers['stripe-signature'];
-    const { verifyWebhookSignature, handleSubscriptionSuccess, handleSubscriptionCanceled, handleSubscriptionUpdated } = await import('../stripe.js');
+    const { verifyWebhookSignature, handleSubscriptionSuccess, handleSubscriptionCanceled, handleSubscriptionUpdated } = await import('../services/stripe.js');
     const event = verifyWebhookSignature(req.body, signature);
     switch (event.type) {
       case 'checkout.session.completed':
@@ -137,7 +137,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 
 router.post('/billing-portal', requireAuth, async (req, res) => {
   try {
-    const { createBillingPortalSession } = await import('../stripe.js');
+    const { createBillingPortalSession } = await import('../services/stripe.js');
     const url = await createBillingPortalSession(req.userId);
     res.json({ url });
   } catch (error) {
@@ -148,7 +148,7 @@ router.post('/billing-portal', requireAuth, async (req, res) => {
 
 router.post('/cancel-subscription', requireAuth, async (req, res) => {
   try {
-    const { cancelSubscription } = await import('../stripe.js');
+    const { cancelSubscription } = await import('../services/stripe.js');
     const result = await cancelSubscription(req.userId);
     if (result && result.refunded) {
       res.json({
@@ -169,7 +169,7 @@ router.post('/cancel-subscription', requireAuth, async (req, res) => {
 
 router.get('/subscription-details', requireAuth, async (req, res) => {
   try {
-    const { getSubscriptionDetails } = await import('../stripe.js');
+    const { getSubscriptionDetails } = await import('../services/stripe.js');
     const subscription = await getSubscriptionDetails(req.userId);
     if (!subscription) {
       return res.status(404).json({ error: 'No active subscription found' });
@@ -183,7 +183,7 @@ router.get('/subscription-details', requireAuth, async (req, res) => {
 
 router.get('/verify-subscription', requireAuth, async (req, res) => {
   try {
-    const { verifySubscriptionStatus } = await import('../stripe.js');
+    const { verifySubscriptionStatus } = await import('../services/stripe.js');
     const verification = await verifySubscriptionStatus(req.userId);
     res.json(verification);
   } catch (error) {
@@ -194,7 +194,7 @@ router.get('/verify-subscription', requireAuth, async (req, res) => {
 
 router.get('/reference-numbers', requireAuth, async (req, res) => {
   try {
-    const { getPaymentReferenceNumbers } = await import('../stripe.js');
+    const { getPaymentReferenceNumbers } = await import('../services/stripe.js');
     const referenceNumbers = await getPaymentReferenceNumbers(req.userId);
     if (!referenceNumbers) {
       return res.status(404).json({ error: 'No payment information found' });

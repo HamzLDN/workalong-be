@@ -6,7 +6,7 @@
  *   node clear-all-staff-credentials.js
  */
 
-import pool from './db.js';
+import pool from '../lib/db.js';
 
 async function main() {
   try {

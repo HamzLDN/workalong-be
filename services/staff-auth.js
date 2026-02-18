@@ -1,6 +1,6 @@
 import bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
-import pool from './db.js';
+import { pool } from '../lib/db.js';
 
 export async function findStaffByUsername(username) {
   const result = await pool.query(

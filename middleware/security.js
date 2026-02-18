@@ -7,8 +7,8 @@ import {
   logSecurityEvent,
   generateRequestFingerprint,
   detectSuspiciousActivity
-} from '../api-security.js';
-import { getSession } from '../auth.js';
+} from '../lib/api-security.js';
+import { getSession } from '../services/auth.js';
 import crypto from 'crypto';
 
 export async function requireApiKey(req, res, next) {
@@ -128,7 +128,7 @@ export function createRateLimiter(options = {}) {
   const {
     limitPerMinute = 60,
     limitPerHour = 1000,
-    identifierFn = null // Custom function to get identifier
+    identifierFn = null
   } = options;
   
   return async (req, res, next) => {
@@ -145,7 +145,6 @@ export function createRateLimiter(options = {}) {
         identifier = `ip:${req.ip || req.connection.remoteAddress}`;
       }
       
-      // Use API key limits if available, otherwise use defaults
       const perMinute = req.apiKey?.rate_limit_per_minute || limitPerMinute;
       const perHour = req.apiKey?.rate_limit_per_hour || limitPerHour;
       
@@ -176,7 +175,6 @@ export function createRateLimiter(options = {}) {
         });
       }
       
-      // Set rate limit headers
       res.setHeader('X-RateLimit-Limit', rateLimitResult.limit);
       res.setHeader('X-RateLimit-Remaining', rateLimitResult.remaining);
       res.setHeader('X-RateLimit-Reset', Math.floor(rateLimitResult.resetAt.getTime() / 1000));
@@ -184,7 +182,6 @@ export function createRateLimiter(options = {}) {
       next();
     } catch (error) {
       console.error('Rate limit check error:', error);
-      // On error, allow request but log it
       await logSecurityEvent('rate_limit_error', {
         userId: req.userId || null,
         ipAddress: req.ip,
@@ -224,14 +221,10 @@ export async function requireSignedRequest(req, res, next) {
       return res.status(401).json({ error: 'Invalid signing key' });
     }
     
-    // Verify signature
     const body = req.body || {};
     const method = req.method;
     const path = req.path + (req.query && Object.keys(req.query).length > 0 ? '?' + new URLSearchParams(req.query).toString() : '');
     
-    // Note: In production, you'd need to store the actual signing key securely
-    // For now, we'll use the hash as a placeholder - you'll need to implement
-    // secure key storage (e.g., encrypted in database or key management service)
     const isValid = verifyRequestSignature(
       signingKeyData.signing_key_hash, // This should be the actual key, not hash
       method,
@@ -413,15 +406,10 @@ export async function requireApiKeyOnly(req, res, next) {
 
 export async function requireCsrfToken(req, res, next) {
   try {
-    // Skip CSRF for API keys (they don't need it)
     if (req.apiKey) {
       return next();
     }
     
-    // Require CSRF for ALL methods when using session tokens
-    // This prevents session token theft via XSS attacks
-    
-    // Get session to check CSRF token
     let sessionId = req.cookies.sessionId;
     if (!sessionId && req.headers.authorization) {
       const authHeader = req.headers.authorization;
@@ -439,7 +427,6 @@ export async function requireCsrfToken(req, res, next) {
       return res.status(401).json({ error: 'Invalid session' });
     }
     
-    // Get CSRF token from header
     const csrfToken = req.headers['x-csrf-token'];
     
     if (!csrfToken) {
@@ -454,9 +441,6 @@ export async function requireCsrfToken(req, res, next) {
       return res.status(403).json({ error: 'CSRF token required. Include X-CSRF-Token header.' });
     }
     
-    // Verify CSRF token matches session
-    // For now, we'll generate it from session ID + secret
-    // In production, store CSRF tokens in session or use a library
     const expectedToken = crypto
       .createHash('sha256')
       .update(sessionId + (process.env.SESSION_SECRET || 'change-this-secret-key-in-production'))
@@ -484,19 +468,15 @@ export async function requireCsrfToken(req, res, next) {
 
 export async function detectSessionTokenMisuse(req, res, next) {
   try {
-    // Only check if not using API key
     if (req.apiKey) {
       return next();
     }
     
-    // Check if Authorization header contains a session token (UUID format)
     if (req.headers.authorization) {
       const token = req.headers.authorization.replace('Bearer ', '');
       
-      // Session tokens are UUIDs, API keys start with 'wak_'
       if (token.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i) && 
           !req.cookies.sessionId) {
-        // Session token in Authorization header without cookie - potential misuse
         await logSecurityEvent('session_token_in_authorization_header', {
           ipAddress: req.ip,
           userAgent: req.headers['user-agent'],
@@ -514,35 +494,25 @@ export async function detectSessionTokenMisuse(req, res, next) {
     next();
   } catch (error) {
     console.error('Session token misuse detection error:', error);
-    next(); // Don't block on detection errors
+    next();
   }
 }
 
 
 export function securityHeaders(req, res, next) {
-  // Prevent clickjacking
   res.setHeader('X-Frame-Options', 'DENY');
-  
-  // Prevent MIME type sniffing
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  
-  // XSS protection
   res.setHeader('X-XSS-Protection', '1; mode=block');
   
-  // Strict Transport Security (HTTPS only)
   if (process.env.NODE_ENV === 'production') {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   }
   
-  // Content Security Policy (adjust based on your needs)
   res.setHeader('Content-Security-Policy', 
     "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.stripe.com;"
   );
   
-  // Referrer Policy
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  
-  // Permissions Policy
   res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
   
   next();
@@ -552,10 +522,10 @@ export function securityHeaders(req, res, next) {
 export function requireSecureApi(options = {}) {
   const {
     requireApiKey: needsApiKey = true,
-    requireApiKeyOnly: apiKeyOnly = false, // NEW: Force API key only, reject session tokens
+    requireApiKeyOnly: apiKeyOnly = false,
     requireIpWhitelist = false,
     requireSignedRequest = false,
-    requireCsrf = false, // NEW: Require CSRF for session-based requests
+    requireCsrf = false,
     rateLimit = true,
     rateLimitOptions = {}
   } = options;

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { sendContactFormEmail } from '../email.js';
+import { sendContactFormEmail } from '../lib/email.js';
 
 const router = Router();
 

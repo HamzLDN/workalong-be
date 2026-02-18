@@ -11,7 +11,7 @@ const mockPool = {
   on: jest.fn(),
 };
 
-jest.unstable_mockModule('../db.js', () => ({
+jest.unstable_mockModule('../lib/db.js', () => ({
   pool: mockPool,
   default: mockPool,
 }));
@@ -28,8 +28,8 @@ const {
   checkShiftConflict,
   approveShift,
   unapproveShift,
-} = await import('../shifts.js');
-const dbModule = await import('../db.js');
+} = await import('../services/shifts.js');
+const dbModule = await import('../lib/db.js');
 const pool = dbModule.pool || dbModule.default;
 const { createMockDbResult, createMockShift } = await import('./setup.js');
 

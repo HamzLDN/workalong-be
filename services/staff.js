@@ -1,7 +1,7 @@
-import pool from './db.js';
+import { pool } from '../lib/db.js';
 import { hashPassword } from './auth.js';
 import crypto from 'crypto';
-import { sendStaffPasswordSetupEmail } from './email.js';
+import { sendStaffPasswordSetupEmail } from '../lib/email.js';
 
 export async function getStaff(userId) {
   const result = await pool.query(

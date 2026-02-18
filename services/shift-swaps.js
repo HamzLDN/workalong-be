@@ -1,4 +1,4 @@
-import pool from './db.js';
+import { pool } from '../lib/db.js';
 import { calculateEndTime } from './shifts.js';
 
 // Create a shift swap request

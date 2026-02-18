@@ -12,7 +12,7 @@ import paymentRouter from './payment.js';
 import activitiesRouter from './activities.js';
 import securityRouter from './security.js';
 import healthRouter from './health.js';
-import paymentsRouter from '../payments.js';
+import paymentsRouter from './payments.js';
 
 export function registerRoutes(app) {
   app.use('/api/health', healthRouter);

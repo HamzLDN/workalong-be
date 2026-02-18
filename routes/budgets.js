@@ -5,7 +5,7 @@ import {
   createBudget,
   updateBudget,
   getBudgetStats
-} from '../staff.js';
+} from '../services/staff.js';
 import { requireAuth } from '../middleware/auth.js';
 
 const router = express.Router();

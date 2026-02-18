@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import express from 'express';
-import { pool } from '../db.js';
-import { config } from '../config.js';
+import { pool } from '../lib/db.js';
+import { config } from '../lib/config.js';
 import { requireAuth } from '../middleware/auth.js';
 import { checkGeofence } from '../lib/geofence.js';
 

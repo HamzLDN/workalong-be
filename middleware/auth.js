@@ -1,9 +1,9 @@
 import crypto from 'crypto';
-import { config } from '../config.js';
-import { pool } from '../db.js';
-import { getSession } from '../auth.js';
-import { getStaffSession } from '../staff-auth.js';
-import { logSecurityEvent } from '../api-security.js';
+import { config } from '../lib/config.js';
+import { pool } from '../lib/db.js';
+import { getSession } from '../services/auth.js';
+import { getStaffSession } from '../services/staff-auth.js';
+import { logSecurityEvent } from '../lib/api-security.js';
 
 export async function requireAuth(req, res, next) {
   try {

@@ -1,7 +1,7 @@
 import express from 'express';
 import crypto from 'crypto';
-import { config } from '../config.js';
-import { pool } from '../db.js';
+import { config } from '../lib/config.js';
+import { pool } from '../lib/db.js';
 import {
   createUser,
   findUserByEmail,
@@ -14,9 +14,9 @@ import {
   createPasswordResetToken,
   verifyPasswordResetToken,
   resetPasswordWithToken
-} from '../auth.js';
-import { logAuthActivity } from '../activity.js';
-import { logSecurityEvent } from '../api-security.js';
+} from '../services/auth.js';
+import { logAuthActivity } from '../lib/activity.js';
+import { logSecurityEvent } from '../lib/api-security.js';
 import { createRateLimiter } from '../middleware/security.js';
 import { requireAuth } from '../middleware/auth.js';
 
@@ -45,6 +45,62 @@ async function getUserWithSubscription(userId) {
   }
 }
 
+/**
+ * @swagger
+ * /auth/signup:
+ *   post:
+ *     summary: Create a new user account
+ *     description: Register a new user with email, password, and name. Returns a session token.
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - password
+ *               - name
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: user@example.com
+ *               password:
+ *                 type: string
+ *                 format: password
+ *                 minLength: 8
+ *                 example: securePassword123
+ *               name:
+ *                 type: string
+ *                 example: John Doe
+ *               company:
+ *                 type: string
+ *                 example: Acme Corp
+ *     responses:
+ *       201:
+ *         description: User created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                 user:
+ *                   $ref: '#/components/schemas/User'
+ *                 session:
+ *                   $ref: '#/components/schemas/Session'
+ *       400:
+ *         description: Bad request (missing fields, email already exists, or password too short)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Internal server error
+ */
 router.post('/signup', createRateLimiter({ limitPerMinute: 5, limitPerHour: 20 }), async (req, res) => {
   try {
     const { email, password, name, company } = req.body;
@@ -86,6 +142,65 @@ router.post('/signup', createRateLimiter({ limitPerMinute: 5, limitPerHour: 20 }
   }
 });
 
+/**
+ * @swagger
+ * /auth/signin:
+ *   post:
+ *     summary: Sign in to an existing account
+ *     description: Authenticate with email and password. May require 2FA verification. Returns a session token.
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - password
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: user@example.com
+ *               password:
+ *                 type: string
+ *                 format: password
+ *                 example: securePassword123
+ *     responses:
+ *       200:
+ *         description: Sign in successful (or 2FA required)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               oneOf:
+ *                 - type: object
+ *                   properties:
+ *                     message:
+ *                       type: string
+ *                       example: Signed in successfully
+ *                     user:
+ *                       $ref: '#/components/schemas/User'
+ *                     session:
+ *                       $ref: '#/components/schemas/Session'
+ *                 - type: object
+ *                   properties:
+ *                     message:
+ *                       type: string
+ *                       example: Verification code sent to your email
+ *                     requires2FA:
+ *                       type: boolean
+ *                       example: true
+ *                     requiresEmailCode:
+ *                       type: boolean
+ *                       example: true
+ *                     email:
+ *                       type: string
+ *       400:
+ *         description: Missing email or password
+ *       401:
+ *         description: Invalid credentials
+ */
 router.post('/signin', createRateLimiter({ limitPerMinute: 5, limitPerHour: 20 }), async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -121,7 +236,7 @@ router.post('/signin', createRateLimiter({ limitPerMinute: 5, limitPerHour: 20 }
     }
     if (email2FAEnabled) {
       const loginCode = await createLoginCode(user.id, user.email);
-      const { sendLoginCodeEmail } = await import('../email.js');
+      const { sendLoginCodeEmail } = await import('../lib/email.js');
       sendLoginCodeEmail(user.email, user.name, loginCode.code).catch(err => console.error('Failed to send login code email:', err));
       return res.json({
         message: 'Verification code sent to your email',
@@ -184,7 +299,7 @@ router.post('/verify-code', async (req, res) => {
         });
         if (isValid && totpEnabled && email2FAEnabled) {
           const loginCode = await createLoginCode(user.id, user.email);
-          const { sendLoginCodeEmail } = await import('../email.js');
+          const { sendLoginCodeEmail } = await import('../lib/email.js');
           sendLoginCodeEmail(user.email, user.name, loginCode.code).catch(err => console.error('Failed to send login code email:', err));
           return res.json({
             message: 'TOTP code verified. Verification code sent to your email.',
@@ -551,7 +666,7 @@ router.post('/forgot-password', async (req, res) => {
     }
     const tokenData = await createPasswordResetToken(email);
     if (tokenData) {
-      const { sendPasswordResetEmail } = await import('../email.js');
+      const { sendPasswordResetEmail } = await import('../lib/email.js');
       sendPasswordResetEmail(tokenData.user.email, tokenData.user.name, tokenData.token).catch(err =>
         console.error('Failed to send password reset email:', err)
       );

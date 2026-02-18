@@ -1,6 +1,6 @@
 import Stripe from 'stripe';
-import { config } from './config.js';
-import { pool } from './db.js';
+import { config } from '../lib/config.js';
+import { pool } from '../lib/db.js';
 
 // Initialize Stripe with your secret key
 const stripeSecretKey = config.stripe?.secretKey || process.env.STRIPE_SECRET_KEY;

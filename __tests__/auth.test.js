@@ -7,7 +7,7 @@ const mockCompareFn = jest.fn();
 const mockUuidv4Fn = jest.fn();
 
 // Mock dependencies using unstable_mockModule for ES modules
-jest.unstable_mockModule('../db.js', () => ({
+jest.unstable_mockModule('../lib/db.js', () => ({
   pool: {
     query: mockQueryFn,
     on: jest.fn(),
@@ -42,8 +42,8 @@ const {
   createPasswordResetToken,
   verifyPasswordResetToken,
   resetPasswordWithToken,
-} = await import('../auth.js');
-const { pool } = await import('../db.js');
+} = await import('../services/auth.js');
+const { pool } = await import('../lib/db.js');
 const bcrypt = await import('bcrypt');
 const { v4: uuidv4 } = await import('uuid');
 const { createMockDbResult, createMockUser, createMockSession } = await import('./setup.js');
