@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  postgres-mock:
+    image: postgres:16-alpine
+    container_name: workalong-postgres-mock
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: workalong
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: users
+    ports:
+      - "5433:5432"  # Different port to avoid conflicts with main DB
+    volumes:
+      - postgres_data_mock:/var/lib/postgresql/data
+      - ./init-workalong-db.sh:/docker-entrypoint-initdb.d/init-workalong-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workalong -d users || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    networks:
+      - workalong-network-mock
+
+networks:
+  workalong-network-mock:
+    driver: bridge
+
+volumes:
+  postgres_data_mock:
+    name: workalong-backend_postgres_data_mock
+
+

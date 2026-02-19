@@ -6,13 +6,8 @@ import { pool } from '../lib/db.js';
 const router = express.Router();
 const stripe = new Stripe(config.stripe.secretKey);
 
-// Middleware to check authentication
-const requireAuth = (req, res, next) => {
-  if (!req.session.userId) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
-  next();
-};
+// Import standard auth middleware
+import { requireAuth } from '../middleware/auth.js';
 
 // ============================================
 // PAYMENT SCHEDULE ENDPOINTS
@@ -23,7 +18,7 @@ router.get('/schedule', requireAuth, async (req, res) => {
   try {
     const result = await pool.query(
       'SELECT * FROM payment_schedules WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1',
-      [req.session.userId]
+      [req.userId]
     );
 
     if (result.rows.length === 0) {
@@ -52,7 +47,7 @@ router.post('/schedule', requireAuth, async (req, res) => {
     // Check if schedule already exists
     const existingSchedule = await pool.query(
       'SELECT id FROM payment_schedules WHERE user_id = $1',
-      [req.session.userId]
+      [req.userId]
     );
 
     let result;
@@ -64,7 +59,7 @@ router.post('/schedule', requireAuth, async (req, res) => {
              next_payment_date = $4, is_active = true, updated_at = CURRENT_TIMESTAMP
          WHERE user_id = $5
          RETURNING *`,
-        [scheduleType, paymentDay, customSchedule, nextPaymentDate, req.session.userId]
+        [scheduleType, paymentDay, customSchedule, nextPaymentDate, req.userId]
       );
     } else {
       // Create new schedule
@@ -72,7 +67,7 @@ router.post('/schedule', requireAuth, async (req, res) => {
         `INSERT INTO payment_schedules (user_id, schedule_type, payment_day, custom_schedule, next_payment_date)
          VALUES ($1, $2, $3, $4, $5)
          RETURNING *`,
-        [req.session.userId, scheduleType, paymentDay, customSchedule, nextPaymentDate]
+        [req.userId, scheduleType, paymentDay, customSchedule, nextPaymentDate]
       );
     }
 
@@ -91,7 +86,7 @@ router.delete('/schedule', requireAuth, async (req, res) => {
   try {
     await pool.query(
       'UPDATE payment_schedules SET is_active = false WHERE user_id = $1',
-      [req.session.userId]
+      [req.userId]
     );
 
     res.json({ message: 'Payment schedule deactivated' });
@@ -115,7 +110,7 @@ router.get('/staff/:staffId/details', requireAuth, async (req, res) => {
        FROM staff_payment_details spd
        JOIN staff s ON s.id = spd.staff_id
        WHERE spd.staff_id = $1 AND spd.user_id = $2`,
-      [staffId, req.session.userId]
+      [staffId, req.userId]
     );
 
     if (result.rows.length === 0) {
@@ -152,7 +147,7 @@ router.post('/staff/:staffId/details', requireAuth, async (req, res) => {
     // Verify staff belongs to user
     const staffCheck = await pool.query(
       'SELECT id FROM staff WHERE id = $1 AND user_id = $2',
-      [staffId, req.session.userId]
+      [staffId, req.userId]
     );
 
     if (staffCheck.rows.length === 0) {
@@ -162,7 +157,7 @@ router.post('/staff/:staffId/details', requireAuth, async (req, res) => {
     // Check if payment details exist
     const existing = await pool.query(
       'SELECT id FROM staff_payment_details WHERE staff_id = $1 AND user_id = $2',
-      [staffId, req.session.userId]
+      [staffId, req.userId]
     );
 
     let result;
@@ -176,7 +171,7 @@ router.post('/staff/:staffId/details', requireAuth, async (req, res) => {
          WHERE staff_id = $8 AND user_id = $9
          RETURNING id, staff_id, payment_method, account_holder_name, bank_name, is_verified`,
         [paymentMethod, accountHolderName, bankName, accountNumber, sortCode, 
-         iban, swiftBic, staffId, req.session.userId]
+         iban, swiftBic, staffId, req.userId]
       );
     } else {
       // Create new
@@ -186,7 +181,7 @@ router.post('/staff/:staffId/details', requireAuth, async (req, res) => {
           account_number, sort_code, iban, swift_bic)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING id, staff_id, payment_method, account_holder_name, bank_name, is_verified`,
-        [staffId, req.session.userId, paymentMethod, accountHolderName, bankName,
+        [staffId, req.userId, paymentMethod, accountHolderName, bankName,
          accountNumber, sortCode, iban, swiftBic]
       );
     }
@@ -217,7 +212,7 @@ router.post('/process/:staffId', requireAuth, async (req, res) => {
        FROM staff s
        LEFT JOIN staff_payment_details spd ON s.id = spd.staff_id
        WHERE s.id = $1 AND s.user_id = $2`,
-      [staffId, req.session.userId]
+      [staffId, req.userId]
     );
 
     if (staffResult.rows.length === 0) {
@@ -250,7 +245,7 @@ router.post('/process/:staffId', requireAuth, async (req, res) => {
          FROM deduped d
          JOIN staff s ON s.id = d.staff_id
          WHERE d.staff_id = $1 AND s.user_id = $2`,
-        [staffId, req.session.userId, periodStart, periodEnd]
+        [staffId, req.userId, periodStart, periodEnd]
       );
       const row = payrollResult.rows[0];
       amount = parseFloat(row?.total_cost ?? 0);
@@ -270,7 +265,7 @@ router.post('/process/:staffId', requireAuth, async (req, res) => {
         payment_method, payment_status, scheduled_date, is_automatic, notes)
        VALUES ($1, $2, $3, $4, $5, $6, 'pending', CURRENT_DATE, false, $7)
        RETURNING *`,
-      [req.session.userId, staffId, amount, periodStart, periodEnd, 
+      [req.userId, staffId, amount, periodStart, periodEnd, 
        staff.payment_method, notes]
     );
 
@@ -343,7 +338,7 @@ router.post('/process-all', requireAuth, async (req, res) => {
          GROUP BY d.staff_id
        ) te ON te.staff_id = s.id
        WHERE s.user_id = $1 AND s.status = 'active'`,
-      [req.session.userId, periodStart, periodEnd]
+      [req.userId, periodStart, periodEnd]
     );
 
     if (staffResult.rows.length === 0) {
@@ -371,7 +366,7 @@ router.post('/process-all', requireAuth, async (req, res) => {
           payment_method, payment_status, scheduled_date, is_automatic)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'processing', CURRENT_DATE, true)
          RETURNING *`,
-        [req.session.userId, staff.id, amount, staff.hours_worked || 0, 
+        [req.userId, staff.id, amount, staff.hours_worked || 0, 
          periodStart, periodEnd, staff.payment_method]
       );
 
@@ -383,7 +378,7 @@ router.post('/process-all', requireAuth, async (req, res) => {
     // Log the batch payment
     const schedule = await pool.query(
       'SELECT id FROM payment_schedules WHERE user_id = $1 AND is_active = true',
-      [req.session.userId]
+      [req.userId]
     );
 
     if (schedule.rows.length > 0) {
@@ -391,7 +386,7 @@ router.post('/process-all', requireAuth, async (req, res) => {
         `INSERT INTO payment_schedule_logs 
          (payment_schedule_id, user_id, execution_date, status, total_staff_paid, total_amount)
          VALUES ($1, $2, CURRENT_DATE, 'success', $3, $4)`,
-        [schedule.rows[0].id, req.session.userId, staffPaid, totalPaid]
+        [schedule.rows[0].id, req.userId, staffPaid, totalPaid]
       );
     }
 
@@ -418,7 +413,7 @@ router.get('/history', requireAuth, async (req, res) => {
       JOIN staff s ON s.id = ph.staff_id
       WHERE ph.user_id = $1
     `;
-    const params = [req.session.userId];
+    const params = [req.userId];
     let paramIndex = 2;
 
     if (status) {
@@ -440,15 +435,15 @@ router.get('/history', requireAuth, async (req, res) => {
 
     // Get total count
     let countQuery = 'SELECT COUNT(*) FROM payment_history WHERE user_id = $1';
-    const countParams = [req.session.userId];
+    const countParams = [req.userId];
     if (status) countQuery += ` AND payment_status = $2`;
     if (staffId) countQuery += ` AND staff_id = $${status ? 3 : 2}`;
     
     const countResult = await pool.query(countQuery, 
-      status && staffId ? [req.session.userId, status, staffId] :
-      status ? [req.session.userId, status] :
-      staffId ? [req.session.userId, staffId] :
-      [req.session.userId]
+      status && staffId ? [req.userId, status, staffId] :
+      status ? [req.userId, status] :
+      staffId ? [req.userId, staffId] :
+      [req.userId]
     );
 
     res.json({
@@ -477,7 +472,7 @@ router.get('/stats', requireAuth, async (req, res) => {
          SUM(CASE WHEN payment_status = 'failed' THEN amount ELSE 0 END) as failed_amount
        FROM payment_history
        WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '30 days'`,
-      [req.session.userId]
+      [req.userId]
     );
 
     res.json({ stats: stats.rows[0] });

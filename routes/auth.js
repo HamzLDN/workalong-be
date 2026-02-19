@@ -101,7 +101,7 @@ async function getUserWithSubscription(userId) {
  *       500:
  *         description: Internal server error
  */
-router.post('/signup', createRateLimiter({ limitPerMinute: 5, limitPerHour: 20 }), async (req, res) => {
+router.post('/signup', /* createRateLimiter({ limitPerMinute: 5, limitPerHour: 20 }), */ async (req, res) => {
   try {
     const { email, password, name, company } = req.body;
     if (!email || !password || !name) {
@@ -201,7 +201,7 @@ router.post('/signup', createRateLimiter({ limitPerMinute: 5, limitPerHour: 20 }
  *       401:
  *         description: Invalid credentials
  */
-router.post('/signin', createRateLimiter({ limitPerMinute: 5, limitPerHour: 20 }), async (req, res) => {
+router.post('/signin', /* createRateLimiter({ limitPerMinute: 5, limitPerHour: 20 }), */ async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {

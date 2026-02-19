@@ -93,10 +93,90 @@ function deobfuscateEndpoint(obfuscated) {
   }
 }
 
+// List of public endpoints that don't require obfuscation
+const PUBLIC_ENDPOINTS = [
+  '/health',
+  '/api/health',
+  '/contact',
+  '/api/contact',
+  '/auth/signup',
+  '/api/auth/signup',
+  '/auth/signin',
+  '/api/auth/signin',
+  '/auth/forgot-password',
+  '/api/auth/forgot-password',
+  '/auth/reset-password',
+  '/api/auth/reset-password',
+  '/auth/verify-code',
+  '/api/auth/verify-code',
+  '/payment/webhook',
+  '/api/payment/webhook',
+  '/payment/config',
+  '/api/payment/config'
+];
+
+function isPublicEndpoint(path) {
+  // Remove query string
+  const cleanPath = path.split('?')[0];
+  // Normalize path
+  let normalized = cleanPath;
+  if (!normalized.startsWith('/')) {
+    normalized = '/' + normalized;
+  }
+  if (normalized.startsWith('/api/')) {
+    normalized = normalized.substring(4);
+  }
+  return PUBLIC_ENDPOINTS.includes(normalized) || PUBLIC_ENDPOINTS.includes(cleanPath);
+}
+
+function hasRequestBody(req) {
+  // Check if request has a body with data
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'DELETE') {
+    return false;
+  }
+  
+  // Check content-type and body
+  const contentType = req.headers['content-type'] || '';
+  const hasBody = req.body && Object.keys(req.body).length > 0;
+  const hasRawBody = req.body && typeof req.body === 'string' && req.body.length > 0;
+  
+  return hasBody || hasRawBody || contentType.includes('application/json') || contentType.includes('application/x-obfuscated');
+}
+
 export async function verifyObfuscatedRequest(req, res, next) {
   try {
     const obfuscationEnabled = req.headers['x-obfuscation-enabled'] === 'true';
+    const isPublic = isPublicEndpoint(req.path);
+    const hasData = hasRequestBody(req);
     
+    // Allow non-obfuscated requests only for:
+    // 1. Public endpoints (signup, signin, health, etc.)
+    // 2. GET/HEAD requests to public endpoints
+    // 3. Requests without data
+    if (!obfuscationEnabled && (isPublic || !hasData)) {
+      return next();
+    }
+    
+    // For authenticated endpoints with data, require obfuscation
+    if (!obfuscationEnabled && hasData && !isPublic) {
+      await logSecurityEvent('obfuscation_required', {
+        ipAddress: req.ip,
+        endpoint: req.path,
+        requestMethod: req.method,
+        details: {
+          hasBody: !!req.body,
+          contentType: req.headers['content-type'],
+          isPublicEndpoint: isPublic
+        },
+        severity: 'warning'
+      });
+      return res.status(400).json({ 
+        error: 'Obfuscation required for data-carrying requests',
+        message: 'All requests containing data must use obfuscation. Include X-Obfuscation-Enabled: true header.'
+      });
+    }
+    
+    // If obfuscation is not enabled and request doesn't need it, continue
     if (!obfuscationEnabled) {
       return next();
     }
@@ -167,8 +247,9 @@ export async function verifyObfuscatedRequest(req, res, next) {
     let bodyString = '';
     
     if (parsedBody && typeof parsedBody === 'object') {
-      if (parsedBody.format === 'information' && parsedBody.data) {
-        bodyString = parsedBody.data;
+      // Check if it's the obfuscated format - data can be empty string, so check for property existence
+      if (parsedBody.format === 'information' && parsedBody.hasOwnProperty('data')) {
+        bodyString = parsedBody.data || ''; // Use empty string if data is empty
       } else {
         const keys = Object.keys(parsedBody);
         if (keys.length === 0) {
@@ -241,11 +322,16 @@ export async function verifyObfuscatedRequest(req, res, next) {
       return res.status(401).json({ error: 'Invalid request signature' });
     }
 
-    if (parsedBody && parsedBody.format === 'information' && parsedBody.data) {
+    if (parsedBody && parsedBody.format === 'information' && parsedBody.hasOwnProperty('data')) {
       try {
         const key = generateObfuscationKey(sessionId);
-        const deobfuscated = deobfuscateData(parsedBody.data, key);
-        req.body = JSON.parse(deobfuscated);
+        // Handle empty string data - if data is empty, body should be empty object
+        if (parsedBody.data === '') {
+          req.body = {};
+        } else {
+          const deobfuscated = deobfuscateData(parsedBody.data, key);
+          req.body = JSON.parse(deobfuscated);
+        }
       } catch (error) {
         await logSecurityEvent('obfuscation_deobfuscate_failed', {
           ipAddress: req.ip,
@@ -280,15 +366,53 @@ export async function verifyObfuscatedRequest(req, res, next) {
 }
 
 export function obfuscateResponse(req, res, next) {
-  if (!req.obfuscation || !req.obfuscation.enabled) {
+  // Always obfuscate responses for authenticated endpoints with data
+  const isPublic = isPublicEndpoint(req.path);
+  const hasData = hasRequestBody(req);
+  const obfuscationRequested = req.headers['x-obfuscation-enabled'] === 'true';
+  
+  // Obfuscate if:
+  // 1. Request was obfuscated (req.obfuscation exists)
+  // 2. OR it's an authenticated endpoint with data (not public)
+  const shouldObfuscate = (req.obfuscation && req.obfuscation.enabled) || 
+                          (obfuscationRequested && !isPublic && hasData) ||
+                          (!isPublic && hasData && (req.userId || req.staffId));
+  
+  if (!shouldObfuscate) {
     return next();
+  }
+
+  // Get obfuscation key
+  let obfuscationKey;
+  if (req.obfuscation && req.obfuscation.key) {
+    obfuscationKey = req.obfuscation.key;
+  } else {
+    // Generate key from session if available
+    let sessionId = req.cookies?.sessionId || req.cookies?.staffSessionId;
+    if (!sessionId && req.headers.authorization) {
+      const authHeader = req.headers.authorization;
+      if (authHeader.startsWith('Bearer ')) {
+        sessionId = authHeader.replace('Bearer ', '').trim();
+      }
+    }
+    if (sessionId && sessionId !== 'undefined' && sessionId !== 'null') {
+      obfuscationKey = generateObfuscationKey(sessionId);
+      // Store in req.obfuscation for consistency
+      if (!req.obfuscation) {
+        req.obfuscation = { enabled: true, sessionId, key: obfuscationKey };
+      }
+    } else {
+      // No session, can't obfuscate - but this shouldn't happen for authenticated endpoints
+      return next();
+    }
   }
 
   const originalJson = res.json.bind(res);
   
   res.json = function(data) {
     try {
-      const obfuscated = obfuscateData(JSON.stringify(data), req.obfuscation.key);
+      const obfuscated = obfuscateData(JSON.stringify(data), obfuscationKey);
+      res.setHeader('Content-Type', 'application/json');
       return originalJson({
         format: 'information',
         data: obfuscated
