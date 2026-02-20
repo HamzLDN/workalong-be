@@ -53,70 +53,66 @@ jobs:
   deploy:
     name: Deploy Backend to Server
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: self-hosted  # Also runs on your server for deployment
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Deploy to server
-        uses: invi5H/ssh-action@v1.0.0
-        with:
-          NAME: backend-server
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_PORT: ${{ secrets.SSH_PORT || 22 }}
-          SSH_KEY: ${{ secrets.SSH_KEY }}
-          script: |
-            echo "Starting backend deployment..."
-            cd /root/workalong-backend
-            
-            # Pull latest code
-            git pull origin main
-            
-            # Stop existing container
-            docker stop workalong-backend || echo "Container not running"
-            docker rm workalong-backend || echo "Container does not exist"
-            
-            # Build new Docker image
-            echo "Building Docker image..."
-            docker build -f Dockerfile.backend.ubuntu -t workalong-backend:latest .
-            
-            # Start container with updated configuration
-            echo "Starting backend container..."
-            docker run -d \
-              --name workalong-backend \
-              --restart unless-stopped \
-              -p 8080:8080 \
-              -p 8443:443 \
-              --env-file .env \
-              -e NODE_ENV=production \
-              -e DOCKER=true \
-              -v /root/workalong-frontend/certs:/app/certs:ro \
-              -v /root/workalong-frontend/docker/ssl:/etc/nginx/ssl:ro \
-              --network workalong-backend_workalong-network \
-              workalong-backend:latest
-            
-            # Wait for container to be healthy
-            echo "Waiting for container to be healthy..."
-            sleep 10
-            
-            # Check container status
-            docker ps --filter "name=workalong-backend" --format "table {{.Names}}\t{{.Status}}"
-            
-            # Health check
-            echo "Performing health check..."
-            for i in {1..5}; do
-              if curl -f http://localhost:8080/api/health > /dev/null 2>&1; then
-                echo "Backend is healthy!"
-                exit 0
-              fi
-              echo "Health check attempt $i failed, retrying..."
-              sleep 5
-            done
-            
-            echo "Health check failed after 5 attempts"
-            docker logs workalong-backend --tail 50
-            exit 1
+      - name: Pull latest code
+        run: |
+          cd /root/workalong-backend
+          git pull origin main
+
+      - name: Stop existing container
+        run: |
+          docker stop workalong-backend || echo "Container not running"
+          docker rm workalong-backend || echo "Container does not exist"
+
+      - name: Build Docker image
+        run: |
+          cd /root/workalong-backend
+          echo "Building Docker image..."
+          docker build -f Dockerfile.backend.ubuntu -t workalong-backend:latest .
+
+      - name: Start container
+        run: |
+          cd /root/workalong-backend
+          echo "Starting backend container..."
+          docker run -d \
+            --name workalong-backend \
+            --restart unless-stopped \
+            -p 8080:8080 \
+            -p 8443:443 \
+            --env-file .env \
+            -e NODE_ENV=production \
+            -e DOCKER=true \
+            -v /root/workalong-frontend/certs:/app/certs:ro \
+            -v /root/workalong-frontend/docker/ssl:/etc/nginx/ssl:ro \
+            --network workalong-backend_workalong-network \
+            workalong-backend:latest
+
+      - name: Wait for container to be healthy
+        run: |
+          echo "Waiting for container to be healthy..."
+          sleep 10
+          
+          # Check container status
+          docker ps --filter "name=workalong-backend" --format "table {{.Names}}\t{{.Status}}"
+          
+          # Health check
+          echo "Performing health check..."
+          for i in {1..5}; do
+            if curl -f http://localhost:8080/api/health > /dev/null 2>&1; then
+              echo "Backend is healthy!"
+              exit 0
+            fi
+            echo "Health check attempt $i failed, retrying..."
+            sleep 5
+          done
+          
+          echo "Health check failed after 5 attempts"
+          docker logs workalong-backend --tail 50
+          exit 1
 
