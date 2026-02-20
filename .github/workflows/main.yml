@@ -33,24 +33,59 @@ jobs:
       - name: Launch backend server for testing
         run: |
           echo "Starting backend server in dev mode..."
-          cd root/workalong-backend && NODE_ENV=dev npm run dev > /tmp/backend.log 2>&1 &
-          echo $! > /tmp/backend.pid
-          echo "Backend server started with PID: $(cat /tmp/backend.pid)"
+          echo "Current directory: $(pwd)"
+          echo "Working directory: ${{ github.workspace }}"
+          NODE_ENV=dev npm run dev > /tmp/backend.log 2>&1 &
+          SERVER_PID=$!
+          echo $SERVER_PID > /tmp/backend.pid
+          echo "Backend server started with PID: $SERVER_PID"
+          echo "Waiting a moment for server to initialize..."
+          sleep 3
+          echo "Checking if process is still running..."
+          if ps -p $SERVER_PID > /dev/null 2>&1; then
+            echo "✅ Server process is running"
+          else
+            echo "❌ Server process died immediately. Logs:"
+            cat /tmp/backend.log
+            exit 1
+          fi
 
       - name: Wait for backend server to be ready
         run: |
           echo "Waiting for backend server to be accessible on localhost:8081..."
+          echo "Checking server process status..."
+          if [ -f /tmp/backend.pid ]; then
+            PID=$(cat /tmp/backend.pid)
+            if ps -p $PID > /dev/null 2>&1; then
+              echo "✅ Server process is running (PID: $PID)"
+            else
+              echo "❌ Server process is not running (PID: $PID)"
+              echo "Backend logs:"
+              cat /tmp/backend.log || echo "No logs available"
+              exit 1
+            fi
+          fi
+          
           for i in {1..30}; do
             if curl -f http://localhost:8081/api/health > /dev/null 2>&1; then
               echo "✅ Backend server is accessible"
               exit 0
             fi
             echo "Waiting for server... (attempt $i/30)"
+            if [ $((i % 5)) -eq 0 ]; then
+              echo "Recent server logs:"
+              tail -20 /tmp/backend.log || echo "No logs available"
+            fi
             sleep 2
           done
           echo "❌ ERROR: Backend server did not become accessible within 60 seconds"
-          echo "Backend logs:"
-          tail -50 /tmp/backend.log || echo "No logs available"
+          echo "Full backend logs:"
+          cat /tmp/backend.log || echo "No logs available"
+          echo "Checking if process is still running:"
+          if [ -f /tmp/backend.pid ]; then
+            PID=$(cat /tmp/backend.pid)
+            ps -p $PID || echo "Process not found"
+          fi
           exit 1
 
       - name: Load environment variables from .env
