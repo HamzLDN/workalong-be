@@ -8,7 +8,10 @@
     "dev": "node --watch index.js",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "test:watch": "NODE_OPTIONS=--experimental-vm-modules jest --watch",
-    "test:coverage": "NODE_OPTIONS=--experimental-vm-modules jest --coverage"
+    "test:coverage": "NODE_OPTIONS=--experimental-vm-modules jest --coverage",
+    "create-free-promo": "node scripts/create-free-promo-code.js",
+    "grant-free-access": "node scripts/grant-free-access.js",
+    "migrate:discount": "node scripts/run-discount-migration.js"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",

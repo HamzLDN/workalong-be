@@ -265,22 +265,38 @@ async function makeObfuscatedRequest(endpoint, body, method, user) {
     let data;
     
     try {
-      if (contentType.includes('application/json') || contentType.includes('application/x-obfuscated')) {
-        const text = await response.text();
+      const text = await response.text();
+      let parsed;
+      
+      // Try to parse as JSON first
+      try {
+        parsed = JSON.parse(text);
+      } catch (parseError) {
+        // Not JSON, return as text
+        data = text;
+        parsed = null;
+      }
+      
+      // Check if response is obfuscated (regardless of content-type)
+      if (parsed && typeof parsed === 'object' && parsed.format === 'information' && parsed.data) {
         try {
-          const parsed = JSON.parse(text);
-          if (parsed.format === 'information' && parsed.data) {
-            const deobfuscated = obfuscateData(parsed.data, key);
-            data = JSON.parse(deobfuscated);
-          } else {
-            data = parsed;
+          // Deobfuscate: parsed.data is base64-encoded obfuscated data
+          // Decode from base64, XOR with key, convert to string
+          const obfuscatedData = Buffer.from(parsed.data, 'base64');
+          const keyArray = Buffer.from(key, 'utf8');
+          const result = new Uint8Array(obfuscatedData.length);
+          for (let i = 0; i < obfuscatedData.length; i++) {
+            result[i] = obfuscatedData[i] ^ keyArray[i % keyArray.length];
           }
-        } catch (parseError) {
-          // Response claims to be JSON but isn't - return as text
-          data = text;
+          const deobfuscated = Buffer.from(result).toString('utf8');
+          data = JSON.parse(deobfuscated);
+        } catch (deobfuscateError) {
+          console.error(`Failed to deobfuscate response: ${deobfuscateError.message}`);
+          // Return the obfuscated data if deobfuscation fails
+          data = parsed;
         }
-      } else {
-        data = await response.text();
+      } else if (parsed) {
+        data = parsed;
       }
     } catch (readError) {
       // Failed to read response body
@@ -1336,38 +1352,37 @@ async function testConcurrency() {
         employmentType: 'full-time',
       }, 'POST', userA);
       
-      if (staffResult.ok && staffResult.data?.staff) {
-        userA.staffId = staffResult.data.staff.id;
+      // Check if response is still obfuscated (shouldn't happen, but handle it)
+      let responseData = staffResult.data;
+      if (responseData && typeof responseData === 'object' && responseData.format === 'information' && responseData.data) {
+        try {
+          const key = generateObfuscationKey(userA.sessionId);
+          // Deobfuscate using XOR (symmetric operation)
+          const obfuscatedData = Buffer.from(responseData.data, 'base64');
+          const keyArray = Buffer.from(key, 'utf8');
+          const result = new Uint8Array(obfuscatedData.length);
+          for (let i = 0; i < obfuscatedData.length; i++) {
+            result[i] = obfuscatedData[i] ^ keyArray[i % keyArray.length];
+          }
+          const deobfuscated = Buffer.from(result).toString('utf8');
+          responseData = JSON.parse(deobfuscated);
+        } catch (e) {
+          console.log(`${YELLOW}WARNING:${RESET} Failed to deobfuscate response: ${e.message}`);
+        }
+      }
+      
+      if (staffResult.ok && responseData?.staff) {
+        userA.staffId = responseData.staff.id;
         console.log(`${GREEN}PASS:${RESET} Created staff for concurrency test (ID: ${userA.staffId})`);
   } else {
-        // Handle obfuscated error responses
-        // makeObfuscatedRequest should already deobfuscate, but check if we got raw obfuscated data
+        // Handle error responses
         let errorMsg = '';
-        if (staffResult.data && typeof staffResult.data === 'object') {
-          // Check if it's an obfuscated response that wasn't deobfuscated
-          if (staffResult.data.format === 'information' && staffResult.data.data) {
-            try {
-              const key = generateObfuscationKey(userA.sessionId);
-              // Deobfuscate using XOR (symmetric operation)
-              const obfuscatedData = Buffer.from(staffResult.data.data, 'base64');
-              const keyArray = Buffer.from(key, 'utf8');
-              const result = new Uint8Array(obfuscatedData.length);
-              for (let i = 0; i < obfuscatedData.length; i++) {
-                result[i] = obfuscatedData[i] ^ keyArray[i % keyArray.length];
-              }
-              const deobfuscated = Buffer.from(result).toString('utf8');
-              const parsed = JSON.parse(deobfuscated);
-              errorMsg = JSON.stringify(parsed).substring(0, 200);
-            } catch (e) {
-              errorMsg = `Obfuscated error (failed to deobfuscate): ${JSON.stringify(staffResult.data).substring(0, 200)}`;
-            }
-          } else {
-            errorMsg = JSON.stringify(staffResult.data).substring(0, 200);
-          }
-        } else if (typeof staffResult.data === 'string') {
-          errorMsg = staffResult.data.substring(0, 200);
+        if (responseData && typeof responseData === 'object') {
+          errorMsg = JSON.stringify(responseData).substring(0, 200);
+        } else if (typeof responseData === 'string') {
+          errorMsg = responseData.substring(0, 200);
         } else {
-          errorMsg = JSON.stringify(staffResult.data || staffResult.error || {}).substring(0, 200);
+          errorMsg = JSON.stringify(responseData || staffResult.error || {}).substring(0, 200);
         }
         
         console.log(`${YELLOW}WARNING:${RESET} Failed to create staff: Status ${staffResult.status}, Error: ${errorMsg}`);

@@ -296,7 +296,9 @@ export async function handleSubscriptionSuccess(session) {
       throw new Error('Session has no subscription');
     }
     
-    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+      expand: ['discount.coupon']
+    });
     const firstItem = subscription.items?.data?.[0];
     const planName = subscription.metadata?.planName
       || metadata.planName
@@ -305,7 +307,19 @@ export async function handleSubscriptionSuccess(session) {
     const multiLocationEnabled = (subscription.metadata?.multiLocation || metadata.multiLocation) === '1';
     const dbStatus = subscription.status === 'trialing' ? 'trial' : 'paid';
     
-    // Try with subscription_staff_limit and multi_location_enabled; if columns missing, retry without them
+    // Extract discount percentage from subscription
+    let discountPercent = null;
+    if (subscription.discount && subscription.discount.coupon) {
+      if (subscription.discount.coupon.percent_off) {
+        discountPercent = subscription.discount.coupon.percent_off;
+      } else if (subscription.discount.coupon.amount_off) {
+        // For fixed amount discounts, we'd need to calculate percentage based on price
+        // For now, store as 0 to indicate there's a discount but it's amount-based
+        discountPercent = 0;
+      }
+    }
+    
+    // Try with subscription_staff_limit, multi_location_enabled, and subscription_discount_percent; if columns missing, retry without them
     try {
       await pool.query(
         `UPDATE users 
@@ -319,8 +333,9 @@ export async function handleSubscriptionSuccess(session) {
            stripe_subscription_id = $5,
            subscription_staff_limit = $6,
            multi_location_enabled = $7,
+           subscription_discount_percent = $8,
            updated_at = NOW()
-         WHERE id = $8`,
+         WHERE id = $9`,
         [
           dbStatus,
           planName,
@@ -329,20 +344,33 @@ export async function handleSubscriptionSuccess(session) {
           subscriptionId,
           staffLimit,
           multiLocationEnabled,
+          discountPercent,
           userId
         ]
       );
     } catch (updateErr) {
-      if (updateErr.code === '42703' || String(updateErr.message || '').includes('subscription_staff_limit') || String(updateErr.message || '').includes('multi_location_enabled')) {
-        console.log('subscription_staff_limit or multi_location_enabled column missing; run migration');
-        await pool.query(
-          `UPDATE users 
-           SET subscription_status = $1, subscription_plan = $2, subscription_start_date = to_timestamp($3),
-               subscription_end_date = to_timestamp($4), payment_method = 'stripe', last_payment_date = NOW(),
-               stripe_subscription_id = $5, subscription_staff_limit = $6, updated_at = NOW()
-           WHERE id = $7`,
-          [dbStatus, planName, subscription.current_period_start, subscription.current_period_end, subscriptionId, staffLimit, userId]
-        );
+      if (updateErr.code === '42703' || String(updateErr.message || '').includes('subscription_staff_limit') || String(updateErr.message || '').includes('multi_location_enabled') || String(updateErr.message || '').includes('subscription_discount_percent')) {
+        console.log('Some subscription columns missing; trying without discount_percent');
+        try {
+          await pool.query(
+            `UPDATE users 
+             SET subscription_status = $1, subscription_plan = $2, subscription_start_date = to_timestamp($3),
+                 subscription_end_date = to_timestamp($4), payment_method = 'stripe', last_payment_date = NOW(),
+                 stripe_subscription_id = $5, subscription_staff_limit = $6, updated_at = NOW()
+             WHERE id = $7`,
+            [dbStatus, planName, subscription.current_period_start, subscription.current_period_end, subscriptionId, staffLimit, userId]
+          );
+        } catch (e2) {
+          // Final fallback without staff_limit
+          await pool.query(
+            `UPDATE users 
+             SET subscription_status = $1, subscription_plan = $2, subscription_start_date = to_timestamp($3),
+                 subscription_end_date = to_timestamp($4), payment_method = 'stripe', last_payment_date = NOW(),
+                 stripe_subscription_id = $5, updated_at = NOW()
+             WHERE id = $6`,
+            [dbStatus, planName, subscription.current_period_start, subscription.current_period_end, subscriptionId, userId]
+          );
+        }
       } else {
         throw updateErr;
       }
@@ -384,6 +412,14 @@ export async function handleSubscriptionUpdated(subscription) {
       ? new Date(subscription.current_period_end * 1000)
       : null;
 
+    // Get discount percentage from subscription
+    let discountPercent = null;
+    if (subscription.discount && subscription.discount.coupon) {
+      if (subscription.discount.coupon.percent_off) {
+        discountPercent = subscription.discount.coupon.percent_off;
+      }
+    }
+
     try {
       await pool.query(
         `UPDATE users 
@@ -391,17 +427,18 @@ export async function handleSubscriptionUpdated(subscription) {
              subscription_end_date = $2,
              subscription_staff_limit = $3,
              multi_location_enabled = $4,
+             subscription_discount_percent = $5,
              updated_at = NOW()
-         WHERE id = $5`,
-        [dbStatus, periodEnd, staffLimit, multiLocationEnabled, userId]
+         WHERE id = $6`,
+        [dbStatus, periodEnd, staffLimit, multiLocationEnabled, discountPercent, userId]
       );
-      console.log(`Subscription synced for user ${userId}: ${dbStatus}`);
+      console.log(`Subscription synced for user ${userId}: ${dbStatus}${discountPercent ? ` (${discountPercent}% discount)` : ''}`);
     } catch (e) {
-      if (e.code === '42703' || String(e.message || '').includes('subscription_staff_limit') || String(e.message || '').includes('multi_location_enabled')) {
+      if (e.code === '42703' || String(e.message || '').includes('subscription_staff_limit') || String(e.message || '').includes('multi_location_enabled') || String(e.message || '').includes('subscription_discount_percent')) {
         try {
           await pool.query(
-            `UPDATE users SET subscription_status = $1, subscription_end_date = $2, subscription_staff_limit = $3, updated_at = NOW() WHERE id = $4`,
-            [dbStatus, periodEnd, staffLimit, userId]
+            `UPDATE users SET subscription_status = $1, subscription_end_date = $2, subscription_staff_limit = $3, subscription_discount_percent = $4, updated_at = NOW() WHERE id = $5`,
+            [dbStatus, periodEnd, staffLimit, discountPercent, userId]
           );
           if (multiLocationEnabled) {
             await pool.query('UPDATE users SET multi_location_enabled = TRUE WHERE id = $1', [userId]);
@@ -615,7 +652,9 @@ export async function updateSubscription(userId, planConfig) {
     throw new Error('No active subscription found. Use checkout to subscribe.');
   }
 
-  const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+    expand: ['discount.promotion_code']
+  });
 
   if (subscription.status === 'canceled' || subscription.cancel_at_period_end) {
     throw new Error('Subscription is canceled. Use checkout to start a new subscription.');
@@ -626,8 +665,35 @@ export async function updateSubscription(userId, planConfig) {
     throw new Error('Subscription has no items');
   }
 
-  const amountPence = Math.round(numPrice * 100);
-  if (amountPence < 50) {
+  // Check if subscription has an existing discount/coupon
+  const existingDiscount = subscription.discount;
+  let discountPercent = null;
+  
+  // Get discount percentage from subscription or database
+  if (existingDiscount && existingDiscount.coupon) {
+    if (existingDiscount.coupon.percent_off) {
+      discountPercent = existingDiscount.coupon.percent_off;
+    }
+  } else {
+    // Fallback: check database for stored discount percentage
+    const userResult = await pool.query(
+      'SELECT subscription_discount_percent FROM users WHERE id = $1',
+      [userId]
+    );
+    if (userResult.rows[0]?.subscription_discount_percent != null) {
+      discountPercent = userResult.rows[0].subscription_discount_percent;
+    }
+  }
+
+  // Calculate final amount based on discount percentage
+  let finalAmountPence = Math.round(numPrice * 100);
+  if (discountPercent != null && discountPercent > 0) {
+    const discountAmount = Math.round(finalAmountPence * (discountPercent / 100));
+    finalAmountPence = Math.max(0, finalAmountPence - discountAmount);
+    console.log(`Applying ${discountPercent}% discount: £${(numPrice).toFixed(2)} → £${(finalAmountPence / 100).toFixed(2)}`);
+  }
+
+  if (finalAmountPence > 0 && finalAmountPence < 50) {
     throw new Error('Minimum charge is £0.50');
   }
 
@@ -635,8 +701,8 @@ export async function updateSubscription(userId, planConfig) {
 
   // Create a new product for this plan (Stripe auto-created products can't be updated)
   const productName = billingCycle === 'yearly'
-    ? `Workalong Plan (Yearly) — £${numPrice.toFixed(2)}/year`
-    : `Workalong Plan (Monthly) — £${numPrice.toFixed(2)}/month`;
+    ? `Workalong Plan (Yearly) — £${(finalAmountPence / 100).toFixed(2)}/year`
+    : `Workalong Plan (Monthly) — £${(finalAmountPence / 100).toFixed(2)}/month`;
   
   const newProduct = await stripe.products.create({
     name: productName,
@@ -650,12 +716,13 @@ export async function updateSubscription(userId, planConfig) {
   });
   const productId = newProduct.id;
 
-  const updatedSubscription = await stripe.subscriptions.update(subscriptionId, {
+  // Prepare subscription update
+  const updateParams = {
     items: [{
       id: item.id,
       price_data: {
         currency: 'gbp',
-        unit_amount: amountPence,
+        unit_amount: finalAmountPence,
         recurring: { interval },
         product: productId
       }
@@ -668,9 +735,33 @@ export async function updateSubscription(userId, planConfig) {
       multiLocation: multiLocation ? '1' : '0',
       billingCycle
     }
-  });
+  };
 
-  // Sync our DB with new staff limit, multi_location, and dates
+  // Preserve existing discount if present
+  if (existingDiscount && existingDiscount.coupon) {
+    // Discount is automatically preserved by Stripe when updating subscription
+    // But we can explicitly ensure it's maintained
+    console.log(`Preserving existing discount: ${existingDiscount.coupon.id}`);
+  }
+
+  const updatedSubscription = await stripe.subscriptions.update(subscriptionId, updateParams);
+
+  // Get discount percentage from updated subscription
+  const updatedSubscriptionWithDiscount = await stripe.subscriptions.retrieve(updatedSubscription.id, {
+    expand: ['discount.coupon']
+  });
+  let updatedDiscountPercent = null;
+  if (updatedSubscriptionWithDiscount.discount && updatedSubscriptionWithDiscount.discount.coupon) {
+    if (updatedSubscriptionWithDiscount.discount.coupon.percent_off) {
+      updatedDiscountPercent = updatedSubscriptionWithDiscount.discount.coupon.percent_off;
+    }
+  }
+  // If no discount in subscription but we had one before, preserve it
+  if (updatedDiscountPercent == null && discountPercent != null) {
+    updatedDiscountPercent = discountPercent;
+  }
+
+  // Sync our DB with new staff limit, multi_location, discount, and dates
   const staffLimit = parseInt(String(staffCount || 3), 10) || null;
   const multiLocationEnabled = !!multiLocation;
   try {
@@ -681,23 +772,33 @@ export async function updateSubscription(userId, planConfig) {
            subscription_end_date = to_timestamp($2),
            subscription_staff_limit = $3,
            multi_location_enabled = $4,
+           subscription_discount_percent = $5,
            last_payment_date = NOW(),
            updated_at = NOW()
-       WHERE id = $5`,
+       WHERE id = $6`,
       [
         updatedSubscription.current_period_start,
         updatedSubscription.current_period_end,
         staffLimit,
         multiLocationEnabled,
+        updatedDiscountPercent,
         userId
       ]
     );
     } catch (e) {
-    if (e.code === '42703' || (String(e.message || '').includes('subscription_staff_limit') || String(e.message || '').includes('multi_location_enabled'))) {
-      await pool.query(
-        `UPDATE users SET subscription_plan = 'custom', subscription_start_date = to_timestamp($1), subscription_end_date = to_timestamp($2), subscription_staff_limit = $3, last_payment_date = NOW(), updated_at = NOW() WHERE id = $4`,
-        [updatedSubscription.current_period_start, updatedSubscription.current_period_end, staffLimit, userId]
-      );
+    if (e.code === '42703' || (String(e.message || '').includes('subscription_staff_limit') || String(e.message || '').includes('multi_location_enabled') || String(e.message || '').includes('subscription_discount_percent'))) {
+      try {
+        await pool.query(
+          `UPDATE users SET subscription_plan = 'custom', subscription_start_date = to_timestamp($1), subscription_end_date = to_timestamp($2), subscription_staff_limit = $3, subscription_discount_percent = $4, last_payment_date = NOW(), updated_at = NOW() WHERE id = $5`,
+          [updatedSubscription.current_period_start, updatedSubscription.current_period_end, staffLimit, updatedDiscountPercent, userId]
+        );
+      } catch (e2) {
+        // Final fallback without discount_percent
+        await pool.query(
+          `UPDATE users SET subscription_plan = 'custom', subscription_start_date = to_timestamp($1), subscription_end_date = to_timestamp($2), subscription_staff_limit = $3, last_payment_date = NOW(), updated_at = NOW() WHERE id = $4`,
+          [updatedSubscription.current_period_start, updatedSubscription.current_period_end, staffLimit, userId]
+        );
+      }
       if (multiLocationEnabled) {
         try {
           await pool.query('UPDATE users SET multi_location_enabled = TRUE WHERE id = $1', [userId]);
