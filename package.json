@@ -10,6 +10,7 @@
     "test:watch": "NODE_OPTIONS=--experimental-vm-modules jest --watch",
     "test:coverage": "NODE_OPTIONS=--experimental-vm-modules jest --coverage",
     "create-free-promo": "node scripts/create-free-promo-code.js",
+    "list-promo-codes": "node scripts/list-promo-codes.js",
     "grant-free-access": "node scripts/grant-free-access.js",
     "migrate:discount": "node scripts/run-discount-migration.js"
   },

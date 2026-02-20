@@ -157,27 +157,14 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
       }
     }
 
-    // 14-day free trial for first-time subscribers only (no previous subscription in our DB)
-    const firstTimeSubscriber = !existingSubId;
-    const subscriptionData = {
-      metadata: {
-        userId: userId.toString(),
-        planName: 'custom',
-        staffCount: String(staffCount),
-        multiLocation: multiLocation ? '1' : '0',
-        billingCycle
-      }
-    };
-    if (firstTimeSubscriber) {
-      subscriptionData.trial_period_days = 14;
-    }
-
     // Optional: Stripe promotion code (for coupons/discounts)
     let stripePromotionCodeId = null;
+    let is100PercentFreeForever = false;
+    
     if (promoCode && String(promoCode).trim()) {
       try {
         // Promo codes are only allowed on monthly plans so they effectively give
-        // at most one month of discount (first invoice). The actual “one month only”
+        // at most one month of discount (first invoice). The actual "one month only"
         // behavior is controlled in Stripe by configuring the Coupon duration.
         if (billingCycle !== 'monthly') {
           throw new Error('Promo code can only be used with monthly billing.');
@@ -196,10 +183,38 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
 
         const promo = promoList.data[0];
         stripePromotionCodeId = promo.id;
+        
+        // Check if this is a 100% free forever promo code
+        // Retrieve the coupon to check discount and duration
+        const coupon = await stripe.coupons.retrieve(promo.coupon.id);
+        if (coupon.percent_off === 100 && coupon.duration === 'forever') {
+          is100PercentFreeForever = true;
+          console.log(`[Checkout] Detected 100% free forever promo code: ${promoCode}`);
+        }
       } catch (promoErr) {
         console.error('Error validating promo code with Stripe:', promoErr);
         throw promoErr;
       }
+    }
+
+    // 14-day free trial for first-time subscribers only (no previous subscription in our DB)
+    // Skip trial if using a 100% free forever promo code (already free)
+    const firstTimeSubscriber = !existingSubId;
+    const subscriptionData = {
+      metadata: {
+        userId: userId.toString(),
+        planName: 'custom',
+        staffCount: String(staffCount),
+        multiLocation: multiLocation ? '1' : '0',
+        billingCycle
+      }
+    };
+    
+    // Only add trial period if:
+    // 1. User is a first-time subscriber AND
+    // 2. NOT using a 100% free forever promo code
+    if (firstTimeSubscriber && !is100PercentFreeForever) {
+      subscriptionData.trial_period_days = 14;
     }
 
     const session = await stripe.checkout.sessions.create({
@@ -214,7 +229,7 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
             recurring: { interval },
             product_data: {
               name: productName,
-              description: `Staff: ${staffCount}, Multi-location: ${multiLocation ? 'Yes' : 'No'}${firstTimeSubscriber ? '. 14-day free trial.' : ''}`,
+              description: `Staff: ${staffCount}, Multi-location: ${multiLocation ? 'Yes' : 'No'}${firstTimeSubscriber && !is100PercentFreeForever ? '. 14-day free trial.' : ''}`,
               metadata: {
                 userId: userId.toString(),
                 staffCount: String(staffCount),
