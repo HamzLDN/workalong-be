@@ -186,10 +186,14 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
         
         // Check if this is a 100% free forever promo code
         // Retrieve the coupon to check discount and duration
-        const coupon = await stripe.coupons.retrieve(promo.coupon.id);
-        if (coupon.percent_off === 100 && coupon.duration === 'forever') {
-          is100PercentFreeForever = true;
-          console.log(`[Checkout] Detected 100% free forever promo code: ${promoCode}`);
+        // Handle both cases: coupon can be a string ID or an expanded object
+        const couponId = typeof promo.coupon === 'string' ? promo.coupon : promo.coupon?.id;
+        if (couponId) {
+          const coupon = await stripe.coupons.retrieve(couponId);
+          if (coupon.percent_off === 100 && coupon.duration === 'forever') {
+            is100PercentFreeForever = true;
+            console.log(`[Checkout] Detected 100% free forever promo code: ${promoCode}`);
+          }
         }
       } catch (promoErr) {
         console.error('Error validating promo code with Stripe:', promoErr);
