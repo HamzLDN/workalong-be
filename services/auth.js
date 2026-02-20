@@ -1,15 +1,20 @@
 import bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { pool } from '../lib/db.js';
+import { sanitizeString } from '../lib/sanitize.js';
 
 export async function createUser(email, password, name, company = null) {
   const passwordHash = await bcrypt.hash(password, 10);
+  
+  // Sanitize string inputs to remove null bytes
+  const sanitizedEmail = sanitizeString(email);
+  const sanitizedName = sanitizeString(name);
   
   const result = await pool.query(
     `INSERT INTO users (email, password_hash, name) 
      VALUES (LOWER($1), $2, $3) 
      RETURNING id, email, name, is_verified, subscription_status, subscription_plan, created_at`,
-    [email, passwordHash, name]
+    [sanitizedEmail, passwordHash, sanitizedName]
   );
   
   return result.rows[0];

@@ -1,4 +1,5 @@
 import { pool } from '../lib/db.js';
+import { sanitizeString } from '../lib/sanitize.js';
 import { hashPassword } from './auth.js';
 import crypto from 'crypto';
 import { sendStaffPasswordSetupEmail } from '../lib/email.js';
@@ -67,11 +68,16 @@ export async function createStaff(userId, data) {
     const tempPassword = crypto.randomBytes(32).toString('hex');
     const passwordHash = await hashPassword(tempPassword);
 
+    // Sanitize string inputs to remove null bytes
+    const sanitizedName = sanitizeString(name);
+    const sanitizedEmail = email ? sanitizeString(email) : email;
+    const sanitizedRole = role ? sanitizeString(role) : role;
+    
     const result = await client.query(
       `INSERT INTO staff (user_id, name, email, role, hourly_rate, employment_type, username, password_hash, password_set) 
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE) 
        RETURNING *`,
-      [userId, name, email, role, hourlyRate, employmentType || 'full-time', username, passwordHash]
+      [userId, sanitizedName, sanitizedEmail, sanitizedRole, hourlyRate, employmentType || 'full-time', username, passwordHash]
     );
     const staffId = result.rows[0].id;
     
@@ -243,6 +249,11 @@ export async function setPasswordWithToken(token, newPassword) {
 export async function updateStaff(staffId, userId, data) {
   const { name, email, role, hourlyRate, employmentType, status } = data;
   
+  // Sanitize string inputs to remove null bytes
+  const sanitizedName = name !== undefined ? (name ? sanitizeString(name) : name) : undefined;
+  const sanitizedEmail = email !== undefined ? (email ? sanitizeString(email) : email) : undefined;
+  const sanitizedRole = role !== undefined ? (role ? sanitizeString(role) : role) : undefined;
+  
   const result = await pool.query(
     `UPDATE staff 
      SET name = COALESCE($1, name),
@@ -253,7 +264,7 @@ export async function updateStaff(staffId, userId, data) {
          status = COALESCE($6, status)
      WHERE id = $7 AND user_id = $8
      RETURNING *`,
-    [name, email, role, hourlyRate, employmentType, status, staffId, userId]
+    [sanitizedName, sanitizedEmail, sanitizedRole, hourlyRate, employmentType, status, staffId, userId]
   );
   
   return result.rows[0];

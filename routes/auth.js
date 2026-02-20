@@ -2,6 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import { config } from '../lib/config.js';
 import { pool } from '../lib/db.js';
+import { sanitizeString } from '../lib/sanitize.js';
 import {
   createUser,
   findUserByEmail,
@@ -767,11 +768,13 @@ router.put('/profile', async (req, res) => {
     
     if (name !== undefined && name !== null) {
       updates.push(`name = $${paramCount++}`);
-      values.push(name.trim() || null);
+      const sanitizedName = sanitizeString(name);
+      values.push(sanitizedName || null);
     }
     if (email !== undefined && email !== null) {
       updates.push(`email = $${paramCount++}`);
-      values.push(email.trim());
+      const sanitizedEmail = sanitizeString(email);
+      values.push(sanitizedEmail);
       // If email changed, reset verification status
       updates.push(`is_verified = false`);
     }

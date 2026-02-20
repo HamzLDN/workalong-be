@@ -1,4 +1,5 @@
 import { pool } from '../lib/db.js';
+import { sanitizeString } from '../lib/sanitize.js';
 
 export function calculateEndTime(startTime, hours) {
   const [startHour, startMin] = startTime.split(':').map(Number);
@@ -268,6 +269,10 @@ export async function createShift(userId, data) {
   const shiftHours = parseFloat(hours) || 0;
   const calculatedEndTime = calculateEndTime(startTime, shiftHours);
   
+  // Sanitize string fields to remove null bytes
+  const sanitizedLocation = location ? sanitizeString(location) : location;
+  const sanitizedNotes = notes ? sanitizeString(notes) : notes;
+  
   const result = await pool.query(
     `INSERT INTO shifts (
       user_id, staff_id, shift_date, start_time, hours, 
@@ -284,8 +289,8 @@ export async function createShift(userId, data) {
       breakMinutes || 0,
       shiftType || 'regular',
       payType || 'regular',
-      location,
-      notes
+      sanitizedLocation,
+      sanitizedNotes
     ]
   );
   
@@ -352,11 +357,11 @@ export async function updateShift(shiftId, userId, data) {
   }
   if (location !== undefined) {
     updates.push(`location = $${paramCount++}`);
-    values.push(location);
+    values.push(location ? sanitizeString(location) : location);
   }
   if (notes !== undefined) {
     updates.push(`notes = $${paramCount++}`);
-    values.push(notes);
+    values.push(notes ? sanitizeString(notes) : notes);
   }
   if (clockedInTime !== undefined || clockedOutTime !== undefined) {
     updates.push(`clock_source = 'manager'`);
@@ -436,6 +441,10 @@ export async function createBulkShifts(userId, shifts) {
     for (const shift of shifts) {
       const shiftHours = parseFloat(shift.hours) || 0;
       
+      // Sanitize string fields to remove null bytes
+      const sanitizedLocation = shift.location ? sanitizeString(shift.location) : shift.location;
+      const sanitizedNotes = shift.notes ? sanitizeString(shift.notes) : shift.notes;
+      
       const result = await client.query(
         `INSERT INTO shifts (
           user_id, staff_id, shift_date, start_time, 
@@ -452,8 +461,8 @@ export async function createBulkShifts(userId, shifts) {
           shift.breakMinutes || 0,
           shift.shiftType || 'regular',
           shift.payType || 'regular',
-          shift.location,
-          shift.notes
+          sanitizedLocation,
+          sanitizedNotes
         ]
       );
       

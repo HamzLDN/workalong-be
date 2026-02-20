@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { config } from '../lib/config.js';
 import { pool } from '../lib/db.js';
 import { getSession } from '../services/auth.js';
+import { sanitizeString } from '../lib/sanitize.js';
 import {
   getShifts,
   getShiftById,
@@ -208,6 +209,7 @@ router.post('/shifts', requireAuth, async (req, res) => {
         conflictingShifts: conflicts
       });
     }
+    // Sanitize string inputs to remove null bytes
     const shift = await createShift(req.userId, {
       staffId,
       shiftDate: normalizedDate,
@@ -216,8 +218,8 @@ router.post('/shifts', requireAuth, async (req, res) => {
       breakMinutes,
       shiftType,
       payType,
-      location,
-      notes
+      location: location ? sanitizeString(location) : location,
+      notes: notes ? sanitizeString(notes) : notes
     });
     res.status(201).json({ message: 'Shift created successfully', shift });
   } catch (error) {
