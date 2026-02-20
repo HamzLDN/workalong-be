@@ -66,10 +66,11 @@ describe('Staff Functions', () => {
 
       const result = await getStaff(1);
 
-      expect(mockQueryFn).toHaveBeenCalledWith(
-        expect.stringContaining('SELECT * FROM staff'),
-        [1]
-      );
+      expect(mockQueryFn).toHaveBeenCalledTimes(1);
+      const [query] = mockQueryFn.mock.calls[0];
+      expect(query).toContain('FROM staff');
+      expect(query).toContain('WHERE user_id = $1');
+      expect(mockQueryFn.mock.calls[0][1]).toEqual([1]);
       expect(result.length).toBe(2);
     });
   });
