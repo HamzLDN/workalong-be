@@ -30,15 +30,49 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Setup SSH tunnel to server
+        run: |
+          echo "Setting up SSH tunnel to forward localhost:8081 from server..."
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          
+          # Start SSH tunnel in background (forward remote localhost:8081 to local localhost:8081)
+          ssh -f -N -L 8081:localhost:8081 \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -p ${{ secrets.SSH_PORT || 22 }} \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            -i ~/.ssh/deploy_key
+          
+          # Wait a moment for tunnel to establish
+          sleep 3
+          
+          # Verify tunnel is working
+          if ! curl -f http://localhost:8081/api/health > /dev/null 2>&1; then
+            echo "❌ ERROR: SSH tunnel failed - cannot reach server's localhost:8081"
+            echo "Make sure your server is running on localhost:8081"
+            exit 1
+          fi
+          echo "✅ SSH tunnel established successfully"
+
       - name: Run API endpoint tests
         run: |
-          echo "Running API endpoint tests against http://localhost:8081/api"
+          echo "Running API endpoint tests against http://localhost:8081/api (via SSH tunnel)"
           echo "All tests must pass before deployment..."
           node scripts/test-api-endpoints.js
         env:
           NODE_OPTIONS: '--experimental-vm-modules'
-          API_BASE_URL: ${{ secrets.TEST_API_BASE_URL || 'http://localhost:8081/api' }}
+          API_BASE_URL: http://localhost:8081/api
           SESSION_SECRET: ${{ secrets.SESSION_SECRET || 'test-secret-for-ci' }}
+        
+      - name: Cleanup SSH tunnel
+        if: always()
+        run: |
+          echo "Cleaning up SSH tunnel..."
+          pkill -f "ssh.*8081:localhost:8081" || true
+          rm -f ~/.ssh/deploy_key
 
   deploy:
     name: Deploy Backend to Server
