@@ -4,6 +4,12 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+// ANSI color codes
+const GREEN = '\x1b[32m';
+const RED = '\x1b[31m';
+const YELLOW = '\x1b[33m';
+const RESET = '\x1b[0m';
+
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8081/api';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-this-secret-key-in-production';
 
@@ -84,8 +90,8 @@ async function makeRequest(endpoint, options = {}) {
           // Always regenerate CSRF token when session changes
           csrfToken = generateCsrfToken(sessionId);
           if (oldSessionId) {
-            console.log(`  ⚠ Session ID changed from ${oldSessionId.substring(0, 20)}... to ${sessionId.substring(0, 20)}...`);
-            console.log(`  ✓ CSRF token regenerated for new session`);
+            console.log(`  ${YELLOW}WARNING:${RESET} Session ID changed from ${oldSessionId.substring(0, 20)}... to ${sessionId.substring(0, 20)}...`);
+            console.log(`  ${GREEN}PASS:${RESET} CSRF token regenerated for new session`);
           }
         }
       }
@@ -95,7 +101,7 @@ async function makeRequest(endpoint, options = {}) {
         const csrfMatch = setCookieHeader.match(/csrfToken=([^;]+)/);
         if (csrfMatch) {
           csrfToken = csrfMatch[1];
-          console.log(`  ✓ CSRF token received from server cookie`);
+          console.log(`  ${GREEN}PASS:${RESET} CSRF token received from server cookie`);
         }
       }
     }
@@ -346,7 +352,7 @@ async function testHealthCheck() {
     const result = await makeRequest('/health');
     console.log(`Status: ${result.status}`);
     if (result.error) {
-      console.error(`❌ Error: ${result.error}`);
+      console.error(`${RED}ERROR:${RESET} ${result.error}`);
       console.error(`  This usually means the server is not accessible at ${API_BASE_URL}`);
       console.error(`  Check if the server is running and accessible`);
     }
@@ -355,7 +361,7 @@ async function testHealthCheck() {
     }
     return result.ok;
   } catch (error) {
-    console.error(`❌ Health check failed with exception:`, error.message);
+    console.error(`${RED}ERROR:${RESET} Health check failed with exception:`, error.message);
     return false;
   }
 }
@@ -379,7 +385,7 @@ async function testSignup() {
   
   if (result.ok && result.data?.user) {
     userId = result.data.user.id;
-    console.log(`✓ Signup successful. User ID: ${userId}`);
+    console.log(`${GREEN}PASS:${RESET} Signup successful. User ID: ${userId}`);
     if (sessionId) {
       console.log(`  Session ID: ${sessionId.substring(0, 20)}...`);
     }
@@ -390,7 +396,7 @@ async function testSignup() {
 
 async function testSignupObfuscated() {
   console.log('\n=== Testing Signup (Obfuscated) ===');
-  console.log('⚠ Note: Signup/signin endpoints typically do not use obfuscation as they create sessions');
+  console.log(`${YELLOW}NOTE:${RESET} Signup/signin endpoints typically do not use obfuscation as they create sessions`);
   const email = `test-obf-${Date.now()}@example.com`;
   const password = 'TestPassword123!';
   
@@ -405,7 +411,7 @@ async function testSignupObfuscated() {
   });
   
   if (signupResult.ok && signupResult.data?.user) {
-    console.log(`✓ Signup successful. User ID: ${signupResult.data.user.id}`);
+    console.log(`${GREEN}PASS:${RESET} Signup successful. User ID: ${signupResult.data.user.id}`);
     if (sessionId) {
       console.log(`  Session ID: ${sessionId.substring(0, 20)}...`);
     }
@@ -432,7 +438,7 @@ async function testSignin() {
   
   if (result.ok && result.data?.user) {
     userId = result.data.user.id;
-    console.log(`✓ Signin successful. User ID: ${userId}`);
+    console.log(`${GREEN}PASS:${RESET} Signin successful. User ID: ${userId}`);
     if (sessionId) {
       console.log(`  Session ID: ${sessionId.substring(0, 20)}...`);
     }
@@ -443,7 +449,7 @@ async function testSignin() {
 
 async function testSigninObfuscated() {
   console.log('\n=== Testing Signin (Obfuscated) ===');
-  console.log('⚠ Note: Signin endpoints typically do not use obfuscation as they create sessions');
+  console.log(`${YELLOW}NOTE:${RESET} Signin endpoints typically do not use obfuscation as they create sessions`);
   // First signin without obfuscation to get a session
   const signinResult = await makeRequest('/auth/signin', {
     method: 'POST',
@@ -455,7 +461,7 @@ async function testSigninObfuscated() {
   
   if (signinResult.ok && signinResult.data?.user) {
     userId = signinResult.data.user.id;
-    console.log(`✓ Signin successful. User ID: ${userId}`);
+    console.log(`${GREEN}PASS:${RESET} Signin successful. User ID: ${userId}`);
     if (sessionId) {
       console.log(`  Session ID: ${sessionId.substring(0, 20)}...`);
     }
@@ -468,9 +474,9 @@ async function testSigninObfuscated() {
 }
 
 async function testGetProfile() {
-  console.log('\n=== Testing Update Profile (Authenticated) ===');
+  console.log('\n=== Testing Update Profile (Obfuscated) ===');
   if (!sessionId) {
-    console.log('⚠ No session available');
+    console.log(`${YELLOW}WARNING:${RESET} No session available`);
     return false;
   }
   const result = await makeObfuscatedRequest('/auth/profile', {
@@ -485,7 +491,7 @@ async function testGetProfile() {
 async function testGetProfileObfuscated() {
   console.log('\n=== Testing Get Profile (Obfuscated, Authenticated) ===');
   if (!sessionId) {
-    console.log('⚠ No session available, skipping obfuscated request');
+    console.log(`${YELLOW}WARNING:${RESET} No session available, skipping obfuscated request`);
     return false;
   }
   const result = await makeObfuscatedRequest('/auth/profile', { name: 'Test User Obfuscated' }, 'PUT');
@@ -496,7 +502,7 @@ async function testGetProfileObfuscated() {
 }
 
 async function testGetShifts() {
-  console.log('\n=== Testing Get Shifts (Authenticated) ===');
+  console.log('\n=== Testing Get Shifts (Non-Obfuscated) ===');
   const result = await makeRequest('/shifts');
   
   console.log(`Status: ${result.status}`);
@@ -509,7 +515,7 @@ async function testGetShifts() {
 async function testGetShiftsObfuscated() {
   console.log('\n=== Testing Get Shifts (Obfuscated, Authenticated) ===');
   if (!sessionId) {
-    console.log('⚠ No session available, skipping obfuscated request');
+    console.log(`${YELLOW}WARNING:${RESET} No session available, skipping obfuscated request`);
     return false;
   }
   try {
@@ -532,7 +538,7 @@ async function testGetShiftsObfuscated() {
 async function createTestStaff() {
   console.log('\n=== Creating Test Staff Member ===');
   if (!sessionId) {
-    console.log('⚠ No session available for obfuscated request');
+    console.log(`${YELLOW}WARNING:${RESET} No session available for obfuscated request`);
     return null;
   }
   const result = await makeObfuscatedRequest('/staff', {
@@ -544,15 +550,15 @@ async function createTestStaff() {
   }, 'POST');
   
   if (result.ok && result.data?.staff) {
-    console.log(`✓ Staff created: ${result.data.staff.name} (ID: ${result.data.staff.id})`);
+    console.log(`${GREEN}PASS:${RESET} Staff created: ${result.data.staff.name} (ID: ${result.data.staff.id})`);
     return result.data.staff.id;
   }
-  console.log(`⚠ Could not create staff: ${result.status} - ${JSON.stringify(result.data)}`);
+  console.log(`${YELLOW}WARNING:${RESET} Could not create staff: ${result.status} - ${JSON.stringify(result.data)}`);
   return null;
 }
 
 async function testCreateShift() {
-  console.log('\n=== Testing Create Shift (Authenticated) ===');
+  console.log('\n=== Testing Create Shift (Obfuscated, Authenticated) ===');
   
   // First, try to create a staff member if we don't have one
   let localStaffId = staffId;
@@ -569,7 +575,7 @@ async function testCreateShift() {
   }
   
   if (!localStaffId) {
-    console.log('⚠ No staff member available, skipping shift creation test');
+    console.log(`${YELLOW}WARNING:${RESET} No staff member available, skipping shift creation test`);
     return true; // Not a failure, just skip
   }
   
@@ -593,7 +599,7 @@ async function testCreateShift() {
 async function testCreateShiftObfuscated() {
   console.log('\n=== Testing Create Shift (Obfuscated, Authenticated) ===');
   if (!sessionId) {
-    console.log('⚠ No session available, skipping obfuscated request');
+    console.log(`${YELLOW}WARNING:${RESET} No session available, skipping obfuscated request`);
     return false;
   }
   
@@ -608,7 +614,7 @@ async function testCreateShiftObfuscated() {
   }
   
   if (!staffId) {
-    console.log('⚠ No staff member available, skipping obfuscated shift creation test');
+    console.log(`${YELLOW}WARNING:${RESET} No staff member available, skipping obfuscated shift creation test`);
     return true; // Not a failure, just skip
   }
   
@@ -629,7 +635,7 @@ async function testCreateShiftObfuscated() {
 }
 
 async function testGetStaff() {
-  console.log('\n=== Testing Get Staff (Authenticated) ===');
+  console.log('\n=== Testing Get Staff (Non-Obfuscated) ===');
   const result = await makeRequest('/staff');
   
   console.log(`Status: ${result.status}`);
@@ -642,7 +648,7 @@ async function testGetStaff() {
 async function testGetStaffObfuscated() {
   console.log('\n=== Testing Get Staff (Obfuscated, Authenticated) ===');
   if (!sessionId) {
-    console.log('⚠ No session available, skipping obfuscated request');
+    console.log(`${YELLOW}WARNING:${RESET} No session available, skipping obfuscated request`);
     return false;
   }
   try {
@@ -751,30 +757,30 @@ async function testGetStaffStats() {
 async function testGetStaffById() {
   console.log('\n=== Testing Get Staff By ID ===');
   if (!sessionId) {
-    console.log('  ❌ No session available');
+    console.log(`  ${RED}ERROR:${RESET} No session available`);
     return false;
   }
   if (!staffId) {
-    console.log('  ❌ No staff ID available');
+    console.log(`  ${RED}ERROR:${RESET} No staff ID available`);
     return false;
   }
   const result = await makeRequest(`/staff/${staffId}`);
   console.log(`Status: ${result.status}`);
   if (!result.ok) {
-    console.log(`  ❌ Error: ${result.data?.error || result.error || 'Unknown error'}`);
+    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
     console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
   }
   return result.ok && result.status === 200;
 }
 
 async function testUpdateStaff() {
-  console.log('\n=== Testing Update Staff ===');
+  console.log('\n=== Testing Update Staff (Obfuscated) ===');
   if (!sessionId) {
-    console.log('  ❌ No session available');
+    console.log(`  ${RED}ERROR:${RESET} No session available`);
     return false;
   }
   if (!staffId) {
-    console.log('  ❌ No staff ID available');
+    console.log(`  ${RED}ERROR:${RESET} No staff ID available`);
     return false;
   }
   const result = await makeObfuscatedRequest(`/staff/${staffId}`, {
@@ -783,7 +789,7 @@ async function testUpdateStaff() {
   }, 'PUT');
   console.log(`Status: ${result.status}`);
   if (!result.ok) {
-    console.log(`  ❌ Error: ${result.data?.error || result.error || 'Unknown error'}`);
+    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
     console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
   }
   return result.ok && result.status === 200;
@@ -810,7 +816,7 @@ async function testGetShiftById() {
 }
 
 async function testUpdateShift() {
-  console.log('\n=== Testing Update Shift ===');
+  console.log('\n=== Testing Update Shift (Obfuscated) ===');
   if (!sessionId || !createdShiftId) return false;
   const result = await makeObfuscatedRequest(`/shifts/${createdShiftId}`, {
     startTime: '11:00',
@@ -821,23 +827,23 @@ async function testUpdateShift() {
 }
 
 async function testApproveShift() {
-  console.log('\n=== Testing Approve Shift ===');
+  console.log('\n=== Testing Approve Shift (Obfuscated) ===');
   if (!sessionId) {
-    console.log('  ❌ No session available');
+    console.log(`  ${RED}ERROR:${RESET} No session available`);
     return false;
   }
   if (!createdShiftId) {
-    console.log('  ❌ No shift ID available (createdShiftId: ' + createdShiftId + ')');
+    console.log(`  ${RED}ERROR:${RESET} No shift ID available (createdShiftId: ${createdShiftId})`);
     return false;
   }
   // For POST with empty body, pass null to ensure empty string is used for signature
   const result = await makeObfuscatedRequest(`/shifts/${createdShiftId}/approve`, null, 'POST');
   console.log(`Status: ${result.status}`);
   if (!result.ok) {
-    console.log(`  ❌ Error: ${result.data?.error || result.error || 'Unknown error'}`);
+    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
     console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
     if (result.data?.error === 'Invalid request signature') {
-      console.log(`  ⚠ Signature mismatch - checking empty body handling`);
+      console.log(`  ${YELLOW}WARNING:${RESET} Signature mismatch - checking empty body handling`);
     }
   }
   return result.ok && result.status === 200;
@@ -883,13 +889,13 @@ async function testGetMonthlyEarnings() {
 }
 
 async function testCreateTimeEntry() {
-  console.log('\n=== Testing Create Time Entry ===');
+  console.log('\n=== Testing Create Time Entry (Obfuscated) ===');
   if (!sessionId) {
-    console.log('  ❌ No session available');
+    console.log(`  ${RED}ERROR:${RESET} No session available`);
     return false;
   }
   if (!staffId) {
-    console.log('  ❌ No staff ID available');
+    console.log(`  ${RED}ERROR:${RESET} No staff ID available`);
     return false;
   }
   const today = new Date().toISOString().split('T')[0];
@@ -901,7 +907,7 @@ async function testCreateTimeEntry() {
   }, 'POST');
   console.log(`Status: ${result.status}`);
   if (!result.ok) {
-    console.log(`  ❌ Error: ${result.data?.error || result.error || 'Unknown error'}`);
+    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
     console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
   }
   return result.ok && result.status === 201;
@@ -914,22 +920,22 @@ async function testCreateTimeEntry() {
 async function testGetPaymentSchedule() {
   console.log('\n=== Testing Get Payment Schedule ===');
   if (!sessionId) {
-    console.log('  ❌ No session available');
+    console.log(`  ${RED}ERROR:${RESET} No session available`);
     return false;
   }
   const result = await makeRequest('/payments/schedule');
   console.log(`Status: ${result.status}`);
   if (!result.ok) {
-    console.log(`  ❌ Error: ${result.data?.error || result.error || 'Unknown error'}`);
+    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
     console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
   }
   return result.ok && result.status === 200;
 }
 
 async function testCreatePaymentSchedule() {
-  console.log('\n=== Testing Create Payment Schedule ===');
+  console.log('\n=== Testing Create Payment Schedule (Obfuscated) ===');
   if (!sessionId) {
-    console.log('  ❌ No session available');
+    console.log(`  ${RED}ERROR:${RESET} No session available`);
     return false;
   }
   const result = await makeObfuscatedRequest('/payments/schedule', {
@@ -938,7 +944,7 @@ async function testCreatePaymentSchedule() {
   }, 'POST');
   console.log(`Status: ${result.status}`);
   if (!result.ok) {
-    console.log(`  ❌ Error: ${result.data?.error || result.error || 'Unknown error'}`);
+    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
     console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
   }
   return result.ok && (result.status === 200 || result.status === 201);
@@ -947,13 +953,13 @@ async function testCreatePaymentSchedule() {
 async function testGetPaymentHistory() {
   console.log('\n=== Testing Get Payment History ===');
   if (!sessionId) {
-    console.log('  ❌ No session available');
+    console.log(`  ${RED}ERROR:${RESET} No session available`);
     return false;
   }
   const result = await makeRequest('/payments/history');
   console.log(`Status: ${result.status}`);
   if (!result.ok) {
-    console.log(`  ❌ Error: ${result.data?.error || result.error || 'Unknown error'}`);
+    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
     console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
   }
   return result.ok && result.status === 200;
@@ -962,13 +968,13 @@ async function testGetPaymentHistory() {
 async function testGetPaymentStats() {
   console.log('\n=== Testing Get Payment Stats ===');
   if (!sessionId) {
-    console.log('  ❌ No session available');
+    console.log(`  ${RED}ERROR:${RESET} No session available`);
     return false;
   }
   const result = await makeRequest('/payments/stats');
   console.log(`Status: ${result.status}`);
   if (!result.ok) {
-    console.log(`  ❌ Error: ${result.data?.error || result.error || 'Unknown error'}`);
+    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
     console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
   }
   return result.ok && result.status === 200;
@@ -987,7 +993,7 @@ async function testGetLocation() {
 }
 
 async function testUpdateLocation() {
-  console.log('\n=== Testing Update Location ===');
+  console.log('\n=== Testing Update Location (Obfuscated) ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/location', {
     latitude: 51.5074,
@@ -1008,7 +1014,7 @@ async function testGetLocations() {
 }
 
 async function testCreateLocation() {
-  console.log('\n=== Testing Create Location ===');
+  console.log('\n=== Testing Create Location (Obfuscated) ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/locations', {
     name: 'Test Location',
@@ -1045,7 +1051,7 @@ async function testGetActiveBudget() {
 }
 
 async function testCreateBudget() {
-  console.log('\n=== Testing Create Budget ===');
+  console.log('\n=== Testing Create Budget (Obfuscated) ===');
   if (!sessionId) return false;
   const today = new Date();
   const startDate = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
@@ -1126,7 +1132,7 @@ async function testGetApiKeys() {
 }
 
 async function testCreateApiKey() {
-  console.log('\n=== Testing Create API Key ===');
+  console.log('\n=== Testing Create API Key (Obfuscated) ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/security/api-keys', {
     keyName: `test-key-${Date.now()}`
@@ -1159,9 +1165,9 @@ async function testGetAuditLogs() {
 // ============================================
 
 async function testGenerateClockinLink() {
-  console.log('\n=== Testing Generate Clock-in Link ===');
+  console.log('\n=== Testing Generate Clock-in Link (Obfuscated) ===');
   if (!sessionId) {
-    console.log('  ❌ No session available');
+    console.log(`  ${RED}ERROR:${RESET} No session available`);
     return false;
   }
   const result = await makeObfuscatedRequest('/clockin/generate-link', {
@@ -1169,7 +1175,7 @@ async function testGenerateClockinLink() {
   }, 'POST');
   console.log(`Status: ${result.status}`);
   if (!result.ok) {
-    console.log(`  ❌ Error: ${result.data?.error || result.error || 'Unknown error'}`);
+    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
     console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
   }
   if (result.ok && result.data?.link) {
@@ -1200,13 +1206,13 @@ async function testGetPaymentConfig() {
 async function testGetSubscriptionDetails() {
   console.log('\n=== Testing Get Subscription Details ===');
   if (!sessionId) {
-    console.log('  ❌ No session available');
+    console.log(`  ${RED}ERROR:${RESET} No session available`);
     return false;
   }
   const result = await makeRequest('/payment/subscription-details');
   console.log(`Status: ${result.status}`);
   if (!result.ok) {
-    console.log(`  ❌ Error: ${result.data?.error || result.error || 'Unknown error'}`);
+    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
     console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
   }
   return result.ok && result.status === 200;
@@ -1215,13 +1221,13 @@ async function testGetSubscriptionDetails() {
 async function testGetReferenceNumbers() {
   console.log('\n=== Testing Get Reference Numbers ===');
   if (!sessionId) {
-    console.log('  ❌ No session available');
+    console.log(`  ${RED}ERROR:${RESET} No session available`);
     return false;
   }
   const result = await makeRequest('/payment/reference-numbers');
   console.log(`Status: ${result.status}`);
   if (!result.ok) {
-    console.log(`  ❌ Error: ${result.data?.error || result.error || 'Unknown error'}`);
+    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
     console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
   }
   return result.ok && result.status === 200;
@@ -1244,7 +1250,7 @@ async function runAllTests() {
   try {
     const testResult = await makeRequest('/health');
     if (!testResult.ok && testResult.status === 0) {
-      console.error(`\n❌ CRITICAL: Cannot connect to ${API_BASE_URL}`);
+      console.error(`\n${RED}CRITICAL:${RESET} Cannot connect to ${API_BASE_URL}`);
       console.error(`   Error: ${testResult.error || 'Connection failed'}`);
       console.error(`   Error code: ${testResult.errorCode || 'unknown'}`);
       console.error(`\n   Please ensure:`);
@@ -1253,9 +1259,9 @@ async function runAllTests() {
       console.error(`   3. No firewall is blocking the connection\n`);
       return false;
     }
-    console.log(`✓ Server is reachable (Status: ${testResult.status})\n`);
+    console.log(`${GREEN}PASS:${RESET} Server is reachable (Status: ${testResult.status})\n`);
   } catch (error) {
-    console.error(`\n❌ CRITICAL: Failed to test connectivity:`, error.message);
+    console.error(`\n${RED}CRITICAL:${RESET} Failed to test connectivity:`, error.message);
     console.error(`   Stack: ${error.stack?.split('\n').slice(0, 3).join('\n')}`);
     return false;
   }
@@ -1287,13 +1293,13 @@ async function runAllTests() {
     console.log(`  CSRF Token generated from session: ${csrfToken.substring(0, 20)}...`);
     console.log(`  Session ID: ${sessionId.substring(0, 30)}...`);
   } else {
-    console.log('  ⚠ Warning: No session ID after signup');
+    console.log(`  ${YELLOW}WARNING:${RESET} No session ID after signup`);
   }
 
   // Skip the obfuscated signup test - it creates a new session which breaks CSRF
   // Instead, just verify we have a session
   if (!sessionId) {
-    console.log('  ⚠ No session available, attempting signin...');
+    console.log(`  ${YELLOW}WARNING:${RESET} No session available, attempting signin...`);
     const signinOk = await testSignin();
     if (signinOk && sessionId) {
       csrfToken = generateCsrfToken(sessionId);
@@ -1302,10 +1308,10 @@ async function runAllTests() {
   }
 
   if (!sessionId) {
-    console.log('\n⚠ No session available, skipping authenticated endpoint tests');
+    console.log(`\n${YELLOW}WARNING:${RESET} No session available, skipping authenticated endpoint tests`);
   } else if (!csrfToken) {
     csrfToken = generateCsrfToken(sessionId);
-    console.log(`\n✓ Generated CSRF token for session: ${sessionId.substring(0, 20)}...`);
+    console.log(`\n${GREEN}PASS:${RESET} Generated CSRF token for session: ${sessionId.substring(0, 20)}...`);
   }
 
   // If we have a session, test authenticated endpoints
@@ -1549,7 +1555,7 @@ async function runAllTests() {
     // results.tests.push({ name: 'Get Reference Numbers', passed: referenceNumbersOk });
     // if (referenceNumbersOk) results.passed++; else results.failed++;
   } else {
-    console.log('\n⚠ No session available, skipping authenticated endpoint tests');
+    console.log(`\n${YELLOW}WARNING:${RESET} No session available, skipping authenticated endpoint tests`);
   }
 
   // Summary
@@ -1558,7 +1564,7 @@ async function runAllTests() {
   console.log('========================================');
   const failedTests = [];
   results.tests.forEach((test) => {
-    const status = test.passed ? '✓' : '✗';
+    const status = test.passed ? `${GREEN}PASS${RESET}` : `${RED}FAIL${RESET}`;
     console.log(`${status} ${test.name}`);
     if (!test.passed) {
       failedTests.push(test.name);
@@ -1573,7 +1579,7 @@ async function runAllTests() {
     console.log('Failed Tests Summary:');
     console.log('========================================');
     failedTests.forEach((name) => {
-      console.log(`  ✗ ${name}`);
+      console.log(`  ${RED}FAIL:${RESET} ${name}`);
     });
   }
   console.log('========================================\n');
@@ -1585,16 +1591,16 @@ async function runAllTests() {
 runAllTests()
   .then((allPassed) => {
     if (!allPassed) {
-      console.error('\n❌ Some tests failed. Exiting with error code.');
+      console.error(`\n${RED}ERROR:${RESET} Some tests failed. Exiting with error code.`);
       console.error('This will prevent deployment from proceeding.');
       process.exit(1);
     } else {
-      console.log('✅ All tests passed!');
+      console.log(`${GREEN}SUCCESS:${RESET} All tests passed!`);
       process.exit(0);
     }
   })
   .catch((error) => {
-    console.error('\n❌ Test suite crashed with error:');
+    console.error(`\n${RED}ERROR:${RESET} Test suite crashed with error:`);
     console.error('Error message:', error.message);
     console.error('Error stack:', error.stack);
     console.error('\nThis will prevent deployment from proceeding.');

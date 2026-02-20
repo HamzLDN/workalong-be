@@ -428,72 +428,58 @@ export function obfuscateResponse(req, res, next) {
 
 export async function requireSubscription(req, res, next) {
   try {
+    if (!req.userId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
     const subscriptionPlan = req.headers['x-subscription-plan'];
     const subscriptionVerified = req.headers['x-subscription-verified'] === 'true';
 
-    if (subscriptionPlan && subscriptionPlan !== 'free') {
-      if (!req.userId) {
-        return res.status(401).json({ error: 'Authentication required' });
-      }
+    // Always check database for authenticated users
+    const result = await pool.query(
+      `SELECT subscription_plan, subscription_status 
+       FROM users 
+       WHERE id = $1`,
+      [req.userId]
+    );
 
-      const result = await pool.query(
-        `SELECT subscription_plan, subscription_status 
-         FROM users 
-         WHERE id = $1`,
-        [req.userId]
-      );
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'User not found' });
+    }
 
-      if (result.rows.length === 0) {
-        return res.status(401).json({ error: 'User not found' });
-      }
+    const user = result.rows[0];
+    const userPlan = user.subscription_plan || 'free';
+    const status = user.subscription_status || 'inactive';
 
-      const user = result.rows[0];
-      const userPlan = user.subscription_plan || 'free';
-      const status = user.subscription_status || 'inactive';
-
-      if (userPlan === 'free' || status !== 'active') {
-        await logSecurityEvent('subscription_required', {
-          userId: req.userId,
-          ipAddress: req.ip,
-          endpoint: req.path,
-          requestMethod: req.method,
-          details: { userPlan, status },
-          severity: 'info'
-        });
-        return res.status(403).json({ 
-          error: 'Premium subscription required',
-          currentPlan: userPlan,
-          requiredPlan: 'professional'
-        });
-      }
-
-      if (subscriptionPlan && subscriptionPlan !== userPlan) {
-        await logSecurityEvent('subscription_header_mismatch', {
-          userId: req.userId,
-          ipAddress: req.ip,
-          endpoint: req.path,
-          requestMethod: req.method,
-          details: { headerPlan: subscriptionPlan, dbPlan: userPlan },
-          severity: 'warning'
-        });
-      }
-
-      req.subscriptionPlan = userPlan;
-      next();
-    } else {
+    if (userPlan === 'free' || status !== 'active') {
       await logSecurityEvent('subscription_required', {
-        userId: req.userId || null,
+        userId: req.userId,
         ipAddress: req.ip,
         endpoint: req.path,
         requestMethod: req.method,
+        details: { userPlan, status },
         severity: 'info'
       });
       return res.status(403).json({ 
         error: 'Premium subscription required',
-        currentPlan: subscriptionPlan || 'free',
+        currentPlan: userPlan,
         requiredPlan: 'professional'
       });
     }
+
+    if (subscriptionPlan && subscriptionPlan !== userPlan) {
+      await logSecurityEvent('subscription_header_mismatch', {
+        userId: req.userId,
+        ipAddress: req.ip,
+        endpoint: req.path,
+        requestMethod: req.method,
+        details: { headerPlan: subscriptionPlan, dbPlan: userPlan },
+        severity: 'warning'
+      });
+    }
+
+    req.subscriptionPlan = userPlan;
+    next();
   } catch (error) {
     console.error('Subscription check error:', error);
     res.status(500).json({ error: 'Subscription verification failed' });

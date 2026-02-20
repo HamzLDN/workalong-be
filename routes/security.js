@@ -12,6 +12,7 @@ import {
 } from '../lib/api-security.js';
 import { createRateLimiter } from '../middleware/security.js';
 import { requireAuth } from '../middleware/auth.js';
+import { requireSubscription } from '../middleware/obfuscation.js';
 
 const router = express.Router();
 
@@ -160,7 +161,7 @@ router.get('/ip-whitelist', requireAuth, async (req, res) => {
   }
 });
 
-router.get('/audit-logs', requireAuth, async (req, res) => {
+router.get('/audit-logs', requireAuth, requireSubscription, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
     const logs = await getSecurityAuditLogs(req.userId, limit);
