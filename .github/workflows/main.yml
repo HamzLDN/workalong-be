@@ -40,15 +40,54 @@ jobs:
           fi
           echo "✅ Backend server is accessible"
 
+      - name: Load environment variables from .env
+        run: |
+          echo "Loading SESSION_SECRET from .env file..."
+          # Check if .env exists in the checked-out repo or in the server's workalong-backend directory
+          ENV_FILE=".env"
+          if [ ! -f "$ENV_FILE" ]; then
+            # Try the server's actual backend directory
+            if [ -f "/root/workalong-backend/.env" ]; then
+              ENV_FILE="/root/workalong-backend/.env"
+              echo "Using .env from /root/workalong-backend/.env"
+            else
+              echo "⚠ WARNING: .env file not found in current directory or /root/workalong-backend/"
+              echo "⚠ This may cause CSRF token mismatches if SESSION_SECRET differs"
+            fi
+          fi
+          
+          if [ -f "$ENV_FILE" ]; then
+            # Extract SESSION_SECRET, handling quoted and unquoted values
+            SESSION_SECRET=$(grep "^SESSION_SECRET=" "$ENV_FILE" | cut -d '=' -f2- | sed 's/^["'\'']//; s/["'\'']$//' | tr -d ' ' || echo "")
+            if [ -z "$SESSION_SECRET" ]; then
+              echo "⚠ WARNING: SESSION_SECRET not found or empty in .env, using fallback"
+              SESSION_SECRET="change-this-secret-key-in-production"
+            else
+              echo "✓ SESSION_SECRET loaded from $ENV_FILE (length: ${#SESSION_SECRET})"
+            fi
+          else
+            echo "⚠ WARNING: .env file not found, using fallback SESSION_SECRET"
+            SESSION_SECRET="change-this-secret-key-in-production"
+          fi
+          echo "SESSION_SECRET=$SESSION_SECRET" >> $GITHUB_ENV
+          echo "SESSION_SECRET_FILE=$ENV_FILE" >> $GITHUB_ENV
+
       - name: Run API endpoint tests
         run: |
           echo "Running API endpoint tests against http://localhost:8081/api"
           echo "All tests must pass before deployment..."
+          echo "Using SESSION_SECRET from ${{ env.SESSION_SECRET_FILE || '.env' }} (same as backend server)"
+          echo "SESSION_SECRET length: ${#SESSION_SECRET}"
+          # Ensure the test script can find the .env file
+          if [ -f "/root/workalong-backend/.env" ] && [ ! -f ".env" ]; then
+            echo "Copying .env from /root/workalong-backend/ to current directory for test script"
+            cp /root/workalong-backend/.env .env || echo "Failed to copy .env"
+          fi
           node scripts/test-api-endpoints.js
         env:
           NODE_OPTIONS: '--experimental-vm-modules'
           API_BASE_URL: http://localhost:8081/api
-          SESSION_SECRET: ${{ secrets.SESSION_SECRET || 'test-secret-for-ci' }}
+          SESSION_SECRET: ${{ env.SESSION_SECRET }}
 
   deploy:
     name: Deploy Backend to Server
