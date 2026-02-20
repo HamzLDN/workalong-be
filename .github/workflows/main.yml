@@ -35,6 +35,9 @@ jobs:
           echo "Starting backend server in dev mode..."
           echo "Current directory: $(pwd)"
           echo "Working directory: ${{ github.workspace }}"
+          # Set a dummy Stripe test key for dev mode to prevent initialization errors
+          # Payment endpoints will fail gracefully with API errors
+          export STRIPE_SECRET_KEY="${STRIPE_SECRET_KEY:-sk_test_00000000000000000000000000000000000000000000000000}"
           NODE_ENV=dev npm run dev > /tmp/backend.log 2>&1 &
           SERVER_PID=$!
           echo $SERVER_PID > /tmp/backend.pid
@@ -49,6 +52,8 @@ jobs:
             cat /tmp/backend.log
             exit 1
           fi
+        env:
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY || 'sk_test_00000000000000000000000000000000000000000000000000' }}
 
       - name: Wait for backend server to be ready
         run: |

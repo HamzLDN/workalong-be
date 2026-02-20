@@ -4,10 +4,21 @@ import { pool } from '../lib/db.js';
 
 // Initialize Stripe with your secret key
 const stripeSecretKey = config.stripe?.secretKey || process.env.STRIPE_SECRET_KEY;
+let stripe;
+
 if (!stripeSecretKey || !String(stripeSecretKey).startsWith('sk_')) {
   console.warn('Stripe secret key missing or invalid; payment endpoints will fail.');
+  // Use a properly formatted dummy test key to prevent Stripe initialization errors
+  // Stripe test keys must match the format: sk_test_[at least 32 chars]
+  // This allows the server to start but payment endpoints will fail gracefully with API errors
+  const dummyKey = 'sk_test_51AbCdEfGhIjKlMnOpQrStUvWxYz1234567890AbCdEfGhIjKlMnOpQrStUvWxYz';
+  console.warn('Using dummy Stripe key - payment endpoints will fail with API errors');
+  stripe = new Stripe(dummyKey);
+} else {
+  stripe = new Stripe(stripeSecretKey);
 }
-const stripe = new Stripe(stripeSecretKey);
+
+export { stripe };
 
 // Stripe Price IDs (created automatically)
 const STRIPE_PRICE_IDS = {
