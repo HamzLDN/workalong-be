@@ -30,6 +30,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Run Jest unit tests
+        run: |
+          echo "=========================================="
+          echo "Running Jest unit tests"
+          echo "=========================================="
+          npm test
+          if [ $? -ne 0 ]; then
+            echo "❌ Jest unit tests FAILED"
+            exit 1
+          fi
+          echo "✅ Jest unit tests PASSED"
+
       - name: Setup environment file for server
         run: |
           echo "Setting up .env file for backend server..."
@@ -172,10 +184,13 @@ jobs:
 
       - name: Run API endpoint tests
         run: |
-          echo "Running API endpoint tests against http://localhost:8081/api"
-          echo "All tests must pass before deployment..."
+          echo "=========================================="
+          echo "Running API endpoint tests"
+          echo "=========================================="
+          echo "Testing against http://localhost:8081/api"
           echo "Using SESSION_SECRET from ${{ env.SESSION_SECRET_FILE || '.env' }} (same as backend server)"
           echo "SESSION_SECRET length: ${#SESSION_SECRET}"
+          
           # Ensure the test script can find the .env file
           if [ -f "/root/workalong-backend/.env" ] && [ ! -f ".env" ]; then
             echo "Copying .env from /root/workalong-backend/ to current directory for test script"
@@ -196,17 +211,64 @@ jobs:
             fi
           fi
           
-          node scripts/test-api-endpoints.js || TEST_EXIT_CODE=$?
-          
-          # If tests failed, show server logs
-          if [ "${TEST_EXIT_CODE:-0}" -ne 0 ]; then
+          # Run API endpoint tests
+          if node scripts/test-api-endpoints.js; then
+            echo "✅ API endpoint tests PASSED"
+          else
+            TEST_EXIT_CODE=$?
             echo "=========================================="
-            echo "Tests failed. Showing server logs:"
+            echo "❌ API endpoint tests FAILED (exit code: ${TEST_EXIT_CODE})"
+            echo "Showing server logs:"
             echo "=========================================="
             cat /tmp/backend.log || echo "No logs available"
             echo "=========================================="
             exit $TEST_EXIT_CODE
           fi
+
+      - name: Run security tests
+        run: |
+          echo "=========================================="
+          echo "Running security tests"
+          echo "=========================================="
+          echo "Testing against http://localhost:8081/api"
+          echo "Using SESSION_SECRET from ${{ env.SESSION_SECRET_FILE || '.env' }} (same as backend server)"
+          echo "SESSION_SECRET length: ${#SESSION_SECRET}"
+          
+          # Ensure the test script can find the .env file
+          if [ -f "/root/workalong-backend/.env" ] && [ ! -f ".env" ]; then
+            echo "Copying .env from /root/workalong-backend/ to current directory for test script"
+            cp /root/workalong-backend/.env .env || echo "Failed to copy .env"
+          fi
+          
+          # Check server status before running tests
+          echo "Checking server status before tests..."
+          if [ -f /tmp/backend.pid ]; then
+            PID=$(cat /tmp/backend.pid)
+            if ps -p $PID > /dev/null 2>&1; then
+              echo "✅ Server is running (PID: $PID)"
+            else
+              echo "❌ Server is not running!"
+              echo "Server logs:"
+              cat /tmp/backend.log || echo "No logs available"
+              exit 1
+            fi
+          fi
+          
+          # Run security tests
+          if node scripts/test-security.js; then
+            echo "✅ Security tests PASSED"
+          else
+            SECURITY_TEST_EXIT_CODE=$?
+            echo "=========================================="
+            echo "❌ Security tests FAILED (exit code: ${SECURITY_TEST_EXIT_CODE})"
+            echo "Showing server logs:"
+            echo "=========================================="
+            cat /tmp/backend.log || echo "No logs available"
+            echo "=========================================="
+            exit $SECURITY_TEST_EXIT_CODE
+          fi
+          
+          echo "✅ All tests passed. Proceeding with deployment."
         env:
           NODE_OPTIONS: '--experimental-vm-modules'
           API_BASE_URL: http://localhost:8081/api
@@ -232,7 +294,7 @@ jobs:
   deploy:
     name: Deploy Backend to Server
     needs: test
-    runs-on: self-hosted  # Also runs on your server for deployment
+    runs-on: self-hosted
     if: github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.test.result == 'success'
     
     steps:

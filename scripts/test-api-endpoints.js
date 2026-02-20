@@ -1,6 +1,7 @@
 import fetch from 'node-fetch';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
+import { pool } from '../lib/db.js';
 
 dotenv.config();
 
