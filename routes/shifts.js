@@ -369,33 +369,58 @@ router.post('/shifts/:id/swap-request', requireStaffAuth, async (req, res) => {
 router.get('/shift-swaps', async (req, res) => {
   try {
     const authResult = await authenticateStaffOrUser(req, res);
-    if (!authResult) return res.status(401).json({ error: 'Authentication required' });
+    if (!authResult) {
+      if (!res.headersSent) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      return;
+    }
     const { status } = req.query;
     const filters = status ? { status } : {};
     if (authResult.isStaff) {
       const swapRequests = await getSwapRequestsForStaff(authResult.staffId, filters);
       return res.json({ swapRequests });
     }
+    if (!req.userId) {
+      if (!res.headersSent) {
+        return res.status(401).json({ error: 'User ID not found' });
+      }
+      return;
+    }
     const swapRequests = await getSwapRequestsForCompany(req.userId, filters);
-    res.json({ swapRequests });
+    return res.json({ swapRequests });
   } catch (error) {
     console.error('Get swap requests error:', error);
-    res.status(500).json({ error: 'Failed to get swap requests' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to get swap requests' });
+    }
   }
 });
 
 router.get('/shift-swaps/:id', async (req, res) => {
   try {
     const authResult = await authenticateStaffOrUser(req, res);
-    if (!authResult) return res.status(401).json({ error: 'Authentication required' });
+    if (!authResult) {
+      if (!res.headersSent) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      return;
+    }
     const swapRequest = authResult.isStaff
       ? await getSwapRequestById(req.params.id, authResult.staffId)
       : await getSwapRequestById(req.params.id, null, req.userId);
-    if (!swapRequest) return res.status(404).json({ error: 'Swap request not found' });
-    res.json({ swapRequest });
+    if (!swapRequest) {
+      if (!res.headersSent) {
+        return res.status(404).json({ error: 'Swap request not found' });
+      }
+      return;
+    }
+    return res.json({ swapRequest });
   } catch (error) {
     console.error('Get swap request error:', error);
-    res.status(500).json({ error: 'Failed to get swap request' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to get swap request' });
+    }
   }
 });
 

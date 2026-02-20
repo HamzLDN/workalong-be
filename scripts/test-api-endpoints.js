@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8081/api';
+const API_BASE_URL = 'http://localhost:8081/api';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-this-secret-key-in-production';
 
 // Generate CSRF token from session ID
@@ -1517,10 +1517,23 @@ async function runAllTests() {
     });
   }
   console.log('========================================\n');
+  
+  // Return whether all tests passed
+  return results.failed === 0;
 }
 
-runAllTests().catch((error) => {
-  console.error('Test suite error:', error);
-  process.exit(1);
-});
+runAllTests()
+  .then((allPassed) => {
+    if (!allPassed) {
+      console.error('\n❌ Some tests failed. Exiting with error code.');
+      process.exit(1);
+    } else {
+      console.log('✅ All tests passed!');
+      process.exit(0);
+    }
+  })
+  .catch((error) => {
+    console.error('Test suite error:', error);
+    process.exit(1);
+  });
 
