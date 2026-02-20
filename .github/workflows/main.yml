@@ -33,7 +33,7 @@ jobs:
       - name: Launch backend server for testing
         run: |
           echo "Starting backend server in dev mode..."
-          NODE_ENV=dev npm run dev > /tmp/backend.log 2>&1 &
+          cd root/workalong-backend && NODE_ENV=dev npm run dev > /tmp/backend.log 2>&1 &
           echo $! > /tmp/backend.pid
           echo "Backend server started with PID: $(cat /tmp/backend.pid)"
 
