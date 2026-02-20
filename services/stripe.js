@@ -189,11 +189,20 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
         // Handle both cases: coupon can be a string ID or an expanded object
         const couponId = typeof promo.coupon === 'string' ? promo.coupon : promo.coupon?.id;
         if (couponId) {
-          const coupon = await stripe.coupons.retrieve(couponId);
-          if (coupon.percent_off === 100 && coupon.duration === 'forever') {
-            is100PercentFreeForever = true;
-            console.log(`[Checkout] Detected 100% free forever promo code: ${promoCode}`);
+          try {
+            const coupon = await stripe.coupons.retrieve(couponId);
+            console.log(`[Checkout] Promo code ${promoCode} - Coupon: ${coupon.percent_off}% off, Duration: ${coupon.duration}`);
+            if (coupon.percent_off === 100 && coupon.duration === 'forever') {
+              is100PercentFreeForever = true;
+              console.log(`[Checkout] ✅ Detected 100% free forever promo code: ${promoCode} - Will skip trial period`);
+            } else {
+              console.log(`[Checkout] Promo code ${promoCode} is NOT 100% free forever (${coupon.percent_off}% off, ${coupon.duration})`);
+            }
+          } catch (couponErr) {
+            console.error(`[Checkout] Error retrieving coupon ${couponId}:`, couponErr.message);
           }
+        } else {
+          console.warn(`[Checkout] Could not get coupon ID from promo code ${promoCode}, coupon object:`, promo.coupon);
         }
       } catch (promoErr) {
         console.error('Error validating promo code with Stripe:', promoErr);
@@ -217,8 +226,12 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
     // Only add trial period if:
     // 1. User is a first-time subscriber AND
     // 2. NOT using a 100% free forever promo code
+    console.log(`[Checkout] Trial check - firstTimeSubscriber: ${firstTimeSubscriber}, is100PercentFreeForever: ${is100PercentFreeForever}, promoCode: ${promoCode || 'none'}`);
     if (firstTimeSubscriber && !is100PercentFreeForever) {
       subscriptionData.trial_period_days = 14;
+      console.log(`[Checkout] ✅ Adding 14-day trial period`);
+    } else {
+      console.log(`[Checkout] ❌ Skipping trial period (firstTime: ${firstTimeSubscriber}, freeForever: ${is100PercentFreeForever})`);
     }
 
     const session = await stripe.checkout.sessions.create({
