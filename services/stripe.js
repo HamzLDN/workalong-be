@@ -191,19 +191,32 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
         if (couponId) {
           try {
             const coupon = await stripe.coupons.retrieve(couponId);
-            console.log(`[Checkout] Promo code ${promoCode} - Coupon: ${coupon.percent_off}% off, Duration: ${coupon.duration}, Amount off: ${coupon.amount_off || 'N/A'}`);
-            // Check for 100% free forever: either 100% percent_off forever, or amount_off that makes it free
-            if (coupon.percent_off === 100 && coupon.duration === 'forever') {
+            console.log(`[Checkout] Promo code ${promoCode} - Coupon details:`, {
+              id: coupon.id,
+              percent_off: coupon.percent_off,
+              amount_off: coupon.amount_off,
+              duration: coupon.duration,
+              duration_in_months: coupon.duration_in_months,
+              valid: coupon.valid
+            });
+            
+            // Check for 100% free: either 100% percent_off, or amount_off that makes it free
+            // For ANY 100% off promo code, remove trial period (not just "forever" ones)
+            const is100PercentOff = coupon.percent_off === 100;
+            const isForever = coupon.duration === 'forever' || (coupon.duration === 'repeating' && !coupon.duration_in_months);
+            const makesItFree = coupon.amount_off && coupon.amount_off >= amountPence;
+            
+            // If it's 100% off (regardless of duration), treat as free and remove trial
+            // This ensures "14 days free" doesn't show when the subscription is already free
+            if (is100PercentOff || makesItFree) {
               is100PercentFreeForever = true;
-              console.log(`[Checkout] ✅ Detected 100% free forever promo code: ${promoCode} - Will skip trial period completely`);
-            } else if (coupon.amount_off && coupon.duration === 'forever') {
-              // If amount_off makes the subscription free (amount_off >= price), treat as free forever
-              if (coupon.amount_off >= amountPence) {
-                is100PercentFreeForever = true;
-                console.log(`[Checkout] ✅ Detected free forever promo code (amount off): ${promoCode} - Will skip trial period completely`);
-              }
+              console.log(`[Checkout] ✅✅✅ DETECTED 100% OFF PROMO CODE: ${promoCode}`);
+              console.log(`[Checkout] ✅✅✅ percent_off: ${coupon.percent_off}, duration: ${coupon.duration}, amount_off: ${coupon.amount_off}`);
+              console.log(`[Checkout] ✅✅✅ NO TRIAL PERIOD WILL BE SET - SUBSCRIPTION STARTS IMMEDIATELY`);
             } else {
-              console.log(`[Checkout] Promo code ${promoCode} is NOT 100% free forever (${coupon.percent_off}% off, ${coupon.duration})`);
+              console.log(`[Checkout] ❌ Promo code ${promoCode} is NOT 100% off:`);
+              console.log(`[Checkout] ❌ percent_off: ${coupon.percent_off}, duration: ${coupon.duration}, amount_off: ${coupon.amount_off}`);
+              console.log(`[Checkout] ❌ is100PercentOff: ${is100PercentOff}, makesItFree: ${makesItFree}`);
             }
           } catch (couponErr) {
             console.error(`[Checkout] Error retrieving coupon ${couponId}:`, couponErr.message);
@@ -218,7 +231,7 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
     }
 
     // 14-day free trial for first-time subscribers only (no previous subscription in our DB)
-    // Skip trial if using a 100% free forever promo code (already free)
+    // IMPORTANT: NEVER add trial period if using a 100% free forever promo code
     const firstTimeSubscriber = !existingSubId;
     const subscriptionData = {
       metadata: {
@@ -230,31 +243,55 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
       }
     };
     
-    // Only add trial period if:
+    // CRITICAL: Only add trial period if:
     // 1. User is a first-time subscriber AND
     // 2. NOT using a 100% free forever promo code
+    // For 100% free forever codes, subscription must start immediately with NO trial
     console.log(`[Checkout] Trial check - firstTimeSubscriber: ${firstTimeSubscriber}, is100PercentFreeForever: ${is100PercentFreeForever}, promoCode: ${promoCode || 'none'}`);
-    if (firstTimeSubscriber && !is100PercentFreeForever) {
+    
+    // ABSOLUTELY NO TRIAL PERIOD for 100% free forever codes
+    // This is CRITICAL - if free forever, NEVER set trial_period_days
+    if (is100PercentFreeForever) {
+      console.log(`[Checkout] 🚫🚫🚫 100% FREE FOREVER CODE - ABSOLUTELY NO TRIAL PERIOD`);
+      console.log(`[Checkout] 🚫 subscriptionData will NOT have trial_period_days`);
+      // DO NOTHING - don't set trial_period_days at all
+      // This ensures Stripe doesn't show any trial information
+    } else if (firstTimeSubscriber) {
+      // Only add trial for first-time subscribers WITHOUT free forever codes
       subscriptionData.trial_period_days = 14;
-      console.log(`[Checkout] ✅ Adding 14-day trial period`);
+      console.log(`[Checkout] ✅ Adding 14-day trial period for first-time subscriber`);
     } else {
-      // For 100% free forever promo codes or non-first-time subscribers, do NOT set trial_period_days
-      // Completely omit the field to prevent Stripe from showing any trial UI
-      if (is100PercentFreeForever) {
-        console.log(`[Checkout] ❌ Omitting trial period for 100% free forever promo code - subscription starts immediately`);
-      } else {
-        console.log(`[Checkout] ❌ Skipping trial period (not first-time subscriber)`);
-      }
-      // Explicitly ensure trial_period_days is not in subscriptionData
+      console.log(`[Checkout] ❌ Skipping trial period (not first-time subscriber)`);
+    }
+    
+    // CRITICAL SAFETY CHECK: Remove trial_period_days if it exists for free forever codes
+    if (is100PercentFreeForever) {
       if ('trial_period_days' in subscriptionData) {
+        console.log(`[Checkout] ⚠️  CRITICAL ERROR: trial_period_days found for free forever code - DELETING NOW!`);
         delete subscriptionData.trial_period_days;
       }
+      // Also explicitly set to undefined to be absolutely sure
+      subscriptionData.trial_period_days = undefined;
+      delete subscriptionData.trial_period_days;
+      console.log(`[Checkout] ✅ Verified: trial_period_days removed from subscriptionData`);
     }
 
     // Build product description - exclude trial text for 100% free forever promo codes
     const trialText = (firstTimeSubscriber && !is100PercentFreeForever) ? '. 14-day free trial.' : '';
     const productDescription = `Staff: ${staffCount}, Multi-location: ${multiLocation ? 'Yes' : 'No'}${trialText}`;
     console.log(`[Checkout] Product description: "${productDescription}" (is100PercentFreeForever: ${is100PercentFreeForever}, firstTimeSubscriber: ${firstTimeSubscriber})`);
+
+    // FINAL SAFETY CHECK: Ensure trial_period_days is NEVER in subscriptionData for free forever codes
+    if (is100PercentFreeForever) {
+      // Remove trial_period_days completely
+      delete subscriptionData.trial_period_days;
+      // Also ensure trial_settings is not set (newer Stripe API)
+      delete subscriptionData.trial_settings;
+      console.log(`[Checkout] ✅ Final check: subscriptionData.trial_period_days = ${subscriptionData.trial_period_days} (should be undefined)`);
+      console.log(`[Checkout] ✅ Final subscription_data for free forever code:`, JSON.stringify(subscriptionData, null, 2));
+    }
+    
+    console.log(`[Checkout] Creating checkout session with subscription_data:`, JSON.stringify(subscriptionData, null, 2));
 
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
