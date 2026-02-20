@@ -102,3 +102,4 @@ curl http://localhost:8080/api/health
 - Change port mapping in docker-compose.yml: `"8081:8080"`
 - Or stop conflicting service
 
+

@@ -30,15 +30,28 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify server is running
+      - name: Launch backend server for testing
         run: |
-          echo "Verifying backend server is accessible on localhost:8081..."
-          if ! curl -f http://localhost:8081/api/health > /dev/null 2>&1; then
-            echo "❌ ERROR: Backend server is not running on localhost:8081"
-            echo "Please ensure your backend is running before running tests"
-            exit 1
-          fi
-          echo "✅ Backend server is accessible"
+          echo "Starting backend server in dev mode..."
+          NODE_ENV=dev npm run dev > /tmp/backend.log 2>&1 &
+          echo $! > /tmp/backend.pid
+          echo "Backend server started with PID: $(cat /tmp/backend.pid)"
+
+      - name: Wait for backend server to be ready
+        run: |
+          echo "Waiting for backend server to be accessible on localhost:8081..."
+          for i in {1..30}; do
+            if curl -f http://localhost:8081/api/health > /dev/null 2>&1; then
+              echo "✅ Backend server is accessible"
+              exit 0
+            fi
+            echo "Waiting for server... (attempt $i/30)"
+            sleep 2
+          done
+          echo "❌ ERROR: Backend server did not become accessible within 60 seconds"
+          echo "Backend logs:"
+          tail -50 /tmp/backend.log || echo "No logs available"
+          exit 1
 
       - name: Load environment variables from .env
         run: |
@@ -83,11 +96,29 @@ jobs:
             echo "Copying .env from /root/workalong-backend/ to current directory for test script"
             cp /root/workalong-backend/.env .env || echo "Failed to copy .env"
           fi
+          
           node scripts/test-api-endpoints.js
         env:
           NODE_OPTIONS: '--experimental-vm-modules'
           API_BASE_URL: http://localhost:8081/api
           SESSION_SECRET: ${{ env.SESSION_SECRET }}
+
+      - name: Cleaning up the backend testing server
+        if: always()
+        run: |
+          echo "Stopping backend server..."
+          if [ -f /tmp/backend.pid ]; then
+            PID=$(cat /tmp/backend.pid)
+            if ps -p $PID > /dev/null 2>&1; then
+              kill $PID || true
+              echo "Backend server stopped (PID: $PID)"
+            else
+              echo "Backend server process not found"
+            fi
+            rm -f /tmp/backend.pid
+          else
+            echo "No PID file found, server may have already stopped"
+          fi
 
   deploy:
     name: Deploy Backend to Server
