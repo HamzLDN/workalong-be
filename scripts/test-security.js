@@ -888,8 +888,8 @@ async function testPrivilegeEscalation() {
 
   const auditLogs = await makeAuthenticatedRequest('/security/audit-logs', {}, userA);
   recordTest(
-    'Privilege Escalation: Regular user accessing audit logs should succeed (filtered by userId)',
-    auditLogs.ok && auditLogs.status === 200,
+    'Privilege Escalation: Regular user accessing audit logs should fail',
+    !auditLogs.ok && auditLogs.status === 403,
     `Status: ${auditLogs.status}`
   );
 

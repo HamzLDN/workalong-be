@@ -231,8 +231,17 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
       subscriptionData.trial_period_days = 14;
       console.log(`[Checkout] ✅ Adding 14-day trial period`);
     } else {
+      // Explicitly ensure no trial period for 100% free forever promo codes
+      // Don't set trial_period_days at all (or set to undefined) to prevent Stripe from showing trial UI
       console.log(`[Checkout] ❌ Skipping trial period (firstTime: ${firstTimeSubscriber}, freeForever: ${is100PercentFreeForever})`);
+      // Ensure trial_period_days is not set
+      delete subscriptionData.trial_period_days;
     }
+
+    // Build product description - exclude trial text for 100% free forever promo codes
+    const trialText = (firstTimeSubscriber && !is100PercentFreeForever) ? '. 14-day free trial.' : '';
+    const productDescription = `Staff: ${staffCount}, Multi-location: ${multiLocation ? 'Yes' : 'No'}${trialText}`;
+    console.log(`[Checkout] Product description: "${productDescription}" (is100PercentFreeForever: ${is100PercentFreeForever}, firstTimeSubscriber: ${firstTimeSubscriber})`);
 
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
@@ -246,7 +255,7 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
             recurring: { interval },
             product_data: {
               name: productName,
-              description: `Staff: ${staffCount}, Multi-location: ${multiLocation ? 'Yes' : 'No'}${firstTimeSubscriber && !is100PercentFreeForever ? '. 14-day free trial.' : ''}`,
+              description: productDescription,
               metadata: {
                 userId: userId.toString(),
                 staffCount: String(staffCount),

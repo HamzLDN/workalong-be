@@ -162,8 +162,20 @@ router.get('/ip-whitelist', requireAuth, async (req, res) => {
 
 router.get('/audit-logs', requireAuth, async (req, res) => {
   try {
+    // Audit logs are admin-only - check if user is admin
+    const { pool } = await import('../lib/db.js');
+    const userResult = await pool.query(
+      'SELECT is_admin FROM users WHERE id = $1',
+      [req.userId]
+    );
+    
+    if (userResult.rows.length === 0 || !userResult.rows[0].is_admin) {
+      return res.status(403).json({ error: 'Access denied. Admin privileges required.' });
+    }
+    
     const limit = parseInt(req.query.limit) || 100;
-    const logs = await getSecurityAuditLogs(req.userId, limit);
+    // Admins can see all logs (no userId filter)
+    const logs = await getSecurityAuditLogs(null, limit);
     res.json({ logs });
   } catch (error) {
     console.error('Get audit logs error:', error);
