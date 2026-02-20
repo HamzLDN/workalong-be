@@ -26,6 +26,7 @@ CREATE TABLE public.users (
     totp_secret text,
     totp_enabled boolean DEFAULT false,
     email_2fa_enabled boolean DEFAULT true,
+    is_admin boolean DEFAULT false,
     CONSTRAINT valid_subscription_status CHECK ((subscription_status = ANY (ARRAY['free'::text, 'paid'::text, 'trial'::text, 'expired'::text])))
 );
 

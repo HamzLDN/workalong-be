@@ -164,12 +164,30 @@ router.get('/audit-logs', requireAuth, async (req, res) => {
   try {
     // Audit logs are admin-only - check if user is admin
     const { pool } = await import('../lib/db.js');
-    const userResult = await pool.query(
-      'SELECT is_admin FROM users WHERE id = $1',
-      [req.userId]
-    );
     
-    if (userResult.rows.length === 0 || !userResult.rows[0].is_admin) {
+    // Check if is_admin column exists, if not deny access
+    let isAdmin = false;
+    try {
+      const userResult = await pool.query(
+        'SELECT is_admin FROM users WHERE id = $1',
+        [req.userId]
+      );
+      
+      if (userResult.rows.length === 0) {
+        return res.status(403).json({ error: 'Access denied. Admin privileges required.' });
+      }
+      
+      isAdmin = userResult.rows[0].is_admin === true;
+    } catch (columnError) {
+      // Column doesn't exist - deny access
+      if (columnError.code === '42703') {
+        console.log('is_admin column does not exist - denying access to audit logs');
+        return res.status(403).json({ error: 'Access denied. Admin privileges required.' });
+      }
+      throw columnError;
+    }
+    
+    if (!isAdmin) {
       return res.status(403).json({ error: 'Access denied. Admin privileges required.' });
     }
     
