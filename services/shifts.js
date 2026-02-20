@@ -263,6 +263,16 @@ export async function createShift(userId, data) {
     notes
   } = data;
   
+  // Verify that the staff member belongs to this user
+  const staffCheck = await pool.query(
+    'SELECT id FROM staff WHERE id = $1 AND user_id = $2',
+    [staffId, userId]
+  );
+  
+  if (staffCheck.rows.length === 0) {
+    throw new Error('Staff member not found or does not belong to this user');
+  }
+  
   const normalizedDate = shiftDate.split('T')[0];
   console.log('[createShift] Creating shift with date:', normalizedDate, 'original:', shiftDate);
   
@@ -439,6 +449,16 @@ export async function createBulkShifts(userId, shifts) {
     const createdShifts = [];
     
     for (const shift of shifts) {
+      // Verify that the staff member belongs to this user
+      const staffCheck = await client.query(
+        'SELECT id FROM staff WHERE id = $1 AND user_id = $2',
+        [shift.staffId, userId]
+      );
+      
+      if (staffCheck.rows.length === 0) {
+        throw new Error(`Staff member ${shift.staffId} not found or does not belong to this user`);
+      }
+      
       const shiftHours = parseFloat(shift.hours) || 0;
       
       // Sanitize string fields to remove null bytes

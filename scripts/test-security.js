@@ -805,11 +805,19 @@ async function testInputValidation() {
     name: xssPayload
   }, 'PUT', userA);
   // Check if script tags are sanitized in response
-  if (xssTest.ok && xssTest.data?.user) {
+  if (xssTest.ok && xssTest.data?.user?.name) {
+    const userName = xssTest.data.user.name || '';
     recordTest(
       'Input Validation: XSS payload should be sanitized',
-      !xssTest.data.user.name.includes('<script>'),
-      `Name contains script tag: ${xssTest.data.user.name}`
+      !userName.includes('<script>') && !userName.includes('javascript:'),
+      `Name contains script tag: ${userName}`
+    );
+  } else if (xssTest.ok && xssTest.data?.user) {
+    // Name was sanitized to empty string or null - that's acceptable
+    recordTest(
+      'Input Validation: XSS payload should be sanitized',
+      true,
+      `Name was sanitized (empty/null)`
     );
   } else {
     recordTest(

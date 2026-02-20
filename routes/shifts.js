@@ -224,6 +224,9 @@ router.post('/shifts', requireAuth, async (req, res) => {
     res.status(201).json({ message: 'Shift created successfully', shift });
   } catch (error) {
     console.error('Create shift error:', error);
+    if (error.message && error.message.includes('does not belong to this user')) {
+      return res.status(403).json({ error: 'You do not have permission to create shifts for this staff member' });
+    }
     res.status(500).json({ error: 'Failed to create shift', details: error.message });
   }
 });
@@ -244,6 +247,9 @@ router.post('/shifts/bulk', requireAuth, requireSubscription, async (req, res) =
     res.status(201).json({ message: `${createdShifts.length} shifts created successfully`, shifts: createdShifts });
   } catch (error) {
     console.error('Create bulk shifts error:', error);
+    if (error.message && error.message.includes('does not belong to this user')) {
+      return res.status(403).json({ error: 'You do not have permission to create shifts for one or more staff members' });
+    }
     res.status(500).json({ error: 'Failed to create shifts' });
   }
 });
