@@ -112,7 +112,9 @@ const PUBLIC_ENDPOINTS = [
   '/payment/webhook',
   '/api/payment/webhook',
   '/payment/config',
-  '/api/payment/config'
+  '/api/payment/config',
+  '/payment/verify-session',
+  '/api/payment/verify-session'
 ];
 
 function isPublicEndpoint(path) {
