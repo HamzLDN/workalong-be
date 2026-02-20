@@ -11,7 +11,8 @@ import { cleanupExpiredSessions } from './services/auth.js';
 import {
   requestFingerprinting,
   detectSessionTokenMisuse,
-  securityHeaders
+  securityHeaders,
+  createRateLimiter
 } from './middleware/security.js';
 import {
   verifyObfuscatedRequest,
@@ -83,6 +84,8 @@ app.set('trust proxy', 1);
 app.use(securityHeaders);
 app.use(requestFingerprinting);
 app.use(detectSessionTokenMisuse);
+// Global rate limiting (only active in production)
+app.use('/api', createRateLimiter({ limitPerMinute: 100, limitPerHour: 5000 }));
 app.use(verifyObfuscatedRequest);
 app.use(obfuscateResponse);
 

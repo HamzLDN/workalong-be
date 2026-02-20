@@ -40,10 +40,12 @@ async function createFreePromoCode() {
     console.log(`✅ Coupon created: ${coupon.id}`);
     
     // Create a promotion code linked to the coupon
+    // Set max_redemptions to 1 so it can only be used once
     const promotionCode = await stripe.promotionCodes.create({
       coupon: coupon.id,
       code: customCode,
       active: true,
+      max_redemptions: 1, // Limit to single use
       metadata: {
         created_by: 'admin',
         purpose: 'custom_free_client'
@@ -57,13 +59,14 @@ async function createFreePromoCode() {
     console.log(`Promotion Code ID: ${promotionCode.id}`);
     console.log(`Discount: 100% off (FREE)`);
     console.log(`Duration: Forever`);
+    console.log(`Max Redemptions: 1 (single use only)`);
     console.log('========================================');
     console.log('\n📋 Instructions:');
     console.log(`1. Share this code with your client: ${promotionCode.code}`);
     console.log('2. Client must enter credit card (for verification)');
     console.log('3. They will be charged £0.00');
     console.log('4. They get full access forever');
-    console.log('\n⚠️  Note: This code can be used multiple times unless you limit it in Stripe dashboard');
+    console.log('\n✅ Note: This code can only be redeemed once');
     
     return { coupon, promotionCode };
   } catch (error) {

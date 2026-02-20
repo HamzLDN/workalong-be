@@ -109,6 +109,16 @@ const PUBLIC_ENDPOINTS = [
   '/api/auth/reset-password',
   '/auth/verify-code',
   '/api/auth/verify-code',
+  '/auth/2fa/email/enable',
+  '/api/auth/2fa/email/enable',
+  '/auth/2fa/email/disable',
+  '/api/auth/2fa/email/disable',
+  '/auth/2fa/totp/generate',
+  '/api/auth/2fa/totp/generate',
+  '/auth/2fa/totp/enable',
+  '/api/auth/2fa/totp/enable',
+  '/auth/2fa/totp/disable',
+  '/api/auth/2fa/totp/disable',
   '/payment/webhook',
   '/api/payment/webhook',
   '/payment/config',
@@ -118,6 +128,7 @@ const PUBLIC_ENDPOINTS = [
 ];
 
 function isPublicEndpoint(path) {
+  
   // Remove query string
   const cleanPath = path.split('?')[0];
   // Normalize path

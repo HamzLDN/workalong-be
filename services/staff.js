@@ -6,7 +6,11 @@ import { sendStaffPasswordSetupEmail } from '../lib/email.js';
 
 export async function getStaff(userId) {
   const result = await pool.query(
-    `SELECT * FROM staff 
+    `SELECT 
+       id, user_id, name, email, role, hourly_rate, employment_type, 
+       status, created_at, updated_at, suspicious_pattern_count, 
+       last_pattern_check, username, password_set, clockin_id
+     FROM staff 
      WHERE user_id = $1 
      ORDER BY created_at DESC`,
     [userId]

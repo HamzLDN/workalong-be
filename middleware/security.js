@@ -132,6 +132,11 @@ export function createRateLimiter(options = {}) {
   } = options;
   
   return async (req, res, next) => {
+    // Only apply rate limiting in production
+    if (process.env.NODE_ENV !== 'production') {
+      return next();
+    }
+    
     try {
       let identifier;
       
