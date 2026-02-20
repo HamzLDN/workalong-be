@@ -1158,7 +1158,19 @@ async function testGetAuditLogs() {
   if (!sessionId) return false;
   const result = await makeRequest('/security/audit-logs');
   console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  // Audit logs endpoint requires admin privileges
+  // Non-admin users should receive 403 Forbidden
+  // This test verifies that access control is working correctly
+  if (result.status === 403) {
+    console.log(`  ${GREEN}PASS:${RESET} Access correctly denied for non-admin user (403 Forbidden)`);
+    return true;
+  }
+  if (result.status === 200) {
+    console.log(`  ${YELLOW}WARNING:${RESET} Non-admin user was able to access audit logs (should be 403)`);
+    return false;
+  }
+  console.log(`  ${RED}ERROR:${RESET} Unexpected status: ${result.status}`);
+  return false;
 }
 
 // ============================================
