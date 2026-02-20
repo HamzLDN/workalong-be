@@ -34,24 +34,43 @@ jobs:
         run: |
           echo "Setting up SSH tunnel to forward localhost:8081 from server..."
           mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          
+          # Write SSH key (preserve newlines)
           echo "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          
+          # Add server to known_hosts
           ssh-keyscan -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          chmod 644 ~/.ssh/known_hosts
           
           # Start SSH tunnel in background (forward remote localhost:8081 to local localhost:8081)
-          ssh -f -N -L 8081:localhost:8081 \
+          # -L [bind_address:]port:host:hostport
+          echo "Establishing SSH tunnel..."
+          ssh -f -N \
+            -L 8081:localhost:8081 \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -o ServerAliveInterval=60 \
+            -o ServerAliveCountMax=3 \
+            -o LogLevel=ERROR \
             -p ${{ secrets.SSH_PORT || 22 }} \
-            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            -i ~/.ssh/deploy_key
+            -i ~/.ssh/deploy_key \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 2>&1 || {
+              echo "❌ SSH tunnel setup failed"
+              exit 1
+            }
           
           # Wait a moment for tunnel to establish
-          sleep 3
+          echo "Waiting for tunnel to establish..."
+          sleep 5
           
           # Verify tunnel is working
+          echo "Verifying SSH tunnel..."
           if ! curl -f http://localhost:8081/api/health > /dev/null 2>&1; then
             echo "❌ ERROR: SSH tunnel failed - cannot reach server's localhost:8081"
+            echo "Checking SSH process..."
+            ps aux | grep "[s]sh.*8081" || true
             echo "Make sure your server is running on localhost:8081"
             exit 1
           fi
