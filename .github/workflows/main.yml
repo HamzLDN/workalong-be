@@ -44,26 +44,49 @@ jobs:
           ssh-keyscan -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
           chmod 644 ~/.ssh/known_hosts
           
+          # Test SSH connection first
+          echo "Testing SSH connection..."
+          ssh -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=~/.ssh/known_hosts \
+              -p ${{ secrets.SSH_PORT || 22 }} \
+              -i ~/.ssh/deploy_key \
+              ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+              "echo 'SSH connection successful'" || {
+            echo "❌ SSH connection test failed"
+            exit 1
+          }
+          
           # Start SSH tunnel in background (forward remote localhost:8081 to local localhost:8081)
           # -L [bind_address:]port:host:hostport
           echo "Establishing SSH tunnel..."
-          ssh -f -N \
-            -L 8081:localhost:8081 \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=~/.ssh/known_hosts \
-            -o ServerAliveInterval=60 \
-            -o ServerAliveCountMax=3 \
-            -o LogLevel=ERROR \
-            -p ${{ secrets.SSH_PORT || 22 }} \
-            -i ~/.ssh/deploy_key \
-            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 2>&1 || {
-              echo "❌ SSH tunnel setup failed"
-              exit 1
-            }
+          ssh -N \
+              -L 8081:localhost:8081 \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=~/.ssh/known_hosts \
+              -o ServerAliveInterval=60 \
+              -o ServerAliveCountMax=3 \
+              -o LogLevel=ERROR \
+              -p ${{ secrets.SSH_PORT || 22 }} \
+              -i ~/.ssh/deploy_key \
+              ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+              > /tmp/ssh_tunnel.log 2>&1 &
+          
+          TUNNEL_PID=$!
+          echo "SSH tunnel PID: $TUNNEL_PID"
+          echo $TUNNEL_PID > /tmp/ssh_tunnel.pid
           
           # Wait a moment for tunnel to establish
           echo "Waiting for tunnel to establish..."
           sleep 5
+          
+          # Check if tunnel process is still running
+          if ! kill -0 $TUNNEL_PID 2>/dev/null; then
+            echo "❌ SSH tunnel process died immediately"
+            echo "SSH tunnel log:"
+            cat /tmp/ssh_tunnel.log || true
+            exit 1
+          fi
+          echo "SSH tunnel is running (PID: $TUNNEL_PID)"
           
           # Verify tunnel is working
           echo "Verifying SSH tunnel..."
@@ -71,6 +94,8 @@ jobs:
             echo "❌ ERROR: SSH tunnel failed - cannot reach server's localhost:8081"
             echo "Checking SSH process..."
             ps aux | grep "[s]sh.*8081" || true
+            echo "Checking if port 8081 is listening..."
+            netstat -tlnp | grep 8081 || lsof -i :8081 || true
             echo "Make sure your server is running on localhost:8081"
             exit 1
           fi
@@ -90,8 +115,15 @@ jobs:
         if: always()
         run: |
           echo "Cleaning up SSH tunnel..."
-          pkill -f "ssh.*8081:localhost:8081" || true
+          if [ -f /tmp/ssh_tunnel.pid ]; then
+            TUNNEL_PID=$(cat /tmp/ssh_tunnel.pid)
+            echo "Killing SSH tunnel (PID: $TUNNEL_PID)"
+            kill $TUNNEL_PID 2>/dev/null || true
+            rm -f /tmp/ssh_tunnel.pid
+          fi
+          pkill -f "ssh.*-L 8081:localhost:8081" || true
           rm -f ~/.ssh/deploy_key
+          rm -f /tmp/ssh_tunnel.log
 
   deploy:
     name: Deploy Backend to Server
