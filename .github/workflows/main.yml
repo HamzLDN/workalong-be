@@ -15,7 +15,7 @@ on:
 jobs:
   test:
     name: Test Backend API
-    runs-on: ubuntu-latest
+    runs-on: self-hosted  # Runs on your server, can access localhost:8081 directly
 
     steps:
       - name: Checkout code
@@ -30,112 +30,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Setup SSH tunnel to server
+      - name: Verify server is running
         run: |
-          echo "Setting up SSH tunnel to forward localhost:8081 from server..."
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          
-          # Write SSH key - handle both single-line and multi-line formats
-          SSH_KEY="${{ secrets.SSH_KEY }}"
-          echo "$SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          
-          # Verify key file was created correctly
-          if [ ! -s ~/.ssh/deploy_key ]; then
-            echo "❌ ERROR: SSH key file is empty or not created"
-            exit 1
-          fi
-          
-          # Add server to known_hosts
-          SSH_PORT="${{ secrets.SSH_PORT || 22 }}"
-          SSH_HOST="${{ secrets.SSH_HOST }}"
-          SSH_USER="${{ secrets.SSH_USER }}"
-          
-          # Validate required variables
-          if [ -z "$SSH_HOST" ] || [ -z "$SSH_USER" ]; then
-            echo "❌ ERROR: SSH_HOST or SSH_USER is not set"
-            exit 1
-          fi
-          
-          echo "SSH configuration:"
-          echo "  Host: $SSH_HOST"
-          echo "  Port: $SSH_PORT"
-          echo "  User: $SSH_USER"
-          echo "  Key file size: $(wc -c < ~/.ssh/deploy_key) bytes"
-          echo "  Key starts with: $(head -c 20 ~/.ssh/deploy_key)"
-          
-          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-          chmod 644 ~/.ssh/known_hosts
-          
-          # Test SSH connection first - use single line to avoid parsing issues
-          echo "Testing SSH connection..."
-          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=~/.ssh/known_hosts -o ConnectTimeout=10 -p "$SSH_PORT" -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "echo 'SSH connection successful'" || {
-            echo "❌ SSH connection test failed"
-            echo "Verifying SSH is available..."
-            which ssh || echo "SSH not found in PATH"
-            ssh -V || echo "SSH version check failed"
-            exit 1
-          }
-          
-          # Start SSH tunnel in background (forward remote localhost:8081 to local localhost:8081)
-          # -L [bind_address:]port:host:hostport
-          echo "Establishing SSH tunnel..."
-          ssh -N -L 8081:localhost:8081 -o StrictHostKeyChecking=no -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=60 -o ServerAliveCountMax=3 -o LogLevel=ERROR -p "$SSH_PORT" -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" > /tmp/ssh_tunnel.log 2>&1 &
-          
-          TUNNEL_PID=$!
-          echo "SSH tunnel PID: $TUNNEL_PID"
-          echo $TUNNEL_PID > /tmp/ssh_tunnel.pid
-          
-          # Wait a moment for tunnel to establish
-          echo "Waiting for tunnel to establish..."
-          sleep 5
-          
-          # Check if tunnel process is still running
-          if ! kill -0 $TUNNEL_PID 2>/dev/null; then
-            echo "❌ SSH tunnel process died immediately"
-            echo "SSH tunnel log:"
-            cat /tmp/ssh_tunnel.log || true
-            exit 1
-          fi
-          echo "SSH tunnel is running (PID: $TUNNEL_PID)"
-          
-          # Verify tunnel is working
-          echo "Verifying SSH tunnel..."
+          echo "Verifying backend server is accessible on localhost:8081..."
           if ! curl -f http://localhost:8081/api/health > /dev/null 2>&1; then
-            echo "❌ ERROR: SSH tunnel failed - cannot reach server's localhost:8081"
-            echo "Checking SSH process..."
-            ps aux | grep "[s]sh.*8081" || true
-            echo "Checking if port 8081 is listening..."
-            netstat -tlnp | grep 8081 || lsof -i :8081 || true
-            echo "Make sure your server is running on localhost:8081"
+            echo "❌ ERROR: Backend server is not running on localhost:8081"
+            echo "Please ensure your backend is running before running tests"
             exit 1
           fi
-          echo "✅ SSH tunnel established successfully"
+          echo "✅ Backend server is accessible"
 
       - name: Run API endpoint tests
         run: |
-          echo "Running API endpoint tests against http://localhost:8081/api (via SSH tunnel)"
+          echo "Running API endpoint tests against http://localhost:8081/api"
           echo "All tests must pass before deployment..."
           node scripts/test-api-endpoints.js
         env:
           NODE_OPTIONS: '--experimental-vm-modules'
           API_BASE_URL: http://localhost:8081/api
           SESSION_SECRET: ${{ secrets.SESSION_SECRET || 'test-secret-for-ci' }}
-        
-      - name: Cleanup SSH tunnel
-        if: always()
-        run: |
-          echo "Cleaning up SSH tunnel..."
-          if [ -f /tmp/ssh_tunnel.pid ]; then
-            TUNNEL_PID=$(cat /tmp/ssh_tunnel.pid)
-            echo "Killing SSH tunnel (PID: $TUNNEL_PID)"
-            kill $TUNNEL_PID 2>/dev/null || true
-            rm -f /tmp/ssh_tunnel.pid
-          fi
-          pkill -f "ssh.*-L 8081:localhost:8081" || true
-          rm -f ~/.ssh/deploy_key
-          rm -f /tmp/ssh_tunnel.log
 
   deploy:
     name: Deploy Backend to Server
