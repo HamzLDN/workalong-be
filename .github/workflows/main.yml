@@ -54,7 +54,7 @@ jobs:
     name: Deploy Backend to Server
     needs: test
     runs-on: self-hosted  # Also runs on your server for deployment
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.test.result == 'success'
     
     steps:
       - name: Checkout code
@@ -80,6 +80,8 @@ jobs:
         run: |
           cd /root/workalong-backend
           echo "Starting backend container..."
+          # PostgreSQL is on 'workalong_workalong-network', connect backend to that network
+          # Use container name 'workalong-postgres' as DB_HOST when on same network
           docker run -d \
             --name workalong-backend \
             --restart unless-stopped \
@@ -88,9 +90,10 @@ jobs:
             --env-file .env \
             -e NODE_ENV=production \
             -e DOCKER=true \
+            -e DB_HOST=workalong-postgres \
             -v /root/workalong-frontend/certs:/app/certs:ro \
             -v /root/workalong-frontend/docker/ssl:/etc/nginx/ssl:ro \
-            --network workalong-backend_workalong-network \
+            --network workalong_workalong-network \
             workalong-backend:latest
 
       - name: Wait for container to be healthy
