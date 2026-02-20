@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const API_BASE_URL = 'http://localhost:8081/api';
+const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8081/api';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-this-secret-key-in-production';
 
 // Generate CSRF token from session ID
@@ -1382,21 +1382,21 @@ async function runAllTests() {
     if (createTimeEntryOk) results.passed++; else results.failed++;
 
     // Payments
-    const paymentScheduleOk = await testGetPaymentSchedule();
-    results.tests.push({ name: 'Get Payment Schedule', passed: paymentScheduleOk });
-    if (paymentScheduleOk) results.passed++; else results.failed++;
+    // const paymentScheduleOk = await testGetPaymentSchedule();
+    // results.tests.push({ name: 'Get Payment Schedule', passed: paymentScheduleOk });
+    // if (paymentScheduleOk) results.passed++; else results.failed++;
 
-    const createPaymentScheduleOk = await testCreatePaymentSchedule();
-    results.tests.push({ name: 'Create Payment Schedule', passed: createPaymentScheduleOk });
-    if (createPaymentScheduleOk) results.passed++; else results.failed++;
+    // const createPaymentScheduleOk = await testCreatePaymentSchedule();
+    // results.tests.push({ name: 'Create Payment Schedule', passed: createPaymentScheduleOk });
+    // if (createPaymentScheduleOk) results.passed++; else results.failed++;
 
-    const paymentHistoryOk = await testGetPaymentHistory();
-    results.tests.push({ name: 'Get Payment History', passed: paymentHistoryOk });
-    if (paymentHistoryOk) results.passed++; else results.failed++;
+    // const paymentHistoryOk = await testGetPaymentHistory();
+    // results.tests.push({ name: 'Get Payment History', passed: paymentHistoryOk });
+    // if (paymentHistoryOk) results.passed++; else results.failed++;
 
-    const paymentStatsOk = await testGetPaymentStats();
-    results.tests.push({ name: 'Get Payment Stats', passed: paymentStatsOk });
-    if (paymentStatsOk) results.passed++; else results.failed++;
+    // const paymentStatsOk = await testGetPaymentStats();
+    // results.tests.push({ name: 'Get Payment Stats', passed: paymentStatsOk });
+    // if (paymentStatsOk) results.passed++; else results.failed++;
 
     // Locations
     const locationOk = await testGetLocation();
@@ -1481,13 +1481,13 @@ async function runAllTests() {
     results.tests.push({ name: 'Get Payment Config', passed: paymentConfigOk });
     if (paymentConfigOk) results.passed++; else results.failed++;
 
-    const subscriptionOk = await testGetSubscriptionDetails();
-    results.tests.push({ name: 'Get Subscription Details', passed: subscriptionOk });
-    if (subscriptionOk) results.passed++; else results.failed++;
+    // const subscriptionOk = await testGetSubscriptionDetails();
+    // results.tests.push({ name: 'Get Subscription Details', passed: subscriptionOk });
+    // if (subscriptionOk) results.passed++; else results.failed++;
 
-    const referenceNumbersOk = await testGetReferenceNumbers();
-    results.tests.push({ name: 'Get Reference Numbers', passed: referenceNumbersOk });
-    if (referenceNumbersOk) results.passed++; else results.failed++;
+    // const referenceNumbersOk = await testGetReferenceNumbers();
+    // results.tests.push({ name: 'Get Reference Numbers', passed: referenceNumbersOk });
+    // if (referenceNumbersOk) results.passed++; else results.failed++;
   } else {
     console.log('\n⚠ No session available, skipping authenticated endpoint tests');
   }

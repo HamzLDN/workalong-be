@@ -9,10 +9,11 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
-      - "3443:3443"
+      - "8443:443"
     environment:
       - PORT=8080
-      - NODE_ENV=development
+      - NODE_ENV=production
+      - DOCKER=true
       - DB_HOST=workalong-postgres
       - DB_PORT=5432
       - DB_USER=workalong

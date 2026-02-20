@@ -42,6 +42,7 @@ COPY *.js ./
 COPY middleware/ ./middleware/
 COPY routes/ ./routes/
 COPY lib/ ./lib/
+COPY services/ ./services/
 RUN mkdir -p ./certs
 
 # Create SSL directory for certificates
