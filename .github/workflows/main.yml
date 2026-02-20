@@ -30,23 +30,68 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Setup environment file for server
+        run: |
+          echo "Setting up .env file for backend server..."
+          # Copy .env from the actual backend directory to the workspace
+          if [ -f "/root/workalong-backend/.env" ]; then
+            echo "Copying .env from /root/workalong-backend/ to workspace"
+            cp /root/workalong-backend/.env .env
+            echo "✅ .env file copied"
+            echo "Verifying .env contains required database variables:"
+            grep -E "^DB_(HOST|PORT|USER|PASSWORD|NAME)=" .env | sed 's/\(PASSWORD\)=.*/\1=***/' || echo "No DB_ variables found"
+          else
+            echo "⚠ WARNING: .env file not found at /root/workalong-backend/.env"
+            echo "Server may not be able to connect to database"
+          fi
+          
+      - name: Verify database connectivity
+        run: |
+          echo "Verifying database connectivity..."
+          if [ -f ".env" ]; then
+            # Source .env to get DB variables (safely)
+            set -a
+            source .env 2>/dev/null || true
+            set +a
+            
+            # Check if PostgreSQL is accessible (in dev mode, port is 5433)
+            DB_PORT=${DB_PORT:-5433}
+            DB_HOST=${DB_HOST:-localhost}
+            echo "Attempting to connect to database at $DB_HOST:$DB_PORT..."
+            
+            # Try to connect using psql if available, or just check if port is open
+            if command -v psql >/dev/null 2>&1; then
+              PGPASSWORD="${DB_PASSWORD}" psql -h "$DB_HOST" -p "$DB_PORT" -U "${DB_USER:-workalong}" -d "${DB_NAME:-users}" -c "SELECT 1;" >/dev/null 2>&1 && echo "✅ Database connection successful" || echo "⚠ Database connection test failed (may still work if using different auth)"
+            else
+              # Just check if port is open
+              timeout 2 bash -c "echo > /dev/tcp/$DB_HOST/$DB_PORT" 2>/dev/null && echo "✅ Database port $DB_PORT is open" || echo "⚠ Cannot reach database port $DB_PORT"
+            fi
+          else
+            echo "⚠ Skipping database check - no .env file"
+          fi
+
       - name: Launch backend server for testing
         run: |
           echo "Starting backend server in dev mode..."
           echo "Current directory: $(pwd)"
           echo "Working directory: ${{ github.workspace }}"
+          echo "Checking for .env file:"
+          ls -la .env || echo ".env file not found in current directory"
           # Set a dummy Stripe test key for dev mode to prevent initialization errors
           # Payment endpoints will fail gracefully with API errors
           export STRIPE_SECRET_KEY="${STRIPE_SECRET_KEY:-sk_test_00000000000000000000000000000000000000000000000000}"
+          # Start server and capture both stdout and stderr
           NODE_ENV=dev npm run dev > /tmp/backend.log 2>&1 &
           SERVER_PID=$!
           echo $SERVER_PID > /tmp/backend.pid
           echo "Backend server started with PID: $SERVER_PID"
           echo "Waiting a moment for server to initialize..."
-          sleep 3
+          sleep 5
           echo "Checking if process is still running..."
           if ps -p $SERVER_PID > /dev/null 2>&1; then
             echo "✅ Server process is running"
+            echo "Recent server logs:"
+            tail -30 /tmp/backend.log || echo "No logs available yet"
           else
             echo "❌ Server process died immediately. Logs:"
             cat /tmp/backend.log
@@ -137,7 +182,31 @@ jobs:
             cp /root/workalong-backend/.env .env || echo "Failed to copy .env"
           fi
           
-          node scripts/test-api-endpoints.js
+          # Check server status before running tests
+          echo "Checking server status before tests..."
+          if [ -f /tmp/backend.pid ]; then
+            PID=$(cat /tmp/backend.pid)
+            if ps -p $PID > /dev/null 2>&1; then
+              echo "✅ Server is running (PID: $PID)"
+            else
+              echo "❌ Server is not running!"
+              echo "Server logs:"
+              cat /tmp/backend.log || echo "No logs available"
+              exit 1
+            fi
+          fi
+          
+          node scripts/test-api-endpoints.js || TEST_EXIT_CODE=$?
+          
+          # If tests failed, show server logs
+          if [ "${TEST_EXIT_CODE:-0}" -ne 0 ]; then
+            echo "=========================================="
+            echo "Tests failed. Showing server logs:"
+            echo "=========================================="
+            cat /tmp/backend.log || echo "No logs available"
+            echo "=========================================="
+            exit $TEST_EXIT_CODE
+          fi
         env:
           NODE_OPTIONS: '--experimental-vm-modules'
           API_BASE_URL: http://localhost:8081/api
