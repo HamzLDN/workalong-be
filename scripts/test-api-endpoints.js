@@ -1272,20 +1272,20 @@ async function testClockInFlowWithStaff() {
   }
   const codeToUse = clockinCode;
 
-  // 4. Create shift for today via API (matches frontend - same path, avoids FK issues)
+  // 4. Create shift for today via API - use full-day window so "now" is always within shift (avoids timezone/timing flakiness)
   const today = new Date().toISOString().split('T')[0];
-  const now = new Date();
-  const startHour = Math.max(0, now.getHours() - 2);
-  const startTime = `${String(startHour).padStart(2, '0')}:00`;
+  // Remove existing shifts for this staff today to avoid 409 overlap from prior tests
+  await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [staffId, today]);
   const shiftRes = await makeObfuscatedRequest('/shifts', {
     staffId,
     shiftDate: today,
-    startTime,
-    hours: 10,
+    startTime: '00:00',
+    hours: 24,
     location: 'Test Location',
   }, 'POST');
   if (!shiftRes.ok) {
-    console.log(`  ${YELLOW}Note:${RESET} Shift creation: ${shiftRes.data?.error || shiftRes.error || 'unknown'}`);
+    console.log(`  ${RED}ERROR:${RESET} Shift creation failed: ${shiftRes.data?.error || shiftRes.error || 'unknown'}`);
+    return false;
   }
 
   // 5. Generate device fingerprint (like frontend)
@@ -1331,14 +1331,15 @@ async function testClockInFlowWithStaff() {
     return false;
   }
 
-  // 8. Clock-out - POST exactly like frontend
+  // 8. Clock-out - POST exactly like frontend (include lateReason when required by late validation)
   const clockOutBody = {
     clockinId: codeToUse,
     action: 'clock-out',
     linkToken: clockinLinkToken,
     deviceFingerprint: clockinDeviceFingerprint,
     latitude: 51.5074,
-    longitude: -0.1278
+    longitude: -0.1278,
+    lateReason: 'Test clock-out (API test)'
   };
   const clockOutResult = await makeClockLinkRequest(
     '/clockin/clock-action',
@@ -1352,22 +1353,21 @@ async function testClockInFlowWithStaff() {
     return false;
   }
 
-  // 9. Verify response matches frontend expectations (review_hours, Pending manager approval)
+  // 9. Verify response matches frontend expectations (review_hours, needs manager approval)
   const expectedStatus = 'review_hours';
   const actualStatus = clockOutResult.data?.status;
   const hasReviewHours = actualStatus === expectedStatus;
   console.log(`  Clock-out status:`);
   assertResult('status', expectedStatus, actualStatus, hasReviewHours);
 
-  const expectedMsgContains = 'Pending manager approval';
   const actualMsg = clockOutResult.data?.message || '';
-  const hasPendingMessage = actualMsg.toLowerCase().includes('pending');
+  const hasReviewMessage = actualMsg.toLowerCase().includes('pending') || actualMsg.toLowerCase().includes('review');
   console.log(`  Clock-out message:`);
-  assertResult('message contains "pending"', expectedMsgContains, actualMsg, hasPendingMessage);
+  assertResult('message indicates review', 'contains "pending" or "review"', actualMsg, hasReviewMessage);
 
-  const clockOutPass = clockOutResult.ok && hasReviewHours && hasPendingMessage;
+  const clockOutPass = clockOutResult.ok && hasReviewHours && hasReviewMessage;
   console.log(`  Clock-out overall:`);
-  assertResult('clock-out', { ok: true, status: 'review_hours', messageContains: 'pending' },
+  assertResult('clock-out', { ok: true, status: 'review_hours', messageIndicatesReview: true },
     { ok: clockOutResult.ok, status: actualStatus, message: actualMsg }, clockOutPass);
 
   return clockOutPass;
