@@ -113,6 +113,10 @@ const PUBLIC_ENDPOINTS = [
   '/api/auth/csrf-token',
   '/auth/session-id',
   '/api/auth/session-id',
+  '/activities',
+  '/api/activities',
+  '/activities/stats',
+  '/api/activities/stats',
   '/payment/webhook',
   '/api/payment/webhook',
   '/payment/config',
@@ -122,18 +126,20 @@ const PUBLIC_ENDPOINTS = [
 ];
 
 function isPublicEndpoint(path) {
-  
+  if (!path) return false;
   // Remove query string
   const cleanPath = path.split('?')[0];
-  // Normalize path
+  // Normalize path - handle both /api/activities and /activities
   let normalized = cleanPath;
   if (!normalized.startsWith('/')) {
     normalized = '/' + normalized;
   }
+  // Strip /api prefix if present (backend may receive /api/activities or /activities depending on proxy)
   if (normalized.startsWith('/api/')) {
-    normalized = normalized.substring(4);
+    normalized = '/' + normalized.substring(5); // /api/activities -> /activities
   }
-  return PUBLIC_ENDPOINTS.includes(normalized) || PUBLIC_ENDPOINTS.includes(cleanPath);
+  const isPublic = PUBLIC_ENDPOINTS.includes(normalized) || PUBLIC_ENDPOINTS.includes(cleanPath) || PUBLIC_ENDPOINTS.includes('/api' + normalized);
+  return isPublic;
 }
 
 function hasRequestBody(req) {
