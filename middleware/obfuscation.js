@@ -109,6 +109,8 @@ const PUBLIC_ENDPOINTS = [
   '/api/auth/reset-password',
   '/auth/verify-code',
   '/api/auth/verify-code',
+  '/auth/csrf-token',
+  '/api/auth/csrf-token',
   '/auth/2fa/email/enable',
   '/api/auth/2fa/email/enable',
   '/auth/2fa/email/disable',
@@ -160,18 +162,14 @@ export async function verifyObfuscatedRequest(req, res, next) {
   try {
     const obfuscationEnabled = req.headers['x-obfuscation-enabled'] === 'true';
     const isPublic = isPublicEndpoint(req.path);
-    const hasData = hasRequestBody(req);
     
-    // Allow non-obfuscated requests only for:
-    // 1. Public endpoints (signup, signin, health, etc.)
-    // 2. GET/HEAD requests to public endpoints
-    // 3. Requests without data
-    if (!obfuscationEnabled && (isPublic || !hasData)) {
+    // Public endpoints don't require obfuscation
+    if (isPublic) {
       return next();
     }
     
-    // For authenticated endpoints with data, require obfuscation
-    if (!obfuscationEnabled && hasData && !isPublic) {
+    // All non-public endpoints require obfuscation (including GET like /activities, /staff)
+    if (!obfuscationEnabled) {
       await logSecurityEvent('obfuscation_required', {
         ipAddress: req.ip,
         endpoint: req.path,
@@ -179,19 +177,14 @@ export async function verifyObfuscatedRequest(req, res, next) {
         details: {
           hasBody: !!req.body,
           contentType: req.headers['content-type'],
-          isPublicEndpoint: isPublic
+          requestMethod: req.method
         },
         severity: 'warning'
       });
       return res.status(400).json({ 
-        error: 'Obfuscation required for data-carrying requests',
-        message: 'All requests containing data must use obfuscation. Include X-Obfuscation-Enabled: true header.'
+        error: 'Obfuscation required',
+        message: 'All requests to this endpoint must use obfuscation. Include X-Obfuscation-Enabled: true header.'
       });
-    }
-    
-    // If obfuscation is not enabled and request doesn't need it, continue
-    if (!obfuscationEnabled) {
-      return next();
     }
 
     let sessionId = req.cookies.sessionId;
@@ -200,6 +193,9 @@ export async function verifyObfuscatedRequest(req, res, next) {
       if (authHeader.startsWith('Bearer ')) {
         sessionId = authHeader.replace('Bearer ', '').trim();
       }
+    }
+    if (!sessionId && req.headers['x-link-token'] && req.headers['x-device-fingerprint']) {
+      sessionId = `clocklink:${req.headers['x-link-token']}:${req.headers['x-device-fingerprint']}`;
     }
 
     if (!sessionId || sessionId === 'undefined' || sessionId === 'null') {

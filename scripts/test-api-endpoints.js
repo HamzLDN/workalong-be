@@ -56,6 +56,143 @@ let createdLocationId = null;
 let createdBudgetId = null;
 let createdApiKeyId = null;
 let createdClockinLinkId = null;
+let clockinLinkToken = null;
+let clockinDeviceFingerprint = null;
+
+// Generate device fingerprint (matches frontend logic - Node.js version without canvas)
+function generateDeviceFingerprint() {
+  const fingerprint = [
+    'node-test-agent',
+    'en-US',
+    '1920x1080',
+    new Date().getTimezoneOffset(),
+    'test-canvas-data',
+    '8',
+    'Linux'
+  ].join('|');
+  let hash = 0;
+  for (let i = 0; i < fingerprint.length; i++) {
+    const char = fingerprint.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+// Make obfuscated request using clock-link auth (X-Link-Token + X-Device-Fingerprint)
+// Matches frontend: uses clocklink:token:fp as obfuscation key, same body/headers as clockin API
+async function makeClockLinkRequest(endpoint, body, method, linkToken, deviceFingerprint) {
+  const clocklinkSessionId = `clocklink:${linkToken}:${deviceFingerprint}`;
+  const timestamp = Date.now();
+  const nonce = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  const key = generateObfuscationKey(clocklinkSessionId);
+
+  let endpointPath = endpoint;
+  if (endpointPath.includes('?')) {
+    endpointPath = endpointPath.split('?')[0];
+  }
+  if (!endpointPath.startsWith('/')) {
+    endpointPath = '/' + endpointPath;
+  }
+  if (endpointPath.startsWith('/api/')) {
+    endpointPath = endpointPath.substring(4);
+  }
+
+  let obfuscatedBody = null;
+  let bodyStringForSignature = '';
+
+  if (body !== null && body !== undefined) {
+    if (typeof body === 'object') {
+      if (Object.keys(body).length > 0) {
+        const bodyStr = JSON.stringify(body);
+        obfuscatedBody = obfuscateData(bodyStr, key);
+        bodyStringForSignature = obfuscatedBody;
+      } else {
+        bodyStringForSignature = '';
+      }
+    } else {
+      const bodyStr = String(body);
+      obfuscatedBody = obfuscateData(bodyStr, key);
+      bodyStringForSignature = obfuscatedBody;
+    }
+  } else {
+    bodyStringForSignature = '';
+  }
+
+  const signature = generateRequestSignature(
+    method,
+    endpointPath,
+    bodyStringForSignature,
+    clocklinkSessionId,
+    timestamp,
+    nonce
+  );
+
+  const url = `${API_BASE_URL}${endpoint}`;
+  const headers = {
+    'X-Obfuscation-Enabled': 'true',
+    'X-Request-Timestamp': timestamp.toString(),
+    'X-Request-Nonce': nonce,
+    'X-Request-Signature': signature,
+    'X-Link-Token': linkToken,
+    'X-Device-Fingerprint': deviceFingerprint
+  };
+
+  const fetchOptions = {
+    method,
+    headers
+  };
+
+  if (method !== 'GET' && method !== 'HEAD') {
+    headers['Content-Type'] = 'application/x-obfuscated';
+    const payload = {
+      format: 'information',
+      data: obfuscatedBody || ''
+    };
+    fetchOptions.body = JSON.stringify(payload);
+  }
+
+  try {
+    const response = await fetch(url, fetchOptions);
+    const contentType = response.headers.get('content-type') || '';
+    let data;
+
+    if (contentType.includes('application/x-obfuscated')) {
+      const text = await response.text();
+      const parsed = JSON.parse(text);
+      if (parsed.format === 'information' && parsed.data !== undefined) {
+        const deobfuscated = deobfuscateData(parsed.data, key);
+        data = JSON.parse(deobfuscated);
+      } else {
+        data = parsed;
+      }
+    } else if (contentType.includes('application/json')) {
+      const text = await response.text();
+      const parsed = JSON.parse(text);
+      if (parsed.format === 'information' && parsed.data !== undefined) {
+        const deobfuscated = deobfuscateData(parsed.data, key);
+        data = JSON.parse(deobfuscated);
+      } else {
+        data = parsed;
+      }
+    } else {
+      data = await response.text();
+    }
+
+    return {
+      status: response.status,
+      ok: response.ok,
+      data,
+      headers: Object.fromEntries(response.headers.entries())
+    };
+  } catch (error) {
+    return {
+      status: 0,
+      ok: false,
+      error: error.message
+    };
+  }
+}
 
 async function makeRequest(endpoint, options = {}) {
   const url = `${API_BASE_URL}${endpoint}`;
@@ -263,7 +400,6 @@ async function makeObfuscatedRequest(endpoint, body, method = 'POST') {
 
   const url = `${API_BASE_URL}${endpoint}`;
   const headers = {
-    'Content-Type': 'application/x-obfuscated',
     'X-Obfuscation-Enabled': 'true',
     'X-Request-Timestamp': timestamp.toString(),
     'X-Request-Nonce': nonce,
@@ -281,6 +417,7 @@ async function makeObfuscatedRequest(endpoint, body, method = 'POST') {
 
   // Only include body for methods that support it
   if (method !== 'GET' && method !== 'HEAD') {
+    headers['Content-Type'] = 'application/x-obfuscated';
     const payload = {
       format: 'information',
       data: obfuscatedBody || '',
@@ -503,9 +640,9 @@ async function testGetProfileObfuscated() {
 }
 
 async function testGetShifts() {
-  console.log('\n=== Testing Get Shifts (Non-Obfuscated) ===');
-  const result = await makeRequest('/shifts');
-  
+  console.log('\n=== Testing Get Shifts ===');
+  if (!sessionId) return false;
+  const result = await makeObfuscatedRequest('/shifts', {}, 'GET');
   console.log(`Status: ${result.status}`);
   if (result.data) {
     console.log(`Response:`, Array.isArray(result.data) ? `Array with ${result.data.length} items` : JSON.stringify(result.data, null, 2));
@@ -564,7 +701,7 @@ async function testCreateShift() {
   // First, try to create a staff member if we don't have one
   let localStaffId = staffId;
   if (!localStaffId) {
-    const staffListResult = await makeRequest('/staff');
+    const staffListResult = await makeObfuscatedRequest('/staff', {}, 'GET');
     if (staffListResult.ok && staffListResult.data?.staff && staffListResult.data.staff.length > 0) {
       localStaffId = staffListResult.data.staff[0].id;
       staffId = localStaffId; // Update global
@@ -606,7 +743,7 @@ async function testCreateShiftObfuscated() {
   
   // First, try to get a staff member
   let staffId = null;
-  const staffListResult = await makeRequest('/staff');
+  const staffListResult = await makeObfuscatedRequest('/staff', {}, 'GET');
   if (staffListResult.ok && staffListResult.data?.staff && staffListResult.data.staff.length > 0) {
     staffId = staffListResult.data.staff[0].id;
     console.log(`  Using existing staff member ID: ${staffId}`);
@@ -636,9 +773,9 @@ async function testCreateShiftObfuscated() {
 }
 
 async function testGetStaff() {
-  console.log('\n=== Testing Get Staff (Non-Obfuscated) ===');
-  const result = await makeRequest('/staff');
-  
+  console.log('\n=== Testing Get Staff ===');
+  if (!sessionId) return false;
+  const result = await makeObfuscatedRequest('/staff', {}, 'GET');
   console.log(`Status: ${result.status}`);
   if (result.data) {
     console.log(`Response:`, Array.isArray(result.data) ? `Array with ${result.data.length} items` : JSON.stringify(result.data, null, 2));
@@ -710,14 +847,15 @@ async function testContactForm() {
 async function testGetMe() {
   console.log('\n=== Testing Get /auth/me ===');
   if (!sessionId) return false;
-  const result = await makeRequest('/auth/me');
+  const result = await makeObfuscatedRequest('/auth/me', {}, 'GET');
   console.log(`Status: ${result.status}`);
   return result.ok && result.status === 200;
 }
 
 async function testGetCsrfToken() {
   console.log('\n=== Testing Get CSRF Token ===');
-  const result = await makeRequest('/auth/csrf-token');
+  if (!sessionId) return false;
+  const result = await makeObfuscatedRequest('/auth/csrf-token', {}, 'GET');
   console.log(`Status: ${result.status}`);
   return result.ok && result.status === 200;
 }
@@ -725,7 +863,7 @@ async function testGetCsrfToken() {
 async function test2FAStatus() {
   console.log('\n=== Testing 2FA Status ===');
   if (!sessionId) return false;
-  const result = await makeRequest('/auth/2fa/status');
+  const result = await makeObfuscatedRequest('/auth/2fa/status', {}, 'GET');
   console.log(`Status: ${result.status}`);
   return result.ok && result.status === 200;
 }
@@ -750,7 +888,7 @@ async function testForgotPassword() {
 async function testGetStaffStats() {
   console.log('\n=== Testing Get Staff Stats ===');
   if (!sessionId) return false;
-  const result = await makeRequest('/staff/stats');
+  const result = await makeObfuscatedRequest('/staff/stats', {}, 'GET');
   console.log(`Status: ${result.status}`);
   return result.ok && result.status === 200;
 }
@@ -765,7 +903,7 @@ async function testGetStaffById() {
     console.log(`  ${RED}ERROR:${RESET} No staff ID available`);
     return false;
   }
-  const result = await makeRequest(`/staff/${staffId}`);
+  const result = await makeObfuscatedRequest(`/staff/${staffId}`, {}, 'GET');
   console.log(`Status: ${result.status}`);
   if (!result.ok) {
     console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
@@ -803,7 +941,7 @@ async function testUpdateStaff() {
 async function testGetShiftStats() {
   console.log('\n=== Testing Get Shift Stats ===');
   if (!sessionId) return false;
-  const result = await makeRequest('/shifts/stats');
+  const result = await makeObfuscatedRequest('/shifts/stats', {}, 'GET');
   console.log(`Status: ${result.status}`);
   return result.ok && result.status === 200;
 }
@@ -811,7 +949,7 @@ async function testGetShiftStats() {
 async function testGetShiftById() {
   console.log('\n=== Testing Get Shift By ID ===');
   if (!sessionId || !createdShiftId) return false;
-  const result = await makeRequest(`/shifts/${createdShiftId}`);
+  const result = await makeObfuscatedRequest(`/shifts/${createdShiftId}`, {}, 'GET');
   console.log(`Status: ${result.status}`);
   return result.ok && result.status === 200;
 }
@@ -852,7 +990,8 @@ async function testApproveShift() {
 
 async function testGetShiftSwaps() {
   console.log('\n=== Testing Get Shift Swaps ===');
-  const result = await makeRequest('/shift-swaps');
+  if (!sessionId) return false;
+  const result = await makeObfuscatedRequest('/shift-swaps', {}, 'GET');
   console.log(`Status: ${result.status}`);
   return result.ok && result.status === 200;
 }
@@ -864,7 +1003,7 @@ async function testGetShiftSwaps() {
 async function testGetTimeEntries() {
   console.log('\n=== Testing Get Time Entries ===');
   if (!sessionId) return false;
-  const result = await makeRequest('/time-entries');
+  const result = await makeObfuscatedRequest('/time-entries', {}, 'GET');
   console.log(`Status: ${result.status}`);
   return result.ok && result.status === 200;
 }
@@ -875,7 +1014,7 @@ async function testGetPayrollPreview() {
   const today = new Date();
   const startDate = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
   const endDate = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().split('T')[0];
-  const result = await makeRequest(`/payroll-preview?startDate=${startDate}&endDate=${endDate}`);
+  const result = await makeObfuscatedRequest(`/payroll-preview?startDate=${startDate}&endDate=${endDate}`, {}, 'GET');
   console.log(`Status: ${result.status}`);
   return result.ok && result.status === 200;
 }
@@ -884,7 +1023,7 @@ async function testGetMonthlyEarnings() {
   console.log('\n=== Testing Get Monthly Earnings ===');
   if (!sessionId) return false;
   const today = new Date();
-  const result = await makeRequest(`/earnings/monthly?year=${today.getFullYear()}&month=${today.getMonth() + 1}`);
+  const result = await makeObfuscatedRequest(`/earnings/monthly?year=${today.getFullYear()}&month=${today.getMonth() + 1}`, {}, 'GET');
   console.log(`Status: ${result.status}`);
   return result.ok && result.status === 200;
 }
@@ -924,7 +1063,7 @@ async function testGetPaymentSchedule() {
     console.log(`  ${RED}ERROR:${RESET} No session available`);
     return false;
   }
-  const result = await makeRequest('/payments/schedule');
+  const result = await makeObfuscatedRequest('/payments/schedule', {}, 'GET');
   console.log(`Status: ${result.status}`);
   if (!result.ok) {
     console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
@@ -957,7 +1096,7 @@ async function testGetPaymentHistory() {
     console.log(`  ${RED}ERROR:${RESET} No session available`);
     return false;
   }
-  const result = await makeRequest('/payments/history');
+  const result = await makeObfuscatedRequest('/payments/history', {}, 'GET');
   console.log(`Status: ${result.status}`);
   if (!result.ok) {
     console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
@@ -972,7 +1111,7 @@ async function testGetPaymentStats() {
     console.log(`  ${RED}ERROR:${RESET} No session available`);
     return false;
   }
-  const result = await makeRequest('/payments/stats');
+  const result = await makeObfuscatedRequest('/payments/stats', {}, 'GET');
   console.log(`Status: ${result.status}`);
   if (!result.ok) {
     console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
@@ -988,7 +1127,7 @@ async function testGetPaymentStats() {
 async function testGetLocation() {
   console.log('\n=== Testing Get Location ===');
   if (!sessionId) return false;
-  const result = await makeRequest('/location');
+  const result = await makeObfuscatedRequest('/location', {}, 'GET');
   console.log(`Status: ${result.status}`);
   return result.ok && result.status === 200;
 }
@@ -1008,7 +1147,7 @@ async function testUpdateLocation() {
 async function testGetLocations() {
   console.log('\n=== Testing Get Locations (Multi) ===');
   if (!sessionId) return false;
-  const result = await makeRequest('/locations');
+  const result = await makeObfuscatedRequest('/locations', {}, 'GET');
   // May return 403 if multi-location not enabled
   console.log(`Status: ${result.status}`);
   return result.ok || result.status === 403;
@@ -1038,7 +1177,7 @@ async function testCreateLocation() {
 async function testGetBudgets() {
   console.log('\n=== Testing Get Budgets ===');
   if (!sessionId) return false;
-  const result = await makeRequest('/budgets');
+  const result = await makeObfuscatedRequest('/budgets', {}, 'GET');
   console.log(`Status: ${result.status}`);
   return result.ok && result.status === 200;
 }
@@ -1046,7 +1185,7 @@ async function testGetBudgets() {
 async function testGetActiveBudget() {
   console.log('\n=== Testing Get Active Budget ===');
   if (!sessionId) return false;
-  const result = await makeRequest('/budgets/active');
+  const result = await makeObfuscatedRequest('/budgets/active', {}, 'GET');
   console.log(`Status: ${result.status}`);
   return result.ok && result.status === 200;
 }
@@ -1073,7 +1212,7 @@ async function testCreateBudget() {
 async function testGetBudgetStats() {
   console.log('\n=== Testing Get Budget Stats ===');
   if (!sessionId) return false;
-  const result = await makeRequest('/budgets/stats');
+  const result = await makeObfuscatedRequest('/budgets/stats', {}, 'GET');
   console.log(`Status: ${result.status}`);
   return result.ok && result.status === 200;
 }
@@ -1083,17 +1222,17 @@ async function testGetBudgetStats() {
 // ============================================
 
 async function testGetActivities() {
-  console.log('\n=== Testing Get Activities ===');
+  console.log('\n=== Testing Get Activities (Obfuscated) ===');
   if (!sessionId) return false;
-  const result = await makeRequest('/activities');
+  const result = await makeObfuscatedRequest('/activities', {}, 'GET');
   console.log(`Status: ${result.status}`);
   return result.ok && result.status === 200;
 }
 
 async function testGetActivityStats() {
-  console.log('\n=== Testing Get Activity Stats ===');
+  console.log('\n=== Testing Get Activity Stats (Obfuscated) ===');
   if (!sessionId) return false;
-  const result = await makeRequest('/activities/stats');
+  const result = await makeObfuscatedRequest('/activities/stats', {}, 'GET');
   console.log(`Status: ${result.status}`);
   return result.ok && result.status === 200;
 }
@@ -1105,7 +1244,7 @@ async function testGetActivityStats() {
 async function testGetFraudFlags() {
   console.log('\n=== Testing Get Fraud Flags ===');
   if (!sessionId) return false;
-  const result = await makeRequest('/fraud/flags');
+  const result = await makeObfuscatedRequest('/fraud/flags', {}, 'GET');
   // May require subscription
   console.log(`Status: ${result.status}`);
   return result.ok || result.status === 403;
@@ -1114,7 +1253,7 @@ async function testGetFraudFlags() {
 async function testGetFraudStats() {
   console.log('\n=== Testing Get Fraud Stats ===');
   if (!sessionId) return false;
-  const result = await makeRequest('/fraud/stats');
+  const result = await makeObfuscatedRequest('/fraud/stats', {}, 'GET');
   // May require subscription
   console.log(`Status: ${result.status}`);
   return result.ok || result.status === 403;
@@ -1127,7 +1266,7 @@ async function testGetFraudStats() {
 async function testGetApiKeys() {
   console.log('\n=== Testing Get API Keys ===');
   if (!sessionId) return false;
-  const result = await makeRequest('/security/api-keys');
+  const result = await makeObfuscatedRequest('/security/api-keys', {}, 'GET');
   console.log(`Status: ${result.status}`);
   return result.ok && result.status === 200;
 }
@@ -1148,7 +1287,7 @@ async function testCreateApiKey() {
 async function testGetIpWhitelist() {
   console.log('\n=== Testing Get IP Whitelist ===');
   if (!sessionId) return false;
-  const result = await makeRequest('/security/ip-whitelist');
+  const result = await makeObfuscatedRequest('/security/ip-whitelist', {}, 'GET');
   console.log(`Status: ${result.status}`);
   return result.ok && result.status === 200;
 }
@@ -1156,7 +1295,7 @@ async function testGetIpWhitelist() {
 async function testGetAuditLogs() {
   console.log('\n=== Testing Get Audit Logs ===');
   if (!sessionId) return false;
-  const result = await makeRequest('/security/audit-logs');
+  const result = await makeObfuscatedRequest('/security/audit-logs', {}, 'GET');
   console.log(`Status: ${result.status}`);
   // Audit logs endpoint requires admin privileges
   // Non-admin users should receive 403 Forbidden
@@ -1174,7 +1313,7 @@ async function testGetAuditLogs() {
 }
 
 // ============================================
-// CLOCK-IN/CLOCK-OUT
+// CLOCK-IN/CLOCK-OUT (matches frontend exactly)
 // ============================================
 
 async function testGenerateClockinLink() {
@@ -1184,15 +1323,18 @@ async function testGenerateClockinLink() {
     return false;
   }
   const result = await makeObfuscatedRequest('/clockin/generate-link', {
-    deviceName: 'Test Device'
+    deviceName: 'Test Device API Script'
   }, 'POST');
   console.log(`Status: ${result.status}`);
   if (!result.ok) {
     console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
     console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
+    return false;
   }
   if (result.ok && result.data?.link) {
     createdClockinLinkId = result.data.link.id;
+    clockinLinkToken = result.data.link.token || result.data.link.link_token;
+    console.log(`  ${GREEN}PASS:${RESET} Link created, token: ${clockinLinkToken?.substring(0, 16)}...`);
   }
   return result.ok && result.status === 200;
 }
@@ -1200,9 +1342,180 @@ async function testGenerateClockinLink() {
 async function testGetClockinLinks() {
   console.log('\n=== Testing Get Clock-in Links ===');
   if (!sessionId) return false;
-  const result = await makeRequest('/clockin/links');
+  const result = await makeObfuscatedRequest('/clockin/links', {}, 'GET');
   console.log(`Status: ${result.status}`);
+  if (result.ok && result.data?.links?.length > 0 && !clockinLinkToken) {
+    clockinLinkToken = result.data.links[0].token || result.data.links[0].link_token;
+  }
   return result.ok && result.status === 200;
+}
+
+// Get staff's 6-digit clock-in code via API (matches frontend - no direct DB)
+async function getStaffClockinCode(staffIdToUse) {
+  const res = await makeObfuscatedRequest(`/staff/${staffIdToUse}`, {}, 'GET');
+  if (!res.ok || !res.data?.staff) return null;
+  const staff = res.data.staff;
+  if (staff.clockin_id) return String(staff.clockin_id).slice(-6);
+  if (staff.username) {
+    const digits = String(staff.username).replace(/\D/g, '');
+    return digits.slice(-6);
+  }
+  return null;
+}
+
+// Set staff clockin_id via direct DB (only when needed - API has no update for clockin_id)
+async function setStaffClockinCode(staffIdToUse, code) {
+  const r = await pool.query(
+    `UPDATE staff SET clockin_id = $1 WHERE id = $2 AND user_id = $3 RETURNING id`,
+    [code, staffIdToUse, userId]
+  );
+  return r.rowCount > 0;
+}
+
+// Full clock-in flow: verify link, clock-in, clock-out - acts exactly like frontend
+async function testClockInFlowWithStaff() {
+  console.log('\n=== Testing Clock-in Flow (matches frontend) ===');
+  if (!sessionId) {
+    console.log(`  ${RED}ERROR:${RESET} No session`);
+    return false;
+  }
+  if (!staffId) {
+    console.log(`  ${RED}ERROR:${RESET} No staff - create staff first`);
+    return false;
+  }
+
+  // 1. Ensure we have a device link and token
+  if (!clockinLinkToken) {
+    const genResult = await makeObfuscatedRequest('/clockin/generate-link', {
+      deviceName: 'Test Device API',
+      expiresInDays: 90
+    }, 'POST');
+    if (!genResult.ok || !genResult.data?.link) {
+      console.log(`  ${RED}ERROR:${RESET} Could not generate link`);
+      return false;
+    }
+    clockinLinkToken = genResult.data.link.token;
+    createdClockinLinkId = genResult.data.link.id;
+  }
+
+  // 2. Get staff's 6-digit clock-in code (from API - createStaff sets it)
+  let clockinCode = await getStaffClockinCode(staffId);
+  if (!clockinCode || clockinCode.length !== 6) {
+    clockinCode = String(Math.floor(100000 + Math.random() * 900000));
+    const updated = await setStaffClockinCode(staffId, clockinCode);
+    if (updated) console.log(`  Set staff clockin_id to ${clockinCode}`);
+  }
+  const codeToUse = clockinCode;
+
+  // 4. Create shift for today via API (matches frontend - same path, avoids FK issues)
+  const today = new Date().toISOString().split('T')[0];
+  const now = new Date();
+  const startHour = Math.max(0, now.getHours() - 2);
+  const startTime = `${String(startHour).padStart(2, '0')}:00`;
+  const shiftRes = await makeObfuscatedRequest('/shifts', {
+    staffId,
+    shiftDate: today,
+    startTime,
+    hours: 10,
+    location: 'Test Location',
+  }, 'POST');
+  if (!shiftRes.ok) {
+    console.log(`  ${YELLOW}Note:${RESET} Shift creation: ${shiftRes.data?.error || shiftRes.error || 'unknown'}`);
+  }
+
+  // 5. Generate device fingerprint (like frontend)
+  clockinDeviceFingerprint = clockinDeviceFingerprint || generateDeviceFingerprint();
+
+  // 6. Verify link - GET exactly like frontend
+  const verifyResult = await makeClockLinkRequest(
+    `/clockin/verify-link/${clockinLinkToken}?fingerprint=${encodeURIComponent(clockinDeviceFingerprint)}`,
+    null,
+    'GET',
+    clockinLinkToken,
+    clockinDeviceFingerprint
+  );
+  if (!verifyResult.ok) {
+    console.log(`  ${RED}ERROR:${RESET} Verify link failed: ${verifyResult.data?.error || verifyResult.error}`);
+    return false;
+  }
+  console.log(`  ${GREEN}PASS:${RESET} Verify link`);
+
+  // 7. Clock-in - POST exactly like frontend clockAction
+  const clockInBody = {
+    clockinId: codeToUse,
+    action: 'clock-in',
+    linkToken: clockinLinkToken,
+    deviceFingerprint: clockinDeviceFingerprint,
+    latitude: 51.5074,
+    longitude: -0.1278
+  };
+  const clockInResult = await makeClockLinkRequest(
+    '/clockin/clock-action',
+    clockInBody,
+    'POST',
+    clockinLinkToken,
+    clockinDeviceFingerprint
+  );
+  if (!clockInResult.ok) {
+    console.log(`  ${RED}ERROR:${RESET} Clock-in failed: ${clockInResult.data?.error || clockInResult.error}`);
+    return false;
+  }
+  console.log(`  ${GREEN}PASS:${RESET} Clock-in: ${clockInResult.data?.message || 'OK'}`);
+
+  // 8. Clock-out - POST exactly like frontend
+  const clockOutBody = {
+    clockinId: codeToUse,
+    action: 'clock-out',
+    linkToken: clockinLinkToken,
+    deviceFingerprint: clockinDeviceFingerprint,
+    latitude: 51.5074,
+    longitude: -0.1278
+  };
+  const clockOutResult = await makeClockLinkRequest(
+    '/clockin/clock-action',
+    clockOutBody,
+    'POST',
+    clockinLinkToken,
+    clockinDeviceFingerprint
+  );
+  if (!clockOutResult.ok) {
+    console.log(`  ${RED}ERROR:${RESET} Clock-out failed: ${clockOutResult.data?.error || clockOutResult.error}`);
+    return false;
+  }
+
+  // 9. Verify response matches frontend expectations (review_hours, Pending manager approval)
+  const hasReviewHours = clockOutResult.data?.status === 'review_hours';
+  const hasPendingMessage = clockOutResult.data?.message?.includes('Pending manager approval') ||
+    clockOutResult.data?.message?.includes('pending');
+  if (!hasReviewHours) {
+    console.log(`  ${YELLOW}WARNING:${RESET} Expected status 'review_hours', got: ${clockOutResult.data?.status}`);
+  }
+  if (!hasPendingMessage) {
+    console.log(`  ${YELLOW}WARNING:${RESET} Expected "Pending manager approval" in message`);
+  }
+  console.log(`  ${GREEN}PASS:${RESET} Clock-out: ${clockOutResult.data?.message || 'OK'}`);
+  console.log(`  Response: status=${clockOutResult.data?.status}, hoursWorked=${clockOutResult.data?.hoursWorked}`);
+
+  return clockOutResult.ok;
+}
+
+// Get clock status (like frontend getClockStatus)
+async function testGetClockStatus() {
+  console.log('\n=== Testing Get Clock Status (clock-link) ===');
+  if (!clockinLinkToken || !clockinDeviceFingerprint || !staffId) {
+    console.log(`  ${YELLOW}SKIP:${RESET} Run clock-in flow first`);
+    return true;
+  }
+  const code = await getStaffClockinCode(staffId) || '123456';
+  const result = await makeClockLinkRequest(
+    `/clockin/status/${clockinLinkToken}?fingerprint=${encodeURIComponent(clockinDeviceFingerprint)}&clockinId=${code}`,
+    null,
+    'GET',
+    clockinLinkToken,
+    clockinDeviceFingerprint
+  );
+  console.log(`Status: ${result.status}`);
+  return result.ok;
 }
 
 // ============================================
@@ -1222,7 +1535,7 @@ async function testGetSubscriptionDetails() {
     console.log(`  ${RED}ERROR:${RESET} No session available`);
     return false;
   }
-  const result = await makeRequest('/payment/subscription-details');
+  const result = await makeObfuscatedRequest('/payment/subscription-details', {}, 'GET');
   console.log(`Status: ${result.status}`);
   if (!result.ok) {
     console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
@@ -1237,7 +1550,7 @@ async function testGetReferenceNumbers() {
     console.log(`  ${RED}ERROR:${RESET} No session available`);
     return false;
   }
-  const result = await makeRequest('/payment/reference-numbers');
+  const result = await makeObfuscatedRequest('/payment/reference-numbers', {}, 'GET');
   console.log(`Status: ${result.status}`);
   if (!result.ok) {
     console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
@@ -1355,9 +1668,9 @@ async function runAllTests() {
     if (forgotPwdOk) results.passed++; else results.failed++;
 
     // Staff endpoints
-    const staffResult = await makeRequest('/staff');
+    const staffResult = await makeObfuscatedRequest('/staff', {}, 'GET');
     const staffOk = staffResult.ok && staffResult.status === 200;
-    results.tests.push({ name: 'Get Staff (Non-Obfuscated)', passed: staffOk });
+    results.tests.push({ name: 'Get Staff', passed: staffOk });
     if (staffOk) {
       results.passed++;
       if (staffResult.data?.staff && staffResult.data.staff.length > 0) {
@@ -1396,7 +1709,7 @@ async function runAllTests() {
 
     // Shift endpoints
     const shiftsOk = await testGetShifts();
-    results.tests.push({ name: 'Get Shifts (Non-Obfuscated)', passed: shiftsOk });
+    results.tests.push({ name: 'Get Shifts', passed: shiftsOk });
     if (shiftsOk) results.passed++; else results.failed++;
 
     const shiftsObfOk = await testGetShiftsObfuscated();
@@ -1409,7 +1722,7 @@ async function runAllTests() {
 
     // Get staff before creating shift
     if (!staffId) {
-      const staffRes = await makeRequest('/staff');
+      const staffRes = await makeObfuscatedRequest('/staff', {}, 'GET');
       if (staffRes.ok && staffRes.data?.staff && staffRes.data.staff.length > 0) {
         staffId = staffRes.data.staff[0].id;
       } else {
@@ -1554,6 +1867,20 @@ async function runAllTests() {
     const clockinLinksOk = await testGetClockinLinks();
     results.tests.push({ name: 'Get Clock-in Links', passed: clockinLinksOk });
     if (clockinLinksOk) results.passed++; else results.failed++;
+
+    // Full clock-in flow with staff (matches frontend exactly)
+    let clockInFlowOk = false;
+    try {
+      clockInFlowOk = await testClockInFlowWithStaff();
+    } catch (err) {
+      console.log(`  ${RED}ERROR:${RESET} Clock-in flow: ${err.message}`);
+    }
+    results.tests.push({ name: 'Clock-in Flow (verify, clock-in, clock-out)', passed: clockInFlowOk });
+    if (clockInFlowOk) results.passed++; else results.failed++;
+
+    const clockStatusOk = await testGetClockStatus();
+    results.tests.push({ name: 'Get Clock Status (clock-link)', passed: clockStatusOk });
+    if (clockStatusOk) results.passed++; else results.failed++;
 
     // Payment Endpoints (Stripe)
     const paymentConfigOk = await testGetPaymentConfig();

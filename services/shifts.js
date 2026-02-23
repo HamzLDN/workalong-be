@@ -210,12 +210,35 @@ export async function getShifts(userId, filters = {}) {
       });
     }
   }
+
+  // Fetch all clock-in/out periods from time_entries so managers see multiple clock-ins per shift
+  const shiftIds = result.rows.map(r => r.id);
+  let clockPeriodsByShift = {};
+  if (shiftIds.length > 0) {
+    const teResult = await pool.query(
+      `SELECT shift_id, clock_in_time, clock_out_time,
+              EXTRACT(EPOCH FROM (clock_out_time - clock_in_time)) / 3600.0 as hours_worked
+       FROM time_entries
+       WHERE shift_id = ANY($1::bigint[]) AND clock_in_time IS NOT NULL AND clock_out_time IS NOT NULL
+       ORDER BY shift_id, clock_in_time`,
+      [shiftIds]
+    );
+    for (const row of teResult.rows) {
+      if (!clockPeriodsByShift[row.shift_id]) clockPeriodsByShift[row.shift_id] = [];
+      clockPeriodsByShift[row.shift_id].push({
+        clock_in_time: row.clock_in_time,
+        clock_out_time: row.clock_out_time,
+        hours_worked: parseFloat(Number(row.hours_worked).toFixed(2))
+      });
+    }
+  }
   
   return result.rows.map(shift => {
     const cleaned = { ...shift };
     cleaned.clocked_in_time = (shift.clocked_in_time === null || shift.clocked_in_time === undefined || shift.clocked_in_time === '') ? null : shift.clocked_in_time;
     cleaned.clocked_out_time = (shift.clocked_out_time === null || shift.clocked_out_time === undefined || shift.clocked_out_time === '') ? null : shift.clocked_out_time;
     cleaned.actual_hours_worked = shift.actual_hours_worked != null ? parseFloat(shift.actual_hours_worked) : 0;
+    cleaned.clock_periods = clockPeriodsByShift[shift.id] || [];
     // Normalize shift_date to YYYY-MM-DD format (PostgreSQL DATE returns as Date object or string)
     if (shift.shift_date instanceof Date) {
       // Convert Date object to YYYY-MM-DD string using local timezone

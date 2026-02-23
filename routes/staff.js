@@ -513,7 +513,6 @@ router.post('/clock-out', requireStaffAuth, async (req, res) => {
     const lateByMs = clockOutTime - scheduledEnd;
     const isLateOver10Mins = lateByMs > 10 * 60 * 1000;
 
-    let shiftStatus = 'approved';
     let notesForEntry = null;
     if (isLateOver10Mins) {
       const reason = typeof lateReason === 'string' ? lateReason.trim() : '';
@@ -524,24 +523,15 @@ router.post('/clock-out', requireStaffAuth, async (req, res) => {
           requiresLateReason: true
         });
       }
-      shiftStatus = 'review_hours';
       notesForEntry = `Late clock-out reason: ${reason}`;
     }
 
-    let updateShiftResult;
-    if (shiftStatus === 'approved') {
-      updateShiftResult = await client.query(
-        `UPDATE shifts SET clocked_out_time = $1, status = 'approved', approved_at = NOW(), approved_by = $2
-         WHERE id = $3 RETURNING id, status, clocked_out_time, approved_at`,
-        [clockOutTime, companyUserId, shiftId]
-      );
-    } else {
-      updateShiftResult = await client.query(
-        `UPDATE shifts SET clocked_out_time = $1, status = 'review_hours', approved_at = NULL, approved_by = NULL
-         WHERE id = $2 RETURNING id, status, clocked_out_time, approved_at`,
-        [clockOutTime, shiftId]
-      );
-    }
+    // Always require manager approval - no auto-approve on clock-out
+    const updateShiftResult = await client.query(
+      `UPDATE shifts SET clocked_out_time = $1, status = 'review_hours', approved_at = NULL, approved_by = NULL
+       WHERE id = $2 RETURNING id, status, clocked_out_time, approved_at`,
+      [clockOutTime, shiftId]
+    );
     if (updateShiftResult.rowCount === 0) {
       await client.query('ROLLBACK');
       return res.status(500).json({ error: 'Failed to update shift' });
@@ -583,18 +573,18 @@ router.post('/clock-out', requireStaffAuth, async (req, res) => {
 
     await client.query('COMMIT');
     res.json({
-      message: shiftStatus === 'review_hours'
+      message: isLateOver10Mins
         ? 'Clocked out successfully. Your hours have been marked for review due to late clock-out.'
-        : 'Clocked out successfully. Shift has been approved and hours logged.',
+        : 'Clocked out successfully. Pending manager approval.',
       timeEntry: updateResult,
       clockInTime,
       clockOutTime,
       totalHoursWorked,
       regularHours,
       overtimeHours,
-      shiftApproved: shiftStatus === 'approved',
+      shiftApproved: false,
       shiftId,
-      status: shiftStatus
+      status: 'review_hours'
     });
   } catch (error) {
     await client.query('ROLLBACK');

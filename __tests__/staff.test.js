@@ -35,6 +35,7 @@ const {
   getStaffStats,
   createTimeEntry,
   getTimeEntries,
+  getPayrollForPeriod,
   getMonthlyEarningsChart,
   deleteTimeEntry,
   createBudget,
@@ -165,37 +166,114 @@ describe('Staff Functions', () => {
   });
 
   describe('getStaffStats', () => {
-    it('should get staff statistics', async () => {
-      const mockStats = {
-        total: 10,
-        active: 8,
-        total_hours: 160.5,
-        total_cost: 2487.75,
-      };
-      mockQueryFn.mockResolvedValue(createMockDbResult([mockStats]));
+    it('should get staff statistics with approved hours only', async () => {
+      mockQueryFn
+        .mockResolvedValueOnce(createMockDbResult([{ count: '5' }])) // totalStaff
+        .mockResolvedValueOnce(createMockDbResult([{ total_hours: '120.50' }])) // hoursResult (approved only)
+        .mockResolvedValueOnce(createMockDbResult([{ total_cost: '1807.50' }])); // payrollResult (approved only)
+      // getBudgetStats may run - mock to avoid errors
+      mockQueryFn.mockResolvedValue(createMockDbResult([]));
 
       const result = await getStaffStats(1);
 
       expect(mockQueryFn).toHaveBeenCalled();
       expect(result).toBeDefined();
+      expect(result.totalStaff).toBe(5);
+      expect(result.hoursThisMonth).toBe(120.5);
+      expect(result.monthlyPayroll).toBe(1807.5);
+    });
+
+    it('should return zero hours/payroll when no approved shifts', async () => {
+      mockQueryFn
+        .mockResolvedValueOnce(createMockDbResult([{ count: '3' }]))
+        .mockResolvedValueOnce(createMockDbResult([{ total_hours: '0' }]))
+        .mockResolvedValueOnce(createMockDbResult([{ total_cost: '0' }]));
+      mockQueryFn.mockResolvedValue(createMockDbResult([]));
+
+      const result = await getStaffStats(1);
+
+      expect(result.hoursThisMonth).toBe(0);
+      expect(result.monthlyPayroll).toBe(0);
+    });
+
+    it('should include approval filter in hours query', async () => {
+      mockQueryFn
+        .mockResolvedValueOnce(createMockDbResult([{ count: '1' }]))
+        .mockResolvedValueOnce(createMockDbResult([{ total_hours: '8' }]))
+        .mockResolvedValueOnce(createMockDbResult([{ total_cost: '120' }]));
+      mockQueryFn.mockResolvedValue(createMockDbResult([]));
+
+      await getStaffStats(1);
+
+      const hoursQuery = mockQueryFn.mock.calls[1][0];
+      expect(hoursQuery).toContain("s.status = 'approved'");
+      expect(hoursQuery).toContain('s.approved_at IS NOT NULL');
+    });
+  });
+
+  describe('getPayrollForPeriod', () => {
+    it('should get payroll for date range with approved shifts only', async () => {
+      const mockStaff = [
+        { staff_id: 1, staff_name: 'John', role: 'Manager', hourly_rate: 15, hours_worked: '40', total_pay: '600' },
+        { staff_id: 2, staff_name: 'Jane', role: 'Worker', hourly_rate: 12, hours_worked: '20', total_pay: '240' },
+      ];
+      mockQueryFn.mockResolvedValue(createMockDbResult(mockStaff));
+
+      const result = await getPayrollForPeriod(1, '2026-02-01', '2026-02-28');
+
+      expect(mockQueryFn).toHaveBeenCalledWith(
+        expect.stringContaining('BETWEEN'),
+        expect.arrayContaining([1, '2026-02-01', '2026-02-28'])
+      );
+      expect(result.staff).toHaveLength(2);
+      expect(result.totals).toBeDefined();
+      expect(result.totals.totalHours).toBe(60);
+      expect(result.totals.totalPay).toBe(840);
+    });
+
+    it('should exclude unapproved shift hours from payroll', async () => {
+      mockQueryFn.mockResolvedValue(createMockDbResult([]));
+
+      await getPayrollForPeriod(1, '2026-02-01', '2026-02-28');
+
+      const query = mockQueryFn.mock.calls[0][0];
+      expect(query).toContain("sh.status = 'approved'");
     });
   });
 
   describe('createTimeEntry', () => {
+    it('should create a time entry with overtime and notes', async () => {
+      const mockEntry = createMockTimeEntry({ overtime_hours: 2, notes: 'Extra shift' });
+      mockQueryFn.mockResolvedValue(createMockDbResult([mockEntry]));
+
+      const result = await createTimeEntry(1, {
+        staffId: 1,
+        date: '2026-02-05',
+        hoursWorked: 10,
+        overtimeHours: 2,
+        notes: 'Extra shift',
+      });
+
+      expect(mockQueryFn).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO time_entries'),
+        [1, 1, '2026-02-05', 10, 2, 'Extra shift']
+      );
+      expect(result.overtime_hours).toBe(2);
+    });
+
     it('should create a time entry', async () => {
       const mockEntry = createMockTimeEntry();
       mockQueryFn.mockResolvedValue(createMockDbResult([mockEntry]));
 
       const result = await createTimeEntry(1, {
         staffId: 1,
-        shiftId: 1,
         date: '2026-02-05',
         hoursWorked: 8.0,
       });
 
       expect(mockQueryFn).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO time_entries'),
-        expect.arrayContaining([1, 1, 1, '2026-02-05', 8.0])
+        expect.arrayContaining([1, 1, '2026-02-05', 8.0])
       );
       expect(result).toBeDefined();
     });

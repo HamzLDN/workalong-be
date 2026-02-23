@@ -78,10 +78,10 @@ export async function createStaff(userId, data) {
     const sanitizedRole = role ? sanitizeString(role) : role;
     
     const result = await client.query(
-      `INSERT INTO staff (user_id, name, email, role, hourly_rate, employment_type, username, password_hash, password_set) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE) 
+      `INSERT INTO staff (user_id, name, email, role, hourly_rate, employment_type, username, password_hash, password_set, clockin_id) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, $9) 
        RETURNING *`,
-      [userId, sanitizedName, sanitizedEmail, sanitizedRole, hourlyRate, employmentType || 'full-time', username, passwordHash]
+      [userId, sanitizedName, sanitizedEmail, sanitizedRole, hourlyRate, employmentType || 'full-time', username, passwordHash, code6]
     );
     const staffId = result.rows[0].id;
     
@@ -306,6 +306,7 @@ export async function getStaffStats(userId) {
          AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL
          AND te.entry_type = 'clock_in_out'
          AND (te.shift_id IS NULL OR s.clock_source = 'staff')
+         AND te.shift_id IS NOT NULL AND s.status = 'approved' AND s.approved_at IS NOT NULL
        ORDER BY te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text), te.id DESC
      )
      SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (clock_out_time - clock_in_time)) / 3600.0), 0)::numeric(10,2) as total_hours 
@@ -324,6 +325,7 @@ export async function getStaffStats(userId) {
          AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL
          AND te.entry_type = 'clock_in_out'
          AND (te.shift_id IS NULL OR s.clock_source = 'staff')
+         AND te.shift_id IS NOT NULL AND s.status = 'approved' AND s.approved_at IS NOT NULL
        ORDER BY te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text), te.id DESC
      )
      SELECT COALESCE(SUM(
@@ -425,6 +427,7 @@ export async function getPayrollForPeriod(userId, startDate, endDate) {
          AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL
          AND te.entry_type = 'clock_in_out'
          AND (te.shift_id IS NULL OR sh.clock_source = 'staff')
+         AND te.shift_id IS NOT NULL AND sh.status = 'approved' AND sh.approved_at IS NOT NULL
        ORDER BY te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text), te.id DESC
      )
      SELECT s.id as staff_id, s.name as staff_name, s.role, s.hourly_rate,
@@ -475,6 +478,7 @@ export async function getMonthlyEarningsChart(userId, year, month) {
          AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL
          AND te.entry_type = 'clock_in_out'
          AND (te.shift_id IS NULL OR sh.clock_source = 'staff')
+         AND te.shift_id IS NOT NULL AND sh.status = 'approved' AND sh.approved_at IS NOT NULL
        ORDER BY te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text), te.id DESC
      )
      SELECT d.date, d.clock_in_time, d.clock_out_time, s.hourly_rate
@@ -740,6 +744,7 @@ export async function getBudgetStats(userId) {
            AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL
            AND te.entry_type = 'clock_in_out'
            AND (te.shift_id IS NULL OR sh.clock_source = 'staff')
+           AND te.shift_id IS NOT NULL AND sh.status = 'approved' AND sh.approved_at IS NOT NULL
          ORDER BY te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text), te.id DESC
        )
        SELECT d.clock_in_time, d.clock_out_time, COALESCE(s.hourly_rate, 0) as hourly_rate

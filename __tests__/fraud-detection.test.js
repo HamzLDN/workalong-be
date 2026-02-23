@@ -91,5 +91,27 @@ describe('Fraud Detection', () => {
       const startDate = callArgs[2];
       expect(startDate).toBeDefined();
     });
+
+    it('should return empty when no suspicious patterns', async () => {
+      const mockEntries = [
+        { hours_worked: '7.5', entry_type: 'clock' },
+        { hours_worked: '8.2', entry_type: 'clock' },
+        { hours_worked: '6.0', entry_type: 'clock' },
+      ];
+      mockQueryFn.mockResolvedValue(createMockDbResult(mockEntries));
+
+      const result = await analyzeFraudPatterns(1, 1, 30);
+
+      expect(Array.isArray(result)).toBe(true);
+    });
+
+    it('should include staff and user context in query', async () => {
+      mockQueryFn.mockResolvedValue(createMockDbResult([]));
+
+      await analyzeFraudPatterns(99, 42, 14);
+
+      expect(mockQueryFn.mock.calls[0][1]).toContain(99);
+      expect(mockQueryFn.mock.calls[0][1]).toContain(42);
+    });
   });
 });

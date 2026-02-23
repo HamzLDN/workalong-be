@@ -238,6 +238,7 @@ router.post('/process/:staffId', requireAuth, async (req, res) => {
              AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL
              AND te.entry_type = 'clock_in_out'
              AND (te.shift_id IS NULL OR s.clock_source = 'staff')
+             AND te.shift_id IS NOT NULL AND s.status = 'approved' AND s.approved_at IS NOT NULL
            ORDER BY te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text), te.id DESC
          )
          SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (d.clock_out_time - d.clock_in_time)) / 3600.0), 0)::numeric(10,2) as hours_worked,
@@ -328,6 +329,7 @@ router.post('/process-all', requireAuth, async (req, res) => {
              AND te2.clock_in_time IS NOT NULL AND te2.clock_out_time IS NOT NULL
              AND te2.entry_type = 'clock_in_out'
              AND (te2.shift_id IS NULL OR sh.clock_source = 'staff')
+             AND te2.shift_id IS NOT NULL AND sh.status = 'approved' AND sh.approved_at IS NOT NULL
            ORDER BY te2.staff_id, te2.date, COALESCE(te2.shift_id::text, 'f' || te2.id::text), te2.id DESC
          )
          SELECT d.staff_id,

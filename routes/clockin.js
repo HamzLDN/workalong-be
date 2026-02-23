@@ -124,7 +124,6 @@ router.post('/clock-action', async (req, res) => {
     if (!deviceFingerprint) return res.status(400).json({ error: 'Device fingerprint is required' });
 
     const raw = String(clockinId || '').trim();
-    // Extract last 6 digits from input - works for "411125", "dan.411125", "dansmith411125", etc.
     const digits = raw.replace(/\D/g, '');
     const code = digits.slice(-6);
     if (code.length !== 6) {
@@ -138,18 +137,24 @@ router.post('/clock-action', async (req, res) => {
     if (linkResult.rows.length === 0) return res.status(404).json({ error: 'Invalid or inactive link' });
     const link = linkResult.rows[0];
     if (link.device_fingerprint && link.device_fingerprint !== deviceFingerprint) {
-      return res.status(403).json({ error: 'Device fingerprint mismatch' });
+      return res.status(403).json({ error: 'Device fingerprint mismatch', code: 'DEVICE_MISMATCH' });
     }
     if (link.expires_at && new Date(link.expires_at) < new Date()) {
       return res.status(410).json({ error: 'Link has expired' });
     }
 
-    // Lookup staff by: 1) clockin_id (if column exists), 2) exact username, 3) last 6 chars of username, 4) last 6 digits from username
     let staffResult = await pool.query(
       `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
-       WHERE s.user_id = $1 AND s.username IS NOT NULL AND RIGHT(TRIM(s.username), 6) = $2`,
+       WHERE s.user_id = $1 AND s.clockin_id = $2`,
       [String(link.user_id), code]
     );
+    if (staffResult.rows.length === 0) {
+      staffResult = await pool.query(
+        `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
+         WHERE s.user_id = $1 AND s.username IS NOT NULL AND RIGHT(TRIM(s.username), 6) = $2`,
+        [String(link.user_id), code]
+      );
+    }
     if (staffResult.rows.length === 0) {
       staffResult = await pool.query(
         `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
@@ -165,21 +170,17 @@ router.post('/clock-action', async (req, res) => {
         [raw, link.user_id]
       );
     }
-    if (staffResult.rows.length === 0) {
+    if (staffResult.rows.length === 0 && raw.length >= 6) {
       staffResult = await pool.query(
         `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
-         WHERE s.user_id = $1 AND s.username IS NOT NULL
-         AND RIGHT(REGEXP_REPLACE(TRIM(s.username), '[^0-9]', '', 'g'), 6) = $2`,
-        [String(link.user_id), code]
+         WHERE s.user_id = $1 AND s.clockin_id = $2`,
+        [String(link.user_id), raw]
       );
     }
     if (staffResult.rows.length === 0) {
-      const dbName = config.db?.database || process.env.DB_NAME || 'unknown';
-      console.log(
-        `[clock-action] Staff not found: db=${dbName}, linkUserId=${link.user_id} (type: ${typeof link.user_id}), code="${code}", raw="${raw}"`
-      );
       return res.status(403).json({
-        error: 'Invalid clock-in ID or staff member not found'
+        error: 'Invalid clock-in ID or staff member not found',
+        code: 'STAFF_NOT_FOUND'
       });
     }
     const staffId = staffResult.rows[0].staff_id;
@@ -192,8 +193,10 @@ router.post('/clock-action', async (req, res) => {
       if (hasValidLocation) {
         const geofenceResult = await checkGeofence(staffId, latitude, longitude);
         if (!geofenceResult.allowed) {
+          console.log('[clock-action] 403: Geofence failed (clock-in)', { staffId, distance: geofenceResult.distance });
           return res.status(403).json({
             error: geofenceResult.error,
+            code: 'GEOFENCE_FAILED',
             requiresLocation: geofenceResult.requiresLocation || false,
             distance: geofenceResult.distance,
             radius: geofenceResult.radius
@@ -203,44 +206,37 @@ router.post('/clock-action', async (req, res) => {
       const existingEntry = await pool.query(
         `SELECT te.*, s.clocked_out_time as shift_clocked_out_time FROM time_entries te
          LEFT JOIN shifts s ON te.shift_id = s.id
-         WHERE te.staff_id = $1 AND te.date = $2 AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NULL
-         AND (s.id IS NULL OR s.clocked_out_time IS NULL) ORDER BY te.clock_in_time DESC LIMIT 1`,
+         WHERE te.staff_id = $1 AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NULL
+         AND (s.id IS NULL OR s.clocked_out_time IS NULL)
+         AND te.date >= $2::date - INTERVAL '7 days'
+         ORDER BY te.clock_in_time DESC LIMIT 1`,
         [staffId, today]
       );
       if (existingEntry.rows.length > 0) {
         return res.status(400).json({ error: 'Already clocked in today. Please clock out first.' });
       }
+      // Find shifts where we're within the shift window AND have hours remaining (allows clock-in again after clock-out)
       const shiftResult = await pool.query(
-        `SELECT id, shift_date, start_time, hours, clocked_in_time FROM shifts
-         WHERE staff_id = $1 AND shift_date = $2 AND status != 'cancelled' ORDER BY start_time ASC`,
-        [staffId, today]
+        `SELECT s.id, s.shift_date, s.start_time, s.hours, s.clocked_in_time
+         FROM shifts s
+         LEFT JOIN (
+           SELECT shift_id, SUM(hours_worked) as total_worked
+           FROM time_entries
+           WHERE clock_out_time IS NOT NULL
+           GROUP BY shift_id
+         ) te ON te.shift_id = s.id
+         WHERE s.staff_id = $1 AND s.status != 'cancelled'
+         AND (s.shift_date + s.start_time) <= $2::timestamptz
+         AND (s.shift_date + s.start_time + COALESCE(s.hours, 0) * INTERVAL '1 hour') >= $2::timestamptz
+         AND COALESCE(te.total_worked, 0) < COALESCE(s.hours, 0)
+         ORDER BY s.shift_date ASC, s.start_time ASC`,
+        [staffId, now]
       );
       if (shiftResult.rows.length === 0) {
-        return res.status(400).json({ error: 'No shift scheduled for today. You can only clock in if you have a scheduled shift.' });
+        return res.status(400).json({ error: 'No shift scheduled with hours remaining. You can only clock in during your scheduled shift.' });
       }
 
-      // Find a shift that hasn't ended yet (staff may have multiple shifts per day)
-      const nowMs = now.getTime();
-      let shift = null;
-      let latestEndMs = 0;
-      for (const s of shiftResult.rows) {
-        const sd = new Date(s.shift_date);
-        const [startH, startM] = (s.start_time || '00:00').toString().split(':').map(Number);
-        const shiftEnd = new Date(sd);
-        shiftEnd.setHours(startH || 0, startM || 0, 0, 0);
-        shiftEnd.setTime(shiftEnd.getTime() + (parseFloat(s.hours) || 0) * 3600000);
-        if (nowMs <= shiftEnd.getTime()) {
-          shift = s;
-          break;
-        }
-        latestEndMs = Math.max(latestEndMs, shiftEnd.getTime());
-      }
-      if (!shift) {
-        const endStr = new Date(latestEndMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        return res.status(400).json({
-          error: `Your shift has already ended. The scheduled end time was ${endStr}.`
-        });
-      }
+      const shift = shiftResult.rows[0];
       const shiftId = shift.id;
       // Prevent duplicate time entries: delete any existing open entries for this staff/date/shift
       // (same logic as staff API clock-in; avoids double-counting hours when using both link + app)
@@ -261,29 +257,32 @@ router.post('/clock-action', async (req, res) => {
         [staffId, today, now, shiftId]
       );
       await pool.query('UPDATE device_links SET last_used_at = NOW() WHERE id = $1', [link.id]);
-      res.json({ message: 'Clocked in successfully', timeEntry: timeEntryResult.rows[0], clockInTime: now });
+      const timeStr = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+      res.json({ message: `Clocked in at ${timeStr}`, timeEntry: timeEntryResult.rows[0], clockInTime: now });
     } else if (action === 'clock-out') {
       const { lateReason } = req.body;
       const now = new Date();
       const today = now.toISOString().split('T')[0];
       const yesterdayStr = new Date(new Date().setDate(new Date().getDate() - 1)).toISOString().split('T')[0];
       const hasValidLocation = typeof latitude === 'number' && typeof longitude === 'number';
+      let geofenceNote = null;
       if (hasValidLocation) {
         const geofenceResult = await checkGeofence(staffId, latitude, longitude);
         if (!geofenceResult.allowed) {
-          return res.status(403).json({
-            error: geofenceResult.error,
-            requiresLocation: geofenceResult.requiresLocation || false,
+          geofenceNote = geofenceResult.error || 'Clocked out outside work area';
+          console.log('[clock-action] Clock-out geofence failed, allowing with note:', {
+            staffId,
             distance: geofenceResult.distance,
-            radius: geofenceResult.radius
+            radius: geofenceResult.radius,
+            error: geofenceResult.error
           });
         }
       }
       const shiftResult = await pool.query(
         `SELECT id, hours, status, clocked_in_time, shift_date, start_time FROM shifts
-         WHERE staff_id = $1 AND (shift_date = $2 OR shift_date = $3)
-         AND clocked_in_time IS NOT NULL AND clocked_out_time IS NULL`,
-        [staffId, today, yesterdayStr]
+         WHERE staff_id = $1 AND clocked_in_time IS NOT NULL AND clocked_out_time IS NULL
+         ORDER BY clocked_in_time DESC`,
+        [staffId]
       );
       // Fallback: if no shift found (deleted by manager, etc), clock out via time_entry
       if (shiftResult.rows.length === 0) {
@@ -298,7 +297,9 @@ router.post('/clock-action', async (req, res) => {
           const entry = entryResult.rows[0];
           const clockInTime = new Date(entry.clock_in_time);
           const totalHoursWorked = (now - clockInTime) / (1000 * 60 * 60);
-          const fallbackNote = 'Shift was removed by manager; clocked out via fallback.';
+          const fallbackNote = geofenceNote
+            ? `Shift was removed by manager; clocked out via fallback. ${geofenceNote}`
+            : 'Shift was removed by manager; clocked out via fallback.';
           // Close only this entry (and any other open entries for this staff to prevent multiple clock-outs)
           await pool.query(
             `UPDATE time_entries SET clock_out_time = $1, hours_worked = $2,
@@ -313,8 +314,10 @@ router.post('/clock-action', async (req, res) => {
             [now, staffId, entry.id, today]
           );
           await pool.query('UPDATE device_links SET last_used_at = NOW() WHERE id = $1', [link.id]);
+          const outStr = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+          const hrsStr = totalHoursWorked.toFixed(2);
           return res.json({
-            message: 'Clocked out successfully. (Note: Your shift was removed, but your hours have been recorded.)',
+            message: `Clocked out at ${outStr}. You worked ${hrsStr} hours.`,
             clockInTime,
             clockOutTime: now,
             hoursWorked: totalHoursWorked,
@@ -356,9 +359,12 @@ router.post('/clock-action', async (req, res) => {
           [staffId, shiftId]
         );
         if (entryResult.rows.length > 0) {
+          const notes = geofenceNote
+            ? `Late clock-out reason: ${reason}. ${geofenceNote}`
+            : `Late clock-out reason: ${reason}`;
           await pool.query(
             `UPDATE time_entries SET clock_out_time = $1, hours_worked = $2, notes = $3 WHERE id = $4`,
-            [clockOutTime, totalHoursWorked, `Late clock-out reason: ${reason}`, entryResult.rows[0].id]
+            [clockOutTime, totalHoursWorked, notes, entryResult.rows[0].id]
           );
         }
         // Close any other open entries for this staff
@@ -368,8 +374,10 @@ router.post('/clock-action', async (req, res) => {
           [clockOutTime, staffId, today]
         );
         await pool.query('UPDATE device_links SET last_used_at = NOW() WHERE id = $1', [link.id]);
+        const outStr = clockOutTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        const hrsStr = ((clockOutTime - clockInTime) / (1000 * 60 * 60)).toFixed(2);
         return res.json({
-          message: 'Clocked out successfully. Your hours have been marked for review due to late clock-out.',
+          message: `Clocked out at ${outStr}. You worked ${hrsStr} hours. (Marked for review – late clock-out.)`,
           clockInTime,
           clockOutTime,
           hoursWorked: (clockOutTime - clockInTime) / (1000 * 60 * 60),
@@ -379,18 +387,26 @@ router.post('/clock-action', async (req, res) => {
 
       const totalHoursWorked = (clockOutTime - clockInTime) / (1000 * 60 * 60);
       await pool.query(
-        `UPDATE shifts SET clocked_out_time = $1, status = 'approved', approved_at = NOW(), approved_by = (SELECT user_id FROM staff WHERE id = $2) WHERE id = $3`,
-        [clockOutTime, staffId, shiftId]
+        `UPDATE shifts SET clocked_out_time = $1, status = 'review_hours', approved_at = NULL, approved_by = NULL WHERE id = $2`,
+        [clockOutTime, shiftId]
       );
       const entryResult = await pool.query(
         `SELECT id FROM time_entries WHERE staff_id = $1 AND shift_id = $2 AND clock_in_time IS NOT NULL AND clock_out_time IS NULL ORDER BY clock_in_time DESC LIMIT 1`,
         [staffId, shiftId]
       );
       if (entryResult.rows.length > 0) {
-        await pool.query(
-          `UPDATE time_entries SET clock_out_time = $1, hours_worked = $2 WHERE id = $3`,
-          [clockOutTime, totalHoursWorked, entryResult.rows[0].id]
-        );
+        const notes = geofenceNote || null;
+        if (notes) {
+          await pool.query(
+            `UPDATE time_entries SET clock_out_time = $1, hours_worked = $2, notes = COALESCE(notes || E'\n', '') || $3 WHERE id = $4`,
+            [clockOutTime, totalHoursWorked, notes, entryResult.rows[0].id]
+          );
+        } else {
+          await pool.query(
+            `UPDATE time_entries SET clock_out_time = $1, hours_worked = $2 WHERE id = $3`,
+            [clockOutTime, totalHoursWorked, entryResult.rows[0].id]
+          );
+        }
       }
       // Close any other open entries for this staff so they can't clock out again
       await pool.query(
@@ -400,11 +416,14 @@ router.post('/clock-action', async (req, res) => {
         [clockOutTime, staffId, today]
       );
       await pool.query('UPDATE device_links SET last_used_at = NOW() WHERE id = $1', [link.id]);
+      const outStr = clockOutTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+      const hrsStr = totalHoursWorked.toFixed(2);
       res.json({
-        message: 'Clocked out successfully',
+        message: `Clocked out at ${outStr}. You worked ${hrsStr} hours. Pending manager approval.`,
         clockInTime,
         clockOutTime,
-        hoursWorked: totalHoursWorked
+        hoursWorked: totalHoursWorked,
+        status: 'review_hours'
       });
     } else {
       return res.status(400).json({ error: 'Invalid action. Use "clock-in" or "clock-out"' });
@@ -432,13 +451,20 @@ router.get('/status/:linkToken', async (req, res) => {
     if (linkResult.rows.length === 0) return res.status(404).json({ error: 'Invalid or inactive link' });
     const link = linkResult.rows[0];
     if (link.device_fingerprint && link.device_fingerprint !== deviceFingerprint) {
-      return res.status(403).json({ error: 'Device fingerprint mismatch' });
+      console.log('[clock-action] 403: Device fingerprint mismatch (status)');
+      return res.status(403).json({ error: 'Device fingerprint mismatch', code: 'DEVICE_MISMATCH' });
     }
-    // Lookup staff by last 6 digits from username (no clockin_id)
-    let staffResult = raw !== code ? await pool.query(
-      `SELECT s.id as staff_id FROM staff s WHERE s.username = $1 AND s.user_id = $2`,
-      [raw, link.user_id]
-    ) : { rows: [] };
+    // Lookup staff by: 1) clockin_id, 2) last 6 chars/digits of username, 3) exact username
+    let staffResult = await pool.query(
+      `SELECT s.id as staff_id FROM staff s WHERE s.user_id = $1 AND s.clockin_id = $2`,
+      [link.user_id, code]
+    );
+    if (staffResult.rows.length === 0 && raw !== code) {
+      staffResult = await pool.query(
+        `SELECT s.id as staff_id FROM staff s WHERE s.username = $1 AND s.user_id = $2`,
+        [raw, link.user_id]
+      );
+    }
     if (staffResult.rows.length === 0) {
       staffResult = await pool.query(
         `SELECT s.id as staff_id FROM staff s
@@ -454,7 +480,10 @@ router.get('/status/:linkToken', async (req, res) => {
         [link.user_id, code]
       );
     }
-    if (staffResult.rows.length === 0) return res.status(403).json({ error: 'Invalid clock-in code' });
+    if (staffResult.rows.length === 0) {
+      console.log('[clock-action] 403: Invalid clock-in code (status)', { code, raw });
+      return res.status(403).json({ error: 'Invalid clock-in code', code: 'STAFF_NOT_FOUND' });
+    }
     const staffId = staffResult.rows[0].staff_id;
     const today = new Date().toISOString().split('T')[0];
     const statusResult = await pool.query(
@@ -463,11 +492,14 @@ router.get('/status/:linkToken', async (req, res) => {
        AND (s.id IS NULL OR s.clocked_out_time IS NULL) ORDER BY te.clock_in_time DESC LIMIT 1`,
       [staffId, today]
     );
-    if (statusResult.rows.length === 0) return res.json({ clockedIn: false });
+    if (statusResult.rows.length === 0) {
+      return res.json({ clockInTime: null, clockOutTime: null });
+    }
+    const entry = statusResult.rows[0];
     res.json({
-      clockedIn: true,
-      timeEntry: statusResult.rows[0],
-      clockInTime: statusResult.rows[0].clock_in_time
+      clockInTime: entry.clock_in_time,
+      clockOutTime: null,
+      timeEntry: entry
     });
   } catch (error) {
     console.error('Get clock status error:', error);

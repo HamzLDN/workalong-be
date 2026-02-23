@@ -18,6 +18,7 @@ jest.unstable_mockModule('../lib/db.js', () => ({
 
 // Now import modules using dynamic import
 const {
+  calculateEndTime,
   getShifts,
   getShiftById,
   createShift,
@@ -38,6 +39,26 @@ describe('Shifts Functions', () => {
     jest.clearAllMocks();
     mockQueryFn.mockClear();
     mockConnectFn.mockClear();
+  });
+
+  describe('calculateEndTime', () => {
+    it('should calculate end time for same-day shift', () => {
+      expect(calculateEndTime('09:00', 8)).toBe('17:00:00');
+      expect(calculateEndTime('10:30', 4)).toBe('14:30:00');
+    });
+
+    it('should handle overnight shifts (wraps to next day)', () => {
+      expect(calculateEndTime('22:00', 8)).toBe('06:00:00');
+      expect(calculateEndTime('23:30', 2)).toBe('01:30:00');
+    });
+
+    it('should handle fractional hours', () => {
+      expect(calculateEndTime('09:00', 2.5)).toBe('11:30:00');
+    });
+
+    it('should handle midnight start', () => {
+      expect(calculateEndTime('00:00', 8)).toBe('08:00:00');
+    });
   });
 
   describe('getShifts', () => {
@@ -103,6 +124,44 @@ describe('Shifts Functions', () => {
         expect.stringContaining('status ='),
         expect.arrayContaining([1, 'scheduled'])
       );
+    });
+
+    it('should include clock_periods from time_entries for each shift', async () => {
+      const mockShifts = [
+        createMockShift({ id: 1, status: 'approved' }),
+        createMockShift({ id: 2, status: 'approved' }),
+      ];
+      const mockTimeEntries = [
+        { shift_id: 1, clock_in_time: new Date('2026-02-05T09:00:00'), clock_out_time: new Date('2026-02-05T11:00:00'), hours_worked: 2 },
+        { shift_id: 1, clock_in_time: new Date('2026-02-05T12:00:00'), clock_out_time: new Date('2026-02-05T17:00:00'), hours_worked: 5 },
+        { shift_id: 2, clock_in_time: new Date('2026-02-06T09:00:00'), clock_out_time: new Date('2026-02-06T17:00:00'), hours_worked: 8 },
+      ];
+      mockQueryFn
+        .mockResolvedValueOnce(createMockDbResult(mockShifts))
+        .mockResolvedValueOnce(createMockDbResult(mockTimeEntries));
+
+      const result = await getShifts(1);
+
+      expect(result).toHaveLength(2);
+      const shift1 = result.find((s) => s.id === 1);
+      expect(shift1.clock_periods).toBeDefined();
+      expect(shift1.clock_periods).toHaveLength(2);
+      expect(shift1.clock_periods[0].hours_worked).toBe(2);
+      expect(shift1.clock_periods[1].hours_worked).toBe(5);
+      const shift2 = result.find((s) => s.id === 2);
+      expect(shift2.clock_periods).toHaveLength(1);
+      expect(shift2.clock_periods[0].hours_worked).toBe(8);
+    });
+
+    it('should return empty clock_periods when no time entries', async () => {
+      const mockShifts = [createMockShift({ id: 1, status: 'approved' })];
+      mockQueryFn
+        .mockResolvedValueOnce(createMockDbResult(mockShifts))
+        .mockResolvedValueOnce(createMockDbResult([]));
+
+      const result = await getShifts(1);
+
+      expect(result[0].clock_periods).toEqual([]);
     });
   });
 
