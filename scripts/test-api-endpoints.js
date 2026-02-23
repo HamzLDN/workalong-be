@@ -9,7 +9,29 @@ dotenv.config();
 const GREEN = '\x1b[32m';
 const RED = '\x1b[31m';
 const YELLOW = '\x1b[33m';
+const CYAN = '\x1b[36m';
 const RESET = '\x1b[0m';
+
+// Assertion helper: shows expected vs actual, returns pass/fail
+function assertResult(testName, expected, actual, passed) {
+  const matchStr = passed ? `${GREEN}✓ MATCH${RESET}` : `${RED}✗ MISMATCH${RESET}`;
+  console.log(`  ${CYAN}Expected:${RESET} ${JSON.stringify(expected)}`);
+  console.log(`  ${CYAN}Actual:${RESET}   ${JSON.stringify(actual)}`);
+  console.log(`  ${CYAN}Result:${RESET}   ${matchStr} ${passed ? 'PASS' : 'FAIL'}`);
+  return passed;
+}
+
+// Helper for status-only checks: expects { status, ok }, logs expected vs actual
+// expectedStatus can be a number (200) or array ([200, 201], [200, 403])
+function assertStatusResponse(testName, result, expectedStatus = 200) {
+  const allowed = Array.isArray(expectedStatus) ? expectedStatus : [expectedStatus];
+  const expected = { status: allowed.length === 1 ? allowed[0] : allowed.join(' or ') };
+  const actual = { status: result?.status ?? 0, ok: result?.ok ?? false };
+  const passed = allowed.includes(result?.status) && (result?.status < 300 ? result?.ok : true);
+  console.log(`  ${testName}:`);
+  assertResult(testName, expected, actual, passed);
+  return passed;
+}
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8081/api';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-this-secret-key-in-production';
@@ -488,18 +510,22 @@ async function testHealthCheck() {
   console.log('\n=== Testing Health Check ===');
   try {
     const result = await makeRequest('/health');
-    console.log(`Status: ${result.status}`);
+    const expected = { status: 200, ok: true };
+    const actual = { status: result.status, ok: result.ok };
+    console.log(`  Health check:`);
+    assertResult('health endpoint', expected, actual, result.ok && result.status === 200);
     if (result.error) {
-      console.error(`${RED}ERROR:${RESET} ${result.error}`);
+      console.error(`  ${RED}ERROR:${RESET} ${result.error}`);
       console.error(`  This usually means the server is not accessible at ${API_BASE_URL}`);
-      console.error(`  Check if the server is running and accessible`);
     }
     if (result.data) {
-      console.log(`Response:`, result.data);
+      console.log(`  Response:`, result.data);
     }
-    return result.ok;
+    return result.ok && result.status === 200;
   } catch (error) {
     console.error(`${RED}ERROR:${RESET} Health check failed with exception:`, error.message);
+    console.log(`  Expected: { status: 200, ok: true }`);
+    console.log(`  Actual: exception - ${error.message}`);
     return false;
   }
 }
@@ -518,12 +544,13 @@ async function testSignup() {
     }),
   });
 
-  console.log(`Status: ${result.status}`);
-  console.log(`Response:`, JSON.stringify(result.data, null, 2));
-  
+  const expected = { ok: true, hasUser: true, status: '200 or 201' };
+  const actual = { ok: result.ok, hasUser: !!result.data?.user, status: result.status };
+  const passed = result.ok && !!result.data?.user && (result.status === 200 || result.status === 201);
+  console.log(`  Signup:`);
+  assertResult('signup', expected, actual, passed);
   if (result.ok && result.data?.user) {
     userId = result.data.user.id;
-    console.log(`${GREEN}PASS:${RESET} Signup successful. User ID: ${userId}`);
     if (sessionId) {
       console.log(`  Session ID: ${sessionId.substring(0, 20)}...`);
     }
@@ -534,31 +561,21 @@ async function testSignup() {
 
 async function testSignupObfuscated() {
   console.log('\n=== Testing Signup (Obfuscated) ===');
-  console.log(`${YELLOW}NOTE:${RESET} Signup/signin endpoints typically do not use obfuscation as they create sessions`);
   const email = `test-obf-${Date.now()}@example.com`;
-  const password = 'TestPassword123!';
-  
-  // Signup without obfuscation first to get a session
   const signupResult = await makeRequest('/auth/signup', {
     method: 'POST',
     body: JSON.stringify({
       email,
-      password,
+      password: 'TestPassword123!',
       name: 'Test User Obf',
     }),
   });
-  
-  if (signupResult.ok && signupResult.data?.user) {
-    console.log(`${GREEN}PASS:${RESET} Signup successful. User ID: ${signupResult.data.user.id}`);
-    if (sessionId) {
-      console.log(`  Session ID: ${sessionId.substring(0, 20)}...`);
-    }
-    return true;
-  }
-  
-  console.log(`Status: ${signupResult.status}`);
-  console.log(`Response:`, JSON.stringify(signupResult.data, null, 2));
-  return false;
+  const expected = { ok: true, hasUser: true, status: '200 or 201' };
+  const actual = { ok: signupResult.ok, hasUser: !!signupResult.data?.user, status: signupResult.status };
+  const passed = signupResult.ok && !!signupResult.data?.user && (signupResult.status === 200 || signupResult.status === 201);
+  console.log(`  Signup (Obfuscated):`);
+  assertResult('signup obfuscated', expected, actual, passed);
+  return passed;
 }
 
 async function testSignin() {
@@ -570,25 +587,19 @@ async function testSignin() {
       password: 'TestPassword123!',
     }),
   });
-
-  console.log(`Status: ${result.status}`);
-  console.log(`Response:`, JSON.stringify(result.data, null, 2));
-  
-  if (result.ok && result.data?.user) {
+  const expected = { ok: true, hasUser: true, status: 200 };
+  const actual = { ok: result.ok, hasUser: !!result.data?.user, status: result.status };
+  const passed = result.ok && !!result.data?.user;
+  console.log(`  Signin:`);
+  assertResult('signin', expected, actual, passed);
+  if (passed) {
     userId = result.data.user.id;
-    console.log(`${GREEN}PASS:${RESET} Signin successful. User ID: ${userId}`);
-    if (sessionId) {
-      console.log(`  Session ID: ${sessionId.substring(0, 20)}...`);
-    }
-    return true;
   }
-  return false;
+  return passed;
 }
 
 async function testSigninObfuscated() {
   console.log('\n=== Testing Signin (Obfuscated) ===');
-  console.log(`${YELLOW}NOTE:${RESET} Signin endpoints typically do not use obfuscation as they create sessions`);
-  // First signin without obfuscation to get a session
   const signinResult = await makeRequest('/auth/signin', {
     method: 'POST',
     body: JSON.stringify({
@@ -596,79 +607,45 @@ async function testSigninObfuscated() {
       password: 'TestPassword123!',
     }),
   });
-  
-  if (signinResult.ok && signinResult.data?.user) {
-    userId = signinResult.data.user.id;
-    console.log(`${GREEN}PASS:${RESET} Signin successful. User ID: ${userId}`);
-    if (sessionId) {
-      console.log(`  Session ID: ${sessionId.substring(0, 20)}...`);
-    }
-    return true;
-  }
-  
-  console.log(`Status: ${signinResult.status}`);
-  console.log(`Response:`, JSON.stringify(signinResult.data, null, 2));
-  return false;
+  const expected = { ok: true, hasUser: true, status: 200 };
+  const actual = { ok: signinResult.ok, hasUser: !!signinResult.data?.user, status: signinResult.status };
+  const passed = signinResult.ok && !!signinResult.data?.user;
+  console.log(`  Signin (Obfuscated):`);
+  assertResult('signin obfuscated', expected, actual, passed);
+  if (passed) userId = signinResult.data.user.id;
+  return passed;
 }
 
 async function testGetProfile() {
   console.log('\n=== Testing Update Profile (Obfuscated) ===');
-  if (!sessionId) {
-    console.log(`${YELLOW}WARNING:${RESET} No session available`);
-    return false;
-  }
-  const result = await makeObfuscatedRequest('/auth/profile', {
-    name: 'Test User Updated',
-  }, 'PUT');
-  
-  console.log(`Status: ${result.status}`);
-  console.log(`Response:`, JSON.stringify(result.data, null, 2));
-  return result.ok;
+  if (!sessionId) return false;
+  const result = await makeObfuscatedRequest('/auth/profile', { name: 'Test User Updated' }, 'PUT');
+  return assertStatusResponse('Update Profile', result, 200);
 }
 
 async function testGetProfileObfuscated() {
   console.log('\n=== Testing Get Profile (Obfuscated, Authenticated) ===');
-  if (!sessionId) {
-    console.log(`${YELLOW}WARNING:${RESET} No session available, skipping obfuscated request`);
-    return false;
-  }
+  if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/auth/profile', { name: 'Test User Obfuscated' }, 'PUT');
-  
-  console.log(`Status: ${result.status}`);
-  console.log(`Response:`, JSON.stringify(result.data, null, 2));
-  return result.ok;
+  return assertStatusResponse('Get Profile (Obfuscated)', result, 200);
 }
 
 async function testGetShifts() {
   console.log('\n=== Testing Get Shifts ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/shifts', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  if (result.data) {
-    console.log(`Response:`, Array.isArray(result.data) ? `Array with ${result.data.length} items` : JSON.stringify(result.data, null, 2));
-  }
-  return result.ok;
+  return assertStatusResponse('Get Shifts', result, 200);
 }
 
 async function testGetShiftsObfuscated() {
   console.log('\n=== Testing Get Shifts (Obfuscated, Authenticated) ===');
-  if (!sessionId) {
-    console.log(`${YELLOW}WARNING:${RESET} No session available, skipping obfuscated request`);
-    return false;
-  }
+  if (!sessionId) return false;
   try {
     const result = await makeObfuscatedRequest('/shifts', {}, 'GET');
-    
-    console.log(`Status: ${result.status}`);
-    if (result.error) {
-      console.log(`Error: ${result.error}`);
-    }
-    if (result.data) {
-      console.log(`Response:`, Array.isArray(result.data) ? `Array with ${result.data.length} items` : JSON.stringify(result.data, null, 2));
-    }
-    return result.ok;
+    return assertStatusResponse('Get Shifts (Obfuscated)', result, 200);
   } catch (error) {
-    console.log(`Error: ${error.message}`);
+    console.log(`  ${RED}ERROR:${RESET} ${error.message}`);
+    assertResult('Get Shifts (Obfuscated)', { status: 200, ok: true }, { error: error.message }, false);
     return false;
   }
 }
@@ -687,11 +664,13 @@ async function createTestStaff() {
     employmentType: 'full-time',
   }, 'POST');
   
-  if (result.ok && result.data?.staff) {
-    console.log(`${GREEN}PASS:${RESET} Staff created: ${result.data.staff.name} (ID: ${result.data.staff.id})`);
+  const passed = result.ok && !!result.data?.staff;
+  console.log(`  Create Staff:`);
+  assertResult('Create Staff', { status: 201, hasStaff: true }, { status: result.status, hasStaff: !!result.data?.staff }, passed);
+  if (passed) {
+    console.log(`  Staff: ${result.data.staff.name} (ID: ${result.data.staff.id})`);
     return result.data.staff.id;
   }
-  console.log(`${YELLOW}WARNING:${RESET} Could not create staff: ${result.status} - ${JSON.stringify(result.data)}`);
   return null;
 }
 
@@ -725,13 +704,10 @@ async function testCreateShift() {
     hours: 8,
     location: 'Main Floor',
   }, 'POST');
-  
-  console.log(`Status: ${result.status}`);
-  console.log(`Response:`, JSON.stringify(result.data, null, 2));
   if (result.ok && result.data?.shift) {
     createdShiftId = result.data.shift.id;
   }
-  return result.status === 201;
+  return assertStatusResponse('Create Shift', result, 201);
 }
 
 async function testCreateShiftObfuscated() {
@@ -757,51 +733,32 @@ async function testCreateShiftObfuscated() {
   }
   
   const today = new Date().toISOString().split('T')[0];
-  // Use a different time to avoid conflict with the non-obfuscated test
   const result = await makeObfuscatedRequest('/shifts', {
     staffId: staffId,
     shiftDate: today,
-    startTime: '14:00', // Different time to avoid conflict
+    startTime: '14:00',
     hours: 4,
     location: 'Main Floor',
   }, 'POST');
-  
-  console.log(`Status: ${result.status}`);
-  console.log(`Response:`, JSON.stringify(result.data, null, 2));
-  // Accept 201 (created) or 409 (conflict - means validation is working)
-  return result.status === 201 || result.status === 409;
+  return assertStatusResponse('Create Shift (Obfuscated)', result, [201, 409]);
 }
 
 async function testGetStaff() {
   console.log('\n=== Testing Get Staff ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/staff', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  if (result.data) {
-    console.log(`Response:`, Array.isArray(result.data) ? `Array with ${result.data.length} items` : JSON.stringify(result.data, null, 2));
-  }
-  return result.ok;
+  return assertStatusResponse('Get Staff', result, 200);
 }
 
 async function testGetStaffObfuscated() {
   console.log('\n=== Testing Get Staff (Obfuscated, Authenticated) ===');
-  if (!sessionId) {
-    console.log(`${YELLOW}WARNING:${RESET} No session available, skipping obfuscated request`);
-    return false;
-  }
+  if (!sessionId) return false;
   try {
     const result = await makeObfuscatedRequest('/staff', {}, 'GET');
-    
-    console.log(`Status: ${result.status}`);
-    if (result.error) {
-      console.log(`Error: ${result.error}`);
-    }
-    if (result.data) {
-      console.log(`Response:`, Array.isArray(result.data) ? `Array with ${result.data.length} items` : JSON.stringify(result.data, null, 2));
-    }
-    return result.ok;
+    return assertStatusResponse('Get Staff (Obfuscated)', result, 200);
   } catch (error) {
-    console.log(`Error: ${error.message}`);
+    console.log(`  ${RED}ERROR:${RESET} ${error.message}`);
+    assertResult('Get Staff (Obfuscated)', { status: 200, ok: true }, { error: error.message }, false);
     return false;
   }
 }
@@ -812,12 +769,9 @@ async function testGetStaffObfuscated() {
 
 async function testContactForm() {
   console.log('\n=== Testing Contact Form (Obfuscated) ===');
-  // Contact form sends data, so it should be obfuscated
-  // But contact form doesn't require authentication, so we'll use regular request
-  // However, if user wants all data requests obfuscated, we need a session first
+  let result;
   if (!sessionId) {
-    // Try to get a session first, or use regular request for public endpoint
-    const result = await makeRequest('/contact', {
+    result = await makeRequest('/contact', {
       method: 'POST',
       body: JSON.stringify({
         name: 'Test User',
@@ -826,18 +780,15 @@ async function testContactForm() {
         message: 'This is a test message'
       })
     });
-    console.log(`Status: ${result.status}`);
-    return result.ok && result.status === 200;
+  } else {
+    result = await makeObfuscatedRequest('/contact', {
+      name: 'Test User',
+      email: `test-${Date.now()}@example.com`,
+      subject: 'Test Subject',
+      message: 'This is a test message'
+    }, 'POST');
   }
-  // If we have a session, use obfuscated request
-  const result = await makeObfuscatedRequest('/contact', {
-    name: 'Test User',
-    email: `test-${Date.now()}@example.com`,
-    subject: 'Test Subject',
-    message: 'This is a test message'
-  }, 'POST');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Contact Form', result, 200);
 }
 
 // ============================================
@@ -848,24 +799,21 @@ async function testGetMe() {
   console.log('\n=== Testing Get /auth/me ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/auth/me', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get /auth/me', result, 200);
 }
 
 async function testGetCsrfToken() {
   console.log('\n=== Testing Get CSRF Token ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/auth/csrf-token', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get CSRF Token', result, 200);
 }
 
 async function test2FAStatus() {
   console.log('\n=== Testing 2FA Status ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/auth/2fa/status', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('2FA Status', result, 200);
 }
 
 async function testForgotPassword() {
@@ -876,8 +824,10 @@ async function testForgotPassword() {
       email: `test-${Date.now()}@example.com`
     })
   });
-  console.log(`Status: ${result.status}`);
-  // May return 200 even if user doesn't exist (security)
+  const expected = { status: 200 };
+  const actual = { status: result.status };
+  console.log(`  Forgot Password:`);
+  assertResult('Forgot Password', expected, actual, result.status === 200);
   return result.status === 200;
 }
 
@@ -889,49 +839,38 @@ async function testGetStaffStats() {
   console.log('\n=== Testing Get Staff Stats ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/staff/stats', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Staff Stats', result, 200);
 }
 
 async function testGetStaffById() {
   console.log('\n=== Testing Get Staff By ID ===');
-  if (!sessionId) {
-    console.log(`  ${RED}ERROR:${RESET} No session available`);
-    return false;
-  }
-  if (!staffId) {
-    console.log(`  ${RED}ERROR:${RESET} No staff ID available`);
+  if (!sessionId || !staffId) {
+    console.log(`  ${RED}ERROR:${RESET} No session or staff ID available`);
     return false;
   }
   const result = await makeObfuscatedRequest(`/staff/${staffId}`, {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  if (!result.ok) {
-    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
+  const passed = assertStatusResponse('Get Staff By ID', result, 200);
+  if (!passed && result?.data) {
     console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
   }
-  return result.ok && result.status === 200;
+  return passed;
 }
 
 async function testUpdateStaff() {
   console.log('\n=== Testing Update Staff (Obfuscated) ===');
-  if (!sessionId) {
-    console.log(`  ${RED}ERROR:${RESET} No session available`);
-    return false;
-  }
-  if (!staffId) {
-    console.log(`  ${RED}ERROR:${RESET} No staff ID available`);
+  if (!sessionId || !staffId) {
+    console.log(`  ${RED}ERROR:${RESET} No session or staff ID available`);
     return false;
   }
   const result = await makeObfuscatedRequest(`/staff/${staffId}`, {
     name: 'Updated Staff Member',
     role: 'Manager'
   }, 'PUT');
-  console.log(`Status: ${result.status}`);
-  if (!result.ok) {
-    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
+  const passed = assertStatusResponse('Update Staff', result, 200);
+  if (!passed && result?.data) {
     console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
   }
-  return result.ok && result.status === 200;
+  return passed;
 }
 
 // ============================================
@@ -942,16 +881,14 @@ async function testGetShiftStats() {
   console.log('\n=== Testing Get Shift Stats ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/shifts/stats', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Shift Stats', result, 200);
 }
 
 async function testGetShiftById() {
   console.log('\n=== Testing Get Shift By ID ===');
   if (!sessionId || !createdShiftId) return false;
   const result = await makeObfuscatedRequest(`/shifts/${createdShiftId}`, {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Shift By ID', result, 200);
 }
 
 async function testUpdateShift() {
@@ -961,8 +898,7 @@ async function testUpdateShift() {
     startTime: '11:00',
     hours: 7
   }, 'PUT');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Update Shift', result, 200);
 }
 
 async function testApproveShift() {
@@ -975,25 +911,19 @@ async function testApproveShift() {
     console.log(`  ${RED}ERROR:${RESET} No shift ID available (createdShiftId: ${createdShiftId})`);
     return false;
   }
-  // For POST with empty body, pass null to ensure empty string is used for signature
   const result = await makeObfuscatedRequest(`/shifts/${createdShiftId}/approve`, null, 'POST');
-  console.log(`Status: ${result.status}`);
-  if (!result.ok) {
-    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
-    console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
-    if (result.data?.error === 'Invalid request signature') {
-      console.log(`  ${YELLOW}WARNING:${RESET} Signature mismatch - checking empty body handling`);
-    }
+  const passed = assertStatusResponse('Approve Shift', result, 200);
+  if (!passed && result?.data?.error) {
+    console.log(`  Response: ${result.data.error}`);
   }
-  return result.ok && result.status === 200;
+  return passed;
 }
 
 async function testGetShiftSwaps() {
   console.log('\n=== Testing Get Shift Swaps ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/shift-swaps', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Shift Swaps', result, 200);
 }
 
 // ============================================
@@ -1004,8 +934,7 @@ async function testGetTimeEntries() {
   console.log('\n=== Testing Get Time Entries ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/time-entries', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Time Entries', result, 200);
 }
 
 async function testGetPayrollPreview() {
@@ -1015,8 +944,7 @@ async function testGetPayrollPreview() {
   const startDate = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
   const endDate = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().split('T')[0];
   const result = await makeObfuscatedRequest(`/payroll-preview?startDate=${startDate}&endDate=${endDate}`, {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Payroll Preview', result, 200);
 }
 
 async function testGetMonthlyEarnings() {
@@ -1024,8 +952,7 @@ async function testGetMonthlyEarnings() {
   if (!sessionId) return false;
   const today = new Date();
   const result = await makeObfuscatedRequest(`/earnings/monthly?year=${today.getFullYear()}&month=${today.getMonth() + 1}`, {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Monthly Earnings', result, 200);
 }
 
 async function testCreateTimeEntry() {
@@ -1042,15 +969,12 @@ async function testCreateTimeEntry() {
   const result = await makeObfuscatedRequest('/time-entries', {
     staffId: staffId,
     date: today,
-    hoursWorked: 8, // Note: endpoint expects 'hoursWorked', not 'hours'
+    hoursWorked: 8,
     hourlyRate: 15.00
   }, 'POST');
-  console.log(`Status: ${result.status}`);
-  if (!result.ok) {
-    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
-    console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
-  }
-  return result.ok && result.status === 201;
+  const passed = assertStatusResponse('Create Time Entry', result, 201);
+  if (!passed && result?.data) console.log(`  Response: ${JSON.stringify(result.data)}`);
+  return passed;
 }
 
 // ============================================
@@ -1064,60 +988,31 @@ async function testGetPaymentSchedule() {
     return false;
   }
   const result = await makeObfuscatedRequest('/payments/schedule', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  if (!result.ok) {
-    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
-    console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
-  }
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Payment Schedule', result, 200);
 }
 
 async function testCreatePaymentSchedule() {
   console.log('\n=== Testing Create Payment Schedule (Obfuscated) ===');
-  if (!sessionId) {
-    console.log(`  ${RED}ERROR:${RESET} No session available`);
-    return false;
-  }
+  if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/payments/schedule', {
     scheduleType: 'weekly',
     paymentDay: 5
   }, 'POST');
-  console.log(`Status: ${result.status}`);
-  if (!result.ok) {
-    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
-    console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
-  }
-  return result.ok && (result.status === 200 || result.status === 201);
+  return assertStatusResponse('Create Payment Schedule', result, [200, 201]);
 }
 
 async function testGetPaymentHistory() {
   console.log('\n=== Testing Get Payment History ===');
-  if (!sessionId) {
-    console.log(`  ${RED}ERROR:${RESET} No session available`);
-    return false;
-  }
+  if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/payments/history', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  if (!result.ok) {
-    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
-    console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
-  }
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Payment History', result, 200);
 }
 
 async function testGetPaymentStats() {
   console.log('\n=== Testing Get Payment Stats ===');
-  if (!sessionId) {
-    console.log(`  ${RED}ERROR:${RESET} No session available`);
-    return false;
-  }
+  if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/payments/stats', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  if (!result.ok) {
-    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
-    console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
-  }
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Payment Stats', result, 200);
 }
 
 // ============================================
@@ -1128,8 +1023,7 @@ async function testGetLocation() {
   console.log('\n=== Testing Get Location ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/location', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Location', result, 200);
 }
 
 async function testUpdateLocation() {
@@ -1140,17 +1034,14 @@ async function testUpdateLocation() {
     longitude: -0.1278,
     radius: 100
   }, 'PUT');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Update Location', result, 200);
 }
 
 async function testGetLocations() {
   console.log('\n=== Testing Get Locations (Multi) ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/locations', {}, 'GET');
-  // May return 403 if multi-location not enabled
-  console.log(`Status: ${result.status}`);
-  return result.ok || result.status === 403;
+  return assertStatusResponse('Get Locations (Multi)', result, [200, 403]);
 }
 
 async function testCreateLocation() {
@@ -1162,12 +1053,10 @@ async function testCreateLocation() {
     longitude: -0.1278,
     radius: 100
   }, 'POST');
-  // May return 403 if multi-location not enabled
-  console.log(`Status: ${result.status}`);
   if (result.ok && result.data?.location) {
     createdLocationId = result.data.location.id;
   }
-  return result.ok || result.status === 403;
+  return assertStatusResponse('Create Location', result, [200, 403]);
 }
 
 // ============================================
@@ -1178,16 +1067,14 @@ async function testGetBudgets() {
   console.log('\n=== Testing Get Budgets ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/budgets', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Budgets', result, 200);
 }
 
 async function testGetActiveBudget() {
   console.log('\n=== Testing Get Active Budget ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/budgets/active', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Active Budget', result, 200);
 }
 
 async function testCreateBudget() {
@@ -1202,19 +1089,17 @@ async function testCreateBudget() {
     startDate: startDate,
     endDate: endDate
   }, 'POST');
-  console.log(`Status: ${result.status}`);
   if (result.ok && result.data?.budget) {
     createdBudgetId = result.data.budget.id;
   }
-  return result.ok && result.status === 201;
+  return assertStatusResponse('Create Budget', result, 201);
 }
 
 async function testGetBudgetStats() {
   console.log('\n=== Testing Get Budget Stats ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/budgets/stats', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Budget Stats', result, 200);
 }
 
 // ============================================
@@ -1225,16 +1110,14 @@ async function testGetActivities() {
   console.log('\n=== Testing Get Activities (Obfuscated) ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/activities', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Activities', result, 200);
 }
 
 async function testGetActivityStats() {
   console.log('\n=== Testing Get Activity Stats (Obfuscated) ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/activities/stats', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Activity Stats', result, 200);
 }
 
 // ============================================
@@ -1245,18 +1128,14 @@ async function testGetFraudFlags() {
   console.log('\n=== Testing Get Fraud Flags ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/fraud/flags', {}, 'GET');
-  // May require subscription
-  console.log(`Status: ${result.status}`);
-  return result.ok || result.status === 403;
+  return assertStatusResponse('Get Fraud Flags', result, [200, 403]);
 }
 
 async function testGetFraudStats() {
   console.log('\n=== Testing Get Fraud Stats ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/fraud/stats', {}, 'GET');
-  // May require subscription
-  console.log(`Status: ${result.status}`);
-  return result.ok || result.status === 403;
+  return assertStatusResponse('Get Fraud Stats', result, [200, 403]);
 }
 
 // ============================================
@@ -1267,8 +1146,7 @@ async function testGetApiKeys() {
   console.log('\n=== Testing Get API Keys ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/security/api-keys', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get API Keys', result, 200);
 }
 
 async function testCreateApiKey() {
@@ -1277,39 +1155,29 @@ async function testCreateApiKey() {
   const result = await makeObfuscatedRequest('/security/api-keys', {
     keyName: `test-key-${Date.now()}`
   }, 'POST');
-  console.log(`Status: ${result.status}`);
   if (result.ok && result.data?.key) {
     createdApiKeyId = result.data.key.id;
   }
-  return result.ok && result.status === 201;
+  return assertStatusResponse('Create API Key', result, 201);
 }
 
 async function testGetIpWhitelist() {
   console.log('\n=== Testing Get IP Whitelist ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/security/ip-whitelist', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get IP Whitelist', result, 200);
 }
 
 async function testGetAuditLogs() {
   console.log('\n=== Testing Get Audit Logs ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/security/audit-logs', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  // Audit logs endpoint requires admin privileges
-  // Non-admin users should receive 403 Forbidden
-  // This test verifies that access control is working correctly
-  if (result.status === 403) {
-    console.log(`  ${GREEN}PASS:${RESET} Access correctly denied for non-admin user (403 Forbidden)`);
-    return true;
-  }
-  if (result.status === 200) {
-    console.log(`  ${YELLOW}WARNING:${RESET} Non-admin user was able to access audit logs (should be 403)`);
-    return false;
-  }
-  console.log(`  ${RED}ERROR:${RESET} Unexpected status: ${result.status}`);
-  return false;
+  const expected = { status: 403, description: 'Non-admin: access denied' };
+  const actual = { status: result.status, ok: result.ok };
+  const passed = result.status === 403;
+  console.log(`  Get Audit Logs (expect 403 for non-admin):`);
+  assertResult('audit logs', expected, actual, passed);
+  return passed;
 }
 
 // ============================================
@@ -1325,16 +1193,14 @@ async function testGenerateClockinLink() {
   const result = await makeObfuscatedRequest('/clockin/generate-link', {
     deviceName: 'Test Device API Script'
   }, 'POST');
-  console.log(`Status: ${result.status}`);
-  if (!result.ok) {
-    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
-    console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
-    return false;
-  }
+  const expected = { status: 200, ok: true, hasLink: true };
+  const actual = { status: result.status, ok: result.ok, hasLink: !!result.data?.link };
+  console.log(`  Generate Clock-in Link:`);
+  assertResult('Generate link', expected, actual, result.ok && !!result.data?.link);
   if (result.ok && result.data?.link) {
     createdClockinLinkId = result.data.link.id;
     clockinLinkToken = result.data.link.token || result.data.link.link_token;
-    console.log(`  ${GREEN}PASS:${RESET} Link created, token: ${clockinLinkToken?.substring(0, 16)}...`);
+    console.log(`  Token: ${clockinLinkToken?.substring(0, 16)}...`);
   }
   return result.ok && result.status === 200;
 }
@@ -1343,11 +1209,10 @@ async function testGetClockinLinks() {
   console.log('\n=== Testing Get Clock-in Links ===');
   if (!sessionId) return false;
   const result = await makeObfuscatedRequest('/clockin/links', {}, 'GET');
-  console.log(`Status: ${result.status}`);
   if (result.ok && result.data?.links?.length > 0 && !clockinLinkToken) {
     clockinLinkToken = result.data.links[0].token || result.data.links[0].link_token;
   }
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Clock-in Links', result, 200);
 }
 
 // Get staff's 6-digit clock-in code via API (matches frontend - no direct DB)
@@ -1434,11 +1299,13 @@ async function testClockInFlowWithStaff() {
     clockinLinkToken,
     clockinDeviceFingerprint
   );
-  if (!verifyResult.ok) {
+  const verifyPass = verifyResult.ok && verifyResult.data?.valid === true;
+  console.log(`  Verify link:`);
+  assertResult('verify-link', { ok: true, valid: true }, { ok: verifyResult.ok, valid: verifyResult.data?.valid }, verifyPass);
+  if (!verifyPass) {
     console.log(`  ${RED}ERROR:${RESET} Verify link failed: ${verifyResult.data?.error || verifyResult.error}`);
     return false;
   }
-  console.log(`  ${GREEN}PASS:${RESET} Verify link`);
 
   // 7. Clock-in - POST exactly like frontend clockAction
   const clockInBody = {
@@ -1456,11 +1323,13 @@ async function testClockInFlowWithStaff() {
     clockinLinkToken,
     clockinDeviceFingerprint
   );
-  if (!clockInResult.ok) {
+  const clockInPass = clockInResult.ok && clockInResult.data?.message;
+  console.log(`  Clock-in:`);
+  assertResult('clock-in', { ok: true, hasMessage: true }, { ok: clockInResult.ok, message: clockInResult.data?.message || clockInResult.data?.error }, clockInPass);
+  if (!clockInPass) {
     console.log(`  ${RED}ERROR:${RESET} Clock-in failed: ${clockInResult.data?.error || clockInResult.error}`);
     return false;
   }
-  console.log(`  ${GREEN}PASS:${RESET} Clock-in: ${clockInResult.data?.message || 'OK'}`);
 
   // 8. Clock-out - POST exactly like frontend
   const clockOutBody = {
@@ -1484,19 +1353,24 @@ async function testClockInFlowWithStaff() {
   }
 
   // 9. Verify response matches frontend expectations (review_hours, Pending manager approval)
-  const hasReviewHours = clockOutResult.data?.status === 'review_hours';
-  const hasPendingMessage = clockOutResult.data?.message?.includes('Pending manager approval') ||
-    clockOutResult.data?.message?.includes('pending');
-  if (!hasReviewHours) {
-    console.log(`  ${YELLOW}WARNING:${RESET} Expected status 'review_hours', got: ${clockOutResult.data?.status}`);
-  }
-  if (!hasPendingMessage) {
-    console.log(`  ${YELLOW}WARNING:${RESET} Expected "Pending manager approval" in message`);
-  }
-  console.log(`  ${GREEN}PASS:${RESET} Clock-out: ${clockOutResult.data?.message || 'OK'}`);
-  console.log(`  Response: status=${clockOutResult.data?.status}, hoursWorked=${clockOutResult.data?.hoursWorked}`);
+  const expectedStatus = 'review_hours';
+  const actualStatus = clockOutResult.data?.status;
+  const hasReviewHours = actualStatus === expectedStatus;
+  console.log(`  Clock-out status:`);
+  assertResult('status', expectedStatus, actualStatus, hasReviewHours);
 
-  return clockOutResult.ok;
+  const expectedMsgContains = 'Pending manager approval';
+  const actualMsg = clockOutResult.data?.message || '';
+  const hasPendingMessage = actualMsg.toLowerCase().includes('pending');
+  console.log(`  Clock-out message:`);
+  assertResult('message contains "pending"', expectedMsgContains, actualMsg, hasPendingMessage);
+
+  const clockOutPass = clockOutResult.ok && hasReviewHours && hasPendingMessage;
+  console.log(`  Clock-out overall:`);
+  assertResult('clock-out', { ok: true, status: 'review_hours', messageContains: 'pending' },
+    { ok: clockOutResult.ok, status: actualStatus, message: actualMsg }, clockOutPass);
+
+  return clockOutPass;
 }
 
 // Get clock status (like frontend getClockStatus)
@@ -1514,8 +1388,11 @@ async function testGetClockStatus() {
     clockinLinkToken,
     clockinDeviceFingerprint
   );
-  console.log(`Status: ${result.status}`);
-  return result.ok;
+  const expected = { status: 200, ok: true };
+  const actual = { status: result.status, ok: result.ok };
+  console.log(`  Get clock status:`);
+  assertResult('status endpoint', expected, actual, result.ok && result.status === 200);
+  return result.ok && result.status === 200;
 }
 
 // ============================================
@@ -1525,8 +1402,7 @@ async function testGetClockStatus() {
 async function testGetPaymentConfig() {
   console.log('\n=== Testing Get Payment Config ===');
   const result = await makeRequest('/payment/config');
-  console.log(`Status: ${result.status}`);
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Payment Config', result, 200);
 }
 
 async function testGetSubscriptionDetails() {
@@ -1536,12 +1412,7 @@ async function testGetSubscriptionDetails() {
     return false;
   }
   const result = await makeObfuscatedRequest('/payment/subscription-details', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  if (!result.ok) {
-    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
-    console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
-  }
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Subscription Details', result, 200);
 }
 
 async function testGetReferenceNumbers() {
@@ -1551,12 +1422,7 @@ async function testGetReferenceNumbers() {
     return false;
   }
   const result = await makeObfuscatedRequest('/payment/reference-numbers', {}, 'GET');
-  console.log(`Status: ${result.status}`);
-  if (!result.ok) {
-    console.log(`  ${RED}ERROR:${RESET} ${result.data?.error || result.error || 'Unknown error'}`);
-    console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
-  }
-  return result.ok && result.status === 200;
+  return assertStatusResponse('Get Reference Numbers', result, 200);
 }
 
 async function runAllTests() {
@@ -1564,6 +1430,7 @@ async function runAllTests() {
   console.log('COMPREHENSIVE API Endpoint Testing Suite');
   console.log('========================================');
   console.log(`Testing against: ${API_BASE_URL}`);
+  console.log(`${CYAN}Each test shows Expected vs Actual - they must match to PASS.${RESET}\n`);
   console.log(`SESSION_SECRET: ${SESSION_SECRET ? 'Set (' + SESSION_SECRET.substring(0, 10) + '...)' : 'Not set'}`);
   console.log(`Node version: ${process.version}`);
   console.log(`Platform: ${process.platform}`);
@@ -1921,6 +1788,7 @@ async function runAllTests() {
     failedTests.forEach((name) => {
       console.log(`  ${RED}FAIL:${RESET} ${name}`);
     });
+    console.log(`\n  See "Expected" vs "Actual" output above for each failed test.`);
   }
   console.log('========================================\n');
   
