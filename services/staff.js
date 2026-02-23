@@ -314,26 +314,34 @@ export async function getStaffStats(userId) {
     [userId, startStr, endStr]
   );
   
-  // Monthly payroll: current month only; only actual clocked time (clock_in + clock_out)
+  // Monthly payroll: approved shifts – clock_in_out (actual clock times) + approved_shift (manager-approved hours)
   const payrollResult = await pool.query(
-    `WITH deduped AS (
-       SELECT DISTINCT ON (te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text))
-         te.staff_id, te.clock_in_time, te.clock_out_time
+    `SELECT COALESCE(SUM(cost), 0)::numeric(12,2) as total_cost FROM (
+       SELECT (EXTRACT(EPOCH FROM (d.clock_out_time - d.clock_in_time)) / 3600.0) * st.hourly_rate as cost
+       FROM (
+         SELECT DISTINCT ON (te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text))
+           te.staff_id, te.clock_in_time, te.clock_out_time
+         FROM time_entries te
+         LEFT JOIN shifts s ON s.id = te.shift_id
+         WHERE te.user_id = $1 AND te.date >= $2 AND te.date <= $3
+           AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL
+           AND te.entry_type = 'clock_in_out'
+           AND (te.shift_id IS NULL OR s.clock_source = 'staff')
+           AND te.shift_id IS NOT NULL AND s.status = 'approved' AND s.approved_at IS NOT NULL
+         ORDER BY te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text), te.id DESC
+       ) d
+       JOIN staff st ON st.id = d.staff_id
+       WHERE st.user_id = $1
+       UNION ALL
+       SELECT (COALESCE(te.hours_worked, 0) + COALESCE(te.overtime_hours, 0)) * st.hourly_rate as cost
        FROM time_entries te
-       LEFT JOIN shifts s ON s.id = te.shift_id
+       JOIN shifts s ON s.id = te.shift_id
+       JOIN staff st ON st.id = te.staff_id
        WHERE te.user_id = $1 AND te.date >= $2 AND te.date <= $3
-         AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL
-         AND te.entry_type = 'clock_in_out'
-         AND (te.shift_id IS NULL OR s.clock_source = 'staff')
-         AND te.shift_id IS NOT NULL AND s.status = 'approved' AND s.approved_at IS NOT NULL
-       ORDER BY te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text), te.id DESC
-     )
-     SELECT COALESCE(SUM(
-       (EXTRACT(EPOCH FROM (d.clock_out_time - d.clock_in_time)) / 3600.0) * st.hourly_rate
-     ), 0)::numeric(12,2) as total_cost
-     FROM deduped d
-     JOIN staff st ON st.id = d.staff_id
-     WHERE st.user_id = $1`,
+         AND te.entry_type = 'approved_shift'
+         AND s.status = 'approved' AND s.approved_at IS NOT NULL
+         AND st.user_id = $1
+     ) sub`,
     [userId, startStr, endStr]
   );
   
