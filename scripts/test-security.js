@@ -886,7 +886,7 @@ async function testPrivilegeEscalation() {
     `Status: ${fraudFlags.status}`
   );
 
-  const auditLogs = await makeAuthenticatedRequest('/security/audit-logs', {}, userA);
+  const auditLogs = await makeObfuscatedRequest('/security/audit-logs', {}, 'GET', userA);
   recordTest(
     'Privilege Escalation: Regular user accessing audit logs should fail',
     !auditLogs.ok && auditLogs.status === 403,
@@ -1156,7 +1156,7 @@ async function testEnumerationAttacks() {
   );
 
   // Test: ID enumeration - trying to access non-existent resources
-  const nonExistentShift = await makeAuthenticatedRequest('/shifts/999999', {}, userA);
+  const nonExistentShift = await makeObfuscatedRequest('/shifts/999999', {}, 'GET', userA);
   recordTest(
     'Enumeration: Accessing non-existent shift should not reveal existence',
     nonExistentShift.status === 404 || nonExistentShift.status === 403,
