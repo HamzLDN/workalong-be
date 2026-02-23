@@ -553,6 +553,24 @@ router.post('/2fa/totp/reset', requireAuth, async (req, res) => {
   }
 });
 
+/** Returns session ID when request has valid cookie - lets frontend restore session to localStorage for obfuscation (e.g. returning user with cookie but cleared localStorage) */
+router.get('/session-id', async (req, res) => {
+  try {
+    const sessionId = req.cookies.sessionId;
+    if (!sessionId) {
+      return res.status(401).json({ error: 'No session cookie found' });
+    }
+    const session = await getSession(sessionId);
+    if (!session) {
+      return res.status(401).json({ error: 'Invalid or expired session' });
+    }
+    res.json({ sessionId });
+  } catch (error) {
+    console.error('Session ID error:', error);
+    res.status(500).json({ error: 'Failed to get session' });
+  }
+});
+
 router.get('/csrf-token', async (req, res) => {
   try {
     let sessionId = req.cookies.sessionId;
