@@ -1,7 +1,6 @@
 import crypto from 'crypto';
 import { getSession } from '../services/auth.js';
 import { logSecurityEvent } from '../lib/api-security.js';
-import { pool } from '../lib/db.js';
 
 function generateObfuscationKey(sessionId) {
   if (!sessionId) {
@@ -445,52 +444,39 @@ export async function requireSubscription(req, res, next) {
     }
 
     const subscriptionPlan = req.headers['x-subscription-plan'];
-    const subscriptionVerified = req.headers['x-subscription-verified'] === 'true';
 
-    // Always check database for authenticated users
-    const result = await pool.query(
-      `SELECT subscription_plan, subscription_status 
-       FROM users 
-       WHERE id = $1`,
-      [req.userId]
-    );
+    // Verify subscription via Stripe API (source of truth)
+    const { verifySubscriptionStatus } = await import('../services/stripe.js');
+    const verification = await verifySubscriptionStatus(req.userId);
 
-    if (result.rows.length === 0) {
-      return res.status(401).json({ error: 'User not found' });
-    }
-
-    const user = result.rows[0];
-    const userPlan = user.subscription_plan || 'free';
-    const status = user.subscription_status || 'inactive';
-
-    if (userPlan === 'free' || status !== 'active') {
+    if (!verification.isActive) {
       await logSecurityEvent('subscription_required', {
         userId: req.userId,
         ipAddress: req.ip,
         endpoint: req.path,
         requestMethod: req.method,
-        details: { userPlan, status },
+        details: { status: verification.status, message: verification.message },
         severity: 'info'
       });
-      return res.status(403).json({ 
+      return res.status(403).json({
         error: 'Premium subscription required',
-        currentPlan: userPlan,
+        currentPlan: verification.subscriptionPlan || 'free',
         requiredPlan: 'professional'
       });
     }
 
-    if (subscriptionPlan && subscriptionPlan !== userPlan) {
+    if (subscriptionPlan && subscriptionPlan !== verification.subscriptionPlan) {
       await logSecurityEvent('subscription_header_mismatch', {
         userId: req.userId,
         ipAddress: req.ip,
         endpoint: req.path,
         requestMethod: req.method,
-        details: { headerPlan: subscriptionPlan, dbPlan: userPlan },
+        details: { headerPlan: subscriptionPlan, verifiedPlan: verification.subscriptionPlan },
         severity: 'warning'
       });
     }
 
-    req.subscriptionPlan = userPlan;
+    req.subscriptionPlan = verification.subscriptionPlan || 'professional';
     next();
   } catch (error) {
     console.error('Subscription check error:', error);

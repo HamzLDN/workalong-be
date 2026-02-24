@@ -958,7 +958,7 @@ export async function verifySubscriptionStatus(userId) {
     let result;
     try {
       result = await pool.query(
-        `SELECT stripe_customer_id, stripe_subscription_id, subscription_status, subscription_staff_limit 
+        `SELECT stripe_customer_id, stripe_subscription_id, subscription_status, subscription_staff_limit, subscription_plan 
          FROM users 
          WHERE id = $1`,
         [userId]
@@ -966,12 +966,14 @@ export async function verifySubscriptionStatus(userId) {
     } catch (colErr) {
       if (colErr.code === '42703' || (colErr.message && String(colErr.message).includes('subscription_staff_limit'))) {
         result = await pool.query(
-          `SELECT stripe_customer_id, stripe_subscription_id, subscription_status 
+          `SELECT stripe_customer_id, stripe_subscription_id, subscription_status, subscription_plan 
            FROM users 
            WHERE id = $1`,
           [userId]
         );
-        if (result.rows[0]) result.rows[0].subscription_staff_limit = null;
+        if (result.rows[0]) {
+          result.rows[0].subscription_staff_limit = null;
+        }
       } else {
         throw colErr;
       }
@@ -981,6 +983,7 @@ export async function verifySubscriptionStatus(userId) {
       return { 
         isActive: false, 
         status: 'free',
+        subscriptionPlan: 'free',
         subscription: null,
         staffLimit: null,
         multiLocation: false,
@@ -997,6 +1000,7 @@ export async function verifySubscriptionStatus(userId) {
       return { 
         isActive: false, 
         status: 'free',
+        subscriptionPlan: user.subscription_plan || 'free',
         subscription: null,
         staffLimit: null,
         multiLocation: false,
@@ -1080,6 +1084,7 @@ export async function verifySubscriptionStatus(userId) {
           return {
             isActive: false,
             status: 'expired',
+            subscriptionPlan: 'free',
             subscription: null,
             staffLimit: null,
             multiLocation: false,
@@ -1087,7 +1092,7 @@ export async function verifySubscriptionStatus(userId) {
           };
         }
         console.error('Stripe subscription retrieve error:', error);
-        return { isActive: false, status: 'free', subscription: null, staffLimit: null, multiLocation: false, message: 'Could not verify subscription' };
+        return { isActive: false, status: 'free', subscriptionPlan: 'free', subscription: null, staffLimit: null, multiLocation: false, message: 'Could not verify subscription' };
       }
     } else if (customerId) {
       // Check if customer has any active subscriptions
@@ -1139,9 +1144,11 @@ export async function verifySubscriptionStatus(userId) {
     }
     
     const multiLocation = subscription?.metadata?.multiLocation === '1';
+    const subscriptionPlan = user.subscription_plan || (subscription?.metadata?.planName) || (isActive ? 'professional' : 'free');
     return {
       isActive,
       status: stripeStatus,
+      subscriptionPlan,
       staffLimit: resolvedStaffLimit,
       multiLocation: multiLocation || false,
       subscription: subscription ? {
@@ -1156,7 +1163,7 @@ export async function verifySubscriptionStatus(userId) {
     };
   } catch (error) {
     console.error('Error verifying subscription status:', error);
-    return { isActive: false, status: 'free', subscription: null, staffLimit: null, multiLocation: false, message: 'Could not verify subscription' };
+    return { isActive: false, status: 'free', subscriptionPlan: 'free', subscription: null, staffLimit: null, multiLocation: false, message: 'Could not verify subscription' };
   }
 }
 
