@@ -305,8 +305,10 @@ export async function getStaffStats(userId) {
        WHERE te.user_id = $1 AND te.date >= $2 AND te.date <= $3
          AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL
          AND te.entry_type = 'clock_in_out'
-         AND (te.shift_id IS NULL OR s.clock_source = 'staff')
-         AND te.shift_id IS NOT NULL AND s.status = 'approved' AND s.approved_at IS NOT NULL
+         AND (te.shift_id IS NULL OR s.clock_source IS NULL OR s.clock_source != 'manager')
+         AND te.shift_id IS NOT NULL
+         AND s.status IN ('approved', 'review_hours', 'completed')
+         AND s.status != 'cancelled'
        ORDER BY te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text), te.id DESC
      )
      SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (clock_out_time - clock_in_time)) / 3600.0), 0)::numeric(10,2) as total_hours 
@@ -314,7 +316,7 @@ export async function getStaffStats(userId) {
     [userId, startStr, endStr]
   );
   
-  // Monthly payroll: approved shifts – clock_in_out (actual clock times) + approved_shift (manager-approved hours)
+  // Monthly payroll: clock_in_out (actual clock times) + approved_shift (manager-approved hours)
   const payrollResult = await pool.query(
     `SELECT COALESCE(SUM(cost), 0)::numeric(12,2) as total_cost FROM (
        SELECT (EXTRACT(EPOCH FROM (d.clock_out_time - d.clock_in_time)) / 3600.0) * st.hourly_rate as cost
@@ -326,8 +328,10 @@ export async function getStaffStats(userId) {
          WHERE te.user_id = $1 AND te.date >= $2 AND te.date <= $3
            AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL
            AND te.entry_type = 'clock_in_out'
-           AND (te.shift_id IS NULL OR s.clock_source = 'staff')
-           AND te.shift_id IS NOT NULL AND s.status = 'approved' AND s.approved_at IS NOT NULL
+           AND (te.shift_id IS NULL OR s.clock_source IS NULL OR s.clock_source != 'manager')
+           AND te.shift_id IS NOT NULL
+           AND s.status IN ('approved', 'review_hours', 'completed')
+           AND s.status != 'cancelled'
          ORDER BY te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text), te.id DESC
        ) d
        JOIN staff st ON st.id = d.staff_id
@@ -434,7 +438,7 @@ export async function getPayrollForPeriod(userId, startDate, endDate) {
        WHERE te.user_id = $1 AND te.date BETWEEN $2 AND $3
          AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL
          AND te.entry_type = 'clock_in_out'
-         AND (te.shift_id IS NULL OR sh.clock_source = 'staff')
+         AND (te.shift_id IS NULL OR sh.clock_source IS NULL OR sh.clock_source != 'manager')
          AND te.shift_id IS NOT NULL
          AND sh.status IN ('approved', 'review_hours', 'completed')
          AND sh.status != 'cancelled'
@@ -487,8 +491,9 @@ export async function getMonthlyEarningsChart(userId, year, month) {
        WHERE te.user_id = $1 AND te.date >= $2 AND te.date <= $3
          AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL
          AND te.entry_type = 'clock_in_out'
-         AND (te.shift_id IS NULL OR sh.clock_source = 'staff')
-         AND te.shift_id IS NOT NULL AND sh.status = 'approved' AND sh.approved_at IS NOT NULL
+         AND (te.shift_id IS NULL OR sh.clock_source IS NULL OR sh.clock_source != 'manager')
+         AND te.shift_id IS NOT NULL
+         AND sh.status IN ('approved', 'review_hours', 'completed') AND sh.status != 'cancelled'
        ORDER BY te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text), te.id DESC
      )
      SELECT d.date, d.clock_in_time, d.clock_out_time, s.hourly_rate

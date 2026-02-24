@@ -206,8 +206,8 @@ describe('Staff Functions', () => {
       await getStaffStats(1);
 
       const hoursQuery = mockQueryFn.mock.calls[1][0];
-      expect(hoursQuery).toContain("s.status = 'approved'");
-      expect(hoursQuery).toContain('s.approved_at IS NOT NULL');
+      expect(hoursQuery).toContain("s.status IN ('approved', 'review_hours', 'completed')");
+      expect(hoursQuery).toContain("s.status != 'cancelled'");
     });
   });
 
