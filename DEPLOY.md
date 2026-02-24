@@ -1,5 +1,39 @@
 # Backend Docker Deployment Guide
 
+## Pre-Deploy: Ensure Databases Match
+
+Before deploying to production, ensure your main and mock databases have matching schemas:
+
+```bash
+# 1. Sync mock from main (if you've run migrations on main)
+./clone-db-to-mock.sh
+
+# 2. Compare schemas - must pass before deploy
+npm run db:compare
+```
+
+If schemas differ, apply migrations to the main DB first (`npm run migrate:time-entry-approval` etc.), then re-run `clone-db-to-mock.sh` and `npm run db:compare`.
+
+### Apply migrations to production
+
+Before or during deploy, run migrations against the production database:
+
+```bash
+# Set prod DB env vars (or use .env.prod)
+export DB_HOST=your-prod-db-host
+export DB_PORT=5432
+export DB_USER=your-db-user
+export DB_PASSWORD=your-db-password
+export DB_NAME=users
+
+# Run all migrations (time-entry approval, discount, etc.)
+NODE_ENV=production npm run migrate:prod
+```
+
+This applies the same schema changes that exist on your local mock: `approved_at`/`approved_by` on `time_entries`, `subscription_discount_percent` on `users`, etc. Migrations are idempotent (safe to run if already applied).
+
+---
+
 ## Quick Start
 
 ### 1. Build the Docker Image

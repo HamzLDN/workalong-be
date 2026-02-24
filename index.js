@@ -7,6 +7,7 @@ import cookieParser from 'cookie-parser';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './lib/swagger.js';
 import { config } from './lib/config.js';
+import { pool } from './lib/db.js';
 import { cleanupExpiredSessions } from './services/auth.js';
 import {
   requestFingerprinting,
@@ -101,10 +102,30 @@ registerRoutes(app);
 const HTTP_PORT = config.port || 3001;
 const HTTPS_PORT = 443;
 
+async function ensureTimeEntryApprovalColumns() {
+  try {
+    await pool.query(`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS approved_at timestamp with time zone`);
+    await pool.query(`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS approved_by bigint`);
+    await pool.query(`
+      UPDATE time_entries te SET approved_at = sh.approved_at, approved_by = sh.approved_by
+      FROM shifts sh
+      WHERE te.shift_id = sh.id AND sh.status = 'approved' AND sh.approved_at IS NOT NULL
+        AND te.entry_type = 'clock_in_out' AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL
+        AND te.approved_at IS NULL
+    `);
+  } catch (e) {
+    console.warn('Migration (time_entries approved_at):', e?.message || e);
+  }
+}
+
 const httpServer = http.createServer(app);
+ensureTimeEntryApprovalColumns().then(() => {
 httpServer.listen(HTTP_PORT, () => {
   console.log(`?? HTTP Server running on http://localhost:${HTTP_PORT}`);
   console.log(`?? API available at http://localhost:${HTTP_PORT}/api`);
+});
+}).catch(err => {
+  console.error('Startup migration failed:', err);
 });
 
 let httpsOptions = null;

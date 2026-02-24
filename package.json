@@ -12,7 +12,10 @@
     "create-free-promo": "node scripts/create-free-promo-code.js",
     "list-promo-codes": "node scripts/list-promo-codes.js",
     "grant-free-access": "node scripts/grant-free-access.js",
-    "migrate:discount": "node scripts/run-discount-migration.js"
+    "migrate:discount": "node scripts/run-discount-migration.js",
+    "migrate:time-entry-approval": "node scripts/run-time-entry-approval-migration.js",
+    "db:compare": "bash scripts/compare-db-schemas.sh",
+    "migrate:prod": "node scripts/run-migrations-for-prod.js"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",

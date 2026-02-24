@@ -439,6 +439,11 @@ export async function requireSubscription(req, res, next) {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
+    if (process.env.NODE_ENV === 'dev') {
+      req.subscriptionPlan = 'trial';
+      return next();
+    }
+
     const subscriptionPlan = req.headers['x-subscription-plan'];
     const subscriptionVerified = req.headers['x-subscription-verified'] === 'true';
 

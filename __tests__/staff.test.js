@@ -170,6 +170,7 @@ describe('Staff Functions', () => {
       mockQueryFn
         .mockResolvedValueOnce(createMockDbResult([{ count: '5' }])) // totalStaff
         .mockResolvedValueOnce(createMockDbResult([{ total_hours: '120.50' }])) // hoursResult (approved only)
+        .mockResolvedValueOnce(createMockDbResult([{ staff_id: 1, hours: '80' }, { staff_id: 2, hours: '40.5' }])) // attendanceHoursByStaff
         .mockResolvedValueOnce(createMockDbResult([{ total_cost: '1807.50' }])); // payrollResult (approved only)
       // getBudgetStats may run - mock to avoid errors
       mockQueryFn.mockResolvedValue(createMockDbResult([]));
@@ -181,12 +182,14 @@ describe('Staff Functions', () => {
       expect(result.totalStaff).toBe(5);
       expect(result.hoursThisMonth).toBe(120.5);
       expect(result.monthlyPayroll).toBe(1807.5);
+      expect(result.attendanceHoursByStaff).toEqual({ 1: 80, 2: 40.5 });
     });
 
     it('should return zero hours/payroll when no approved shifts', async () => {
       mockQueryFn
         .mockResolvedValueOnce(createMockDbResult([{ count: '3' }]))
         .mockResolvedValueOnce(createMockDbResult([{ total_hours: '0' }]))
+        .mockResolvedValueOnce(createMockDbResult([])) // attendanceHoursByStaff
         .mockResolvedValueOnce(createMockDbResult([{ total_cost: '0' }]));
       mockQueryFn.mockResolvedValue(createMockDbResult([]));
 
@@ -200,14 +203,15 @@ describe('Staff Functions', () => {
       mockQueryFn
         .mockResolvedValueOnce(createMockDbResult([{ count: '1' }]))
         .mockResolvedValueOnce(createMockDbResult([{ total_hours: '8' }]))
+        .mockResolvedValueOnce(createMockDbResult([{ staff_id: 1, hours: '8' }]))
         .mockResolvedValueOnce(createMockDbResult([{ total_cost: '120' }]));
       mockQueryFn.mockResolvedValue(createMockDbResult([]));
 
       await getStaffStats(1);
 
       const hoursQuery = mockQueryFn.mock.calls[1][0];
-      expect(hoursQuery).toContain("s.status IN ('approved', 'review_hours', 'completed')");
-      expect(hoursQuery).toContain("s.status != 'cancelled'");
+      expect(hoursQuery).toContain('te.approved_at IS NOT NULL');
+      expect(hoursQuery).toContain("te.entry_type = 'clock_in_out'");
     });
   });
 
@@ -237,8 +241,8 @@ describe('Staff Functions', () => {
       await getPayrollForPeriod(1, '2026-02-01', '2026-02-28');
 
       const query = mockQueryFn.mock.calls[0][0];
-      expect(query).toContain("sh.status IN ('approved', 'review_hours', 'completed')");
-      expect(query).toContain("sh.status != 'cancelled'");
+      expect(query).toContain('te.approved_at IS NOT NULL');
+      expect(query).toContain("te.entry_type = 'clock_in_out'");
     });
   });
 

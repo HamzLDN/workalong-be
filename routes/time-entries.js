@@ -3,6 +3,9 @@ import {
   getTimeEntries,
   createTimeEntry,
   deleteTimeEntry,
+  getPendingTimeEntries,
+  approveTimeEntry,
+  unapproveTimeEntry,
   getMonthlyEarningsChart,
   getPayrollForPeriod
 } from '../services/staff.js';
@@ -18,6 +21,38 @@ router.get('/time-entries', requireAuth, async (req, res) => {
   } catch (error) {
     console.error('Get time entries error:', error);
     res.status(500).json({ error: 'Failed to get time entries' });
+  }
+});
+
+/** Get clock_in_out time entries pending approval (for review table with per-entry approve). */
+router.get('/time-entries/pending', requireAuth, async (req, res) => {
+  try {
+    const { staffId, startDate, endDate } = req.query;
+    const entries = await getPendingTimeEntries(req.userId, { staffId, startDate, endDate });
+    res.json({ entries });
+  } catch (error) {
+    console.error('Get pending time entries error:', error);
+    res.status(500).json({ error: 'Failed to get pending time entries' });
+  }
+});
+
+router.post('/time-entries/:id/approve', requireAuth, async (req, res) => {
+  try {
+    const entry = await approveTimeEntry(req.params.id, req.userId);
+    res.json({ message: 'Time entry approved', entry });
+  } catch (error) {
+    console.error('Approve time entry error:', error);
+    res.status(400).json({ error: error.message || 'Failed to approve time entry' });
+  }
+});
+
+router.post('/time-entries/:id/unapprove', requireAuth, async (req, res) => {
+  try {
+    await unapproveTimeEntry(req.params.id, req.userId);
+    res.json({ message: 'Time entry unapproved' });
+  } catch (error) {
+    console.error('Unapprove time entry error:', error);
+    res.status(400).json({ error: error.message || 'Failed to unapprove time entry' });
   }
 });
 

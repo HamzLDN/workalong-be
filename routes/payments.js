@@ -229,23 +229,27 @@ router.post('/process/:staffId', requireAuth, async (req, res) => {
     let amount = bodyAmount;
     if (periodStart && periodEnd) {
       const payrollResult = await pool.query(
-        `WITH deduped AS (
-           SELECT DISTINCT ON (te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text))
-             te.staff_id, te.clock_in_time, te.clock_out_time
+        `WITH approved_clocked AS (
+           SELECT te.staff_id, te.shift_id, te.clock_in_time, te.clock_out_time, COALESCE(s.hours, 24)::numeric as shift_hours
            FROM time_entries te
            LEFT JOIN shifts s ON s.id = te.shift_id
            WHERE te.staff_id = $1 AND te.user_id = $2 AND te.date BETWEEN $3 AND $4
              AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL
-             AND te.entry_type = 'clock_in_out'
-             AND (te.shift_id IS NULL OR s.clock_source = 'staff')
-             AND te.shift_id IS NOT NULL AND s.status = 'approved' AND s.approved_at IS NOT NULL
-           ORDER BY te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text), te.id DESC
+             AND te.entry_type = 'clock_in_out' AND te.approved_at IS NOT NULL
+             AND (te.shift_id IS NULL OR s.clock_source IS NULL OR s.clock_source != 'manager')
+             AND te.shift_id IS NOT NULL
+         ),
+         summed AS (
+           SELECT staff_id, shift_id, shift_hours,
+                  SUM(EXTRACT(EPOCH FROM (clock_out_time - clock_in_time)) / 3600.0) as raw_hours
+           FROM approved_clocked
+           GROUP BY staff_id, shift_id, shift_hours
          )
-         SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (d.clock_out_time - d.clock_in_time)) / 3600.0), 0)::numeric(10,2) as hours_worked,
-                COALESCE(SUM((EXTRACT(EPOCH FROM (d.clock_out_time - d.clock_in_time)) / 3600.0) * s.hourly_rate), 0)::numeric(12,2) as total_cost
-         FROM deduped d
-         JOIN staff s ON s.id = d.staff_id
-         WHERE d.staff_id = $1 AND s.user_id = $2`,
+         SELECT COALESCE(SUM(LEAST(raw_hours, shift_hours)), 0)::numeric(10,2) as hours_worked,
+                COALESCE(SUM(LEAST(raw_hours, shift_hours) * s.hourly_rate), 0)::numeric(12,2) as total_cost
+         FROM summed ss
+         JOIN staff s ON s.id = ss.staff_id
+         WHERE ss.staff_id = $1 AND s.user_id = $2`,
         [staffId, req.userId, periodStart, periodEnd]
       );
       const row = payrollResult.rows[0];
@@ -313,31 +317,35 @@ router.post('/process-all', requireAuth, async (req, res) => {
   try {
     const { periodStart, periodEnd } = req.body;
 
-    // Only pay for actual clocked time: entries with both clock_in and clock_out (deduped by shift)
+    // Payroll: ONLY actual clock-in to clock-out (same as monthlyPayroll)
     const staffResult = await pool.query(
       `SELECT s.*, spd.payment_method, spd.is_verified, spd.is_active as payment_active,
               te.hours_worked, te.total_cost
        FROM staff s
        LEFT JOIN staff_payment_details spd ON s.id = spd.staff_id
        LEFT JOIN (
-         WITH deduped AS (
-           SELECT DISTINCT ON (te2.staff_id, te2.date, COALESCE(te2.shift_id::text, 'f' || te2.id::text))
-             te2.staff_id, te2.clock_in_time, te2.clock_out_time
+         WITH approved_clocked AS (
+           SELECT te2.staff_id, te2.shift_id, te2.clock_in_time, te2.clock_out_time, COALESCE(sh.hours, 24)::numeric as shift_hours
            FROM time_entries te2
            LEFT JOIN shifts sh ON sh.id = te2.shift_id
            WHERE te2.user_id = $1 AND te2.date BETWEEN $2 AND $3
              AND te2.clock_in_time IS NOT NULL AND te2.clock_out_time IS NOT NULL
-             AND te2.entry_type = 'clock_in_out'
-             AND (te2.shift_id IS NULL OR sh.clock_source = 'staff')
-             AND te2.shift_id IS NOT NULL AND sh.status = 'approved' AND sh.approved_at IS NOT NULL
-           ORDER BY te2.staff_id, te2.date, COALESCE(te2.shift_id::text, 'f' || te2.id::text), te2.id DESC
+             AND te2.entry_type = 'clock_in_out' AND te2.approved_at IS NOT NULL
+             AND (te2.shift_id IS NULL OR sh.clock_source IS NULL OR sh.clock_source != 'manager')
+             AND te2.shift_id IS NOT NULL
+         ),
+         summed AS (
+           SELECT staff_id, shift_id, shift_hours,
+                  SUM(EXTRACT(EPOCH FROM (clock_out_time - clock_in_time)) / 3600.0) as raw_hours
+           FROM approved_clocked
+           GROUP BY staff_id, shift_id, shift_hours
          )
-         SELECT d.staff_id,
-                SUM(EXTRACT(EPOCH FROM (d.clock_out_time - d.clock_in_time)) / 3600.0) as hours_worked,
-                SUM((EXTRACT(EPOCH FROM (d.clock_out_time - d.clock_in_time)) / 3600.0) * s2.hourly_rate) as total_cost
-         FROM deduped d
-         JOIN staff s2 ON s2.id = d.staff_id AND s2.user_id = $1
-         GROUP BY d.staff_id
+         SELECT ss.staff_id,
+                SUM(LEAST(ss.raw_hours, ss.shift_hours)) as hours_worked,
+                SUM(LEAST(ss.raw_hours, ss.shift_hours) * s2.hourly_rate) as total_cost
+         FROM summed ss
+         JOIN staff s2 ON s2.id = ss.staff_id AND s2.user_id = $1
+         GROUP BY ss.staff_id
        ) te ON te.staff_id = s.id
        WHERE s.user_id = $1 AND s.status = 'active'`,
       [req.userId, periodStart, periodEnd]

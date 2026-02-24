@@ -216,7 +216,7 @@ export async function getShifts(userId, filters = {}) {
   let clockPeriodsByShift = {};
   if (shiftIds.length > 0) {
     const teResult = await pool.query(
-      `SELECT shift_id, clock_in_time, clock_out_time,
+      `SELECT id, shift_id, clock_in_time, clock_out_time, approved_at,
               EXTRACT(EPOCH FROM (clock_out_time - clock_in_time)) / 3600.0 as hours_worked
        FROM time_entries
        WHERE shift_id = ANY($1::bigint[]) AND clock_in_time IS NOT NULL AND clock_out_time IS NOT NULL
@@ -226,9 +226,11 @@ export async function getShifts(userId, filters = {}) {
     for (const row of teResult.rows) {
       if (!clockPeriodsByShift[row.shift_id]) clockPeriodsByShift[row.shift_id] = [];
       clockPeriodsByShift[row.shift_id].push({
+        id: row.id,
         clock_in_time: row.clock_in_time,
         clock_out_time: row.clock_out_time,
-        hours_worked: parseFloat(Number(row.hours_worked).toFixed(2))
+        hours_worked: parseFloat(Number(row.hours_worked).toFixed(2)),
+        approved_at: row.approved_at
       });
     }
   }
@@ -741,7 +743,19 @@ export async function approveShift(shiftId, userId, approvedBy) {
         overtimeHours = 0;
       }
       console.log(`[Approve] Actual hours worked: ${actualHoursWorked}h (scheduled: ${scheduledHours}h) → regular: ${regularHours}h, OT: ${overtimeHours}h`);
-      if (fromTimeEntries <= 0 && shift.clocked_in_time && shift.clocked_out_time) {
+      if (fromTimeEntries > 0) {
+        // Approve all clock_in_out time entries for this shift (per-entry approval)
+        const approveResult = await client.query(
+          `UPDATE time_entries SET approved_at = NOW(), approved_by = $1
+           WHERE shift_id = $2 AND entry_type = 'clock_in_out'
+             AND clock_in_time IS NOT NULL AND clock_out_time IS NOT NULL
+           RETURNING id`,
+          [approvedBy, shiftId]
+        );
+        if (approveResult.rows.length > 0) {
+          timeEntryId = approveResult.rows[0].id;
+        }
+      } else if (fromTimeEntries <= 0 && shift.clocked_in_time && shift.clocked_out_time) {
         const existing = await client.query(
           `SELECT id FROM time_entries WHERE shift_id = $1 ORDER BY id DESC LIMIT 1`,
           [shiftId]
@@ -910,9 +924,13 @@ export async function unapproveShift(shiftId, userId) {
           [shift.time_entry_id]
         );
       } else {
-        // For clock-in/out entries, just unlink the shift but keep the time entry
-        // This preserves the actual hours worked
-        console.log(`[Unapprove] Keeping time entry ${shift.time_entry_id} as it contains actual clock-in/out data`);
+        // For clock_in_out entries, clear approved_at so they no longer count for payroll
+        await client.query(
+          `UPDATE time_entries SET approved_at = NULL, approved_by = NULL
+           WHERE shift_id = $1 AND entry_type = 'clock_in_out'`,
+          [shiftId]
+        );
+        console.log(`[Unapprove] Cleared approved_at on clock_in_out entries for shift ${shiftId}`);
       }
     }
     
