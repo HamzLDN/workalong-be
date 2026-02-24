@@ -421,12 +421,13 @@ export async function getTimeEntries(userId, filters = {}) {
   return result.rows;
 }
 
-/** Payroll for a period: only actual clocked time (clock_in + clock_out) per staff.
- *  Deduplicates by (staff_id, date, shift_id) so each shift is only counted once
- *  (fixes double-counting when staff clock in via both 6-digit link and staff app). */
+/** Payroll for a period: clocked time (clock_in + clock_out) + manager-approved shifts (approved_shift).
+ *  Deduplicates clock_in_out by (staff_id, date, shift_id) to avoid double-counting.
+ *  Includes approved_shift entries so manager-approved shifts appear even without staff clock-in. */
 export async function getPayrollForPeriod(userId, startDate, endDate) {
   const result = await pool.query(
-    `WITH deduped AS (
+    `WITH
+     clocked AS (
        SELECT DISTINCT ON (te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text))
          te.staff_id, te.clock_in_time, te.clock_out_time
        FROM time_entries te
@@ -437,15 +438,29 @@ export async function getPayrollForPeriod(userId, startDate, endDate) {
          AND (te.shift_id IS NULL OR sh.clock_source = 'staff')
          AND te.shift_id IS NOT NULL AND sh.status = 'approved' AND sh.approved_at IS NOT NULL
        ORDER BY te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text), te.id DESC
+     ),
+     approved AS (
+       SELECT te.staff_id,
+              (COALESCE(te.hours_worked, 0) + COALESCE(te.overtime_hours, 0))::numeric as hours_val
+       FROM time_entries te
+       JOIN shifts s ON s.id = te.shift_id
+       WHERE te.user_id = $1 AND te.date BETWEEN $2 AND $3
+         AND te.entry_type = 'approved_shift'
+         AND s.status = 'approved' AND s.approved_at IS NOT NULL
+     ),
+     combined AS (
+       SELECT staff_id, EXTRACT(EPOCH FROM (clock_out_time - clock_in_time)) / 3600.0 as hours_val FROM clocked
+       UNION ALL
+       SELECT staff_id, hours_val FROM approved
      )
      SELECT s.id as staff_id, s.name as staff_name, s.role, s.hourly_rate,
-            COALESCE(SUM(EXTRACT(EPOCH FROM (d.clock_out_time - d.clock_in_time)) / 3600.0), 0)::numeric(10,2) as hours_worked,
-            COALESCE(SUM((EXTRACT(EPOCH FROM (d.clock_out_time - d.clock_in_time)) / 3600.0) * s.hourly_rate), 0)::numeric(12,2) as total_pay
+            COALESCE(SUM(c.hours_val), 0)::numeric(10,2) as hours_worked,
+            COALESCE(SUM(c.hours_val * s.hourly_rate), 0)::numeric(12,2) as total_pay
      FROM staff s
-     LEFT JOIN deduped d ON d.staff_id = s.id
+     LEFT JOIN combined c ON c.staff_id = s.id
      WHERE s.user_id = $1 AND s.status = 'active'
      GROUP BY s.id, s.name, s.role, s.hourly_rate
-     HAVING COALESCE(SUM(EXTRACT(EPOCH FROM (d.clock_out_time - d.clock_in_time)) / 3600.0), 0) > 0
+     HAVING COALESCE(SUM(c.hours_val), 0) > 0
      ORDER BY s.name`,
     [userId, startDate, endDate]
   );
