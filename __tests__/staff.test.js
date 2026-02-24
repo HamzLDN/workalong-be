@@ -237,7 +237,8 @@ describe('Staff Functions', () => {
       await getPayrollForPeriod(1, '2026-02-01', '2026-02-28');
 
       const query = mockQueryFn.mock.calls[0][0];
-      expect(query).toContain("sh.status = 'approved'");
+      expect(query).toContain("sh.status IN ('approved', 'review_hours', 'completed')");
+      expect(query).toContain("sh.status != 'cancelled'");
     });
   });
 
