@@ -565,9 +565,10 @@ router.post('/clock-out', requireStaffAuth, async (req, res) => {
       timeEntryId = updateEntryResult.rows[0].id;
       await client.query('UPDATE shifts SET time_entry_id = $1 WHERE id = $2', [timeEntryId, shiftId]);
     }
+    // Close other open entries - today and yesterday only (covers overnight; avoids overwriting entries from 2+ days ago)
     await client.query(
       `UPDATE time_entries SET clock_out_time = $1, hours_worked = EXTRACT(EPOCH FROM ($1::timestamptz - clock_in_time))/3600
-       WHERE staff_id = $2 AND clock_in_time IS NOT NULL AND clock_out_time IS NULL AND date >= $3::date - INTERVAL '7 days'`,
+       WHERE staff_id = $2 AND date >= $3::date - INTERVAL '1 day' AND date <= $3::date AND clock_in_time IS NOT NULL AND clock_out_time IS NULL`,
       [clockOutTime, staffId, today]
     );
 

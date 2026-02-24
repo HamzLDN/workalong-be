@@ -306,11 +306,10 @@ router.post('/clock-action', async (req, res) => {
              notes = CASE WHEN notes IS NOT NULL AND TRIM(notes) != '' THEN notes || E'\n' || $3 ELSE $3 END WHERE id = $4`,
             [now, totalHoursWorked, fallbackNote, entry.id]
           );
-          // Close any other open entries for this staff so they can't clock out again
+          // Close any other open entries for this staff on the SAME date only
           await pool.query(
             `UPDATE time_entries SET clock_out_time = $1, hours_worked = EXTRACT(EPOCH FROM ($1 - clock_in_time))/3600
-             WHERE staff_id = $2 AND id != $3 AND clock_in_time IS NOT NULL AND clock_out_time IS NULL
-             AND date >= $4::date - INTERVAL '7 days'`,
+             WHERE staff_id = $2 AND id != $3 AND date = $4 AND clock_in_time IS NOT NULL AND clock_out_time IS NULL`,
             [now, staffId, entry.id, today]
           );
           await pool.query('UPDATE device_links SET last_used_at = NOW() WHERE id = $1', [link.id]);
@@ -367,10 +366,10 @@ router.post('/clock-action', async (req, res) => {
             [clockOutTime, totalHoursWorked, notes, entryResult.rows[0].id]
           );
         }
-        // Close any other open entries for this staff
+        // Close other open entries for this staff - today and yesterday only (covers overnight; avoids overwriting entries from 2+ days ago)
         await pool.query(
           `UPDATE time_entries SET clock_out_time = $1, hours_worked = EXTRACT(EPOCH FROM ($1::timestamptz - clock_in_time))/3600
-           WHERE staff_id = $2 AND clock_in_time IS NOT NULL AND clock_out_time IS NULL AND date >= $3::date - INTERVAL '7 days'`,
+           WHERE staff_id = $2 AND date >= $3::date - INTERVAL '1 day' AND date <= $3::date AND clock_in_time IS NOT NULL AND clock_out_time IS NULL`,
           [clockOutTime, staffId, today]
         );
         await pool.query('UPDATE device_links SET last_used_at = NOW() WHERE id = $1', [link.id]);
@@ -408,11 +407,10 @@ router.post('/clock-action', async (req, res) => {
           );
         }
       }
-      // Close any other open entries for this staff so they can't clock out again
+      // Close other open entries for this staff - today and yesterday only (covers overnight; avoids overwriting entries from 2+ days ago)
       await pool.query(
         `UPDATE time_entries SET clock_out_time = $1, hours_worked = EXTRACT(EPOCH FROM ($1::timestamptz - clock_in_time))/3600
-         WHERE staff_id = $2 AND clock_in_time IS NOT NULL AND clock_out_time IS NULL
-         AND date >= $3::date - INTERVAL '7 days'`,
+         WHERE staff_id = $2 AND date >= $3::date - INTERVAL '1 day' AND date <= $3::date AND clock_in_time IS NOT NULL AND clock_out_time IS NULL`,
         [clockOutTime, staffId, today]
       );
       await pool.query('UPDATE device_links SET last_used_at = NOW() WHERE id = $1', [link.id]);
