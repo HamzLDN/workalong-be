@@ -422,8 +422,8 @@ export async function getTimeEntries(userId, filters = {}) {
 }
 
 /** Payroll for a period: only actual clocked hours – when staff physically clock in and out.
- *  Uses time_entry.clock_in_time and clock_out_time (real device times). Does NOT include
- *  assigned/scheduled hours from manager-approved shifts without clock data. */
+ *  Uses time_entry.clock_in_time and clock_out_time (real device times). Includes both
+ *  approved shifts and review_hours (pending approval) – actual clock data is included either way. */
 export async function getPayrollForPeriod(userId, startDate, endDate) {
   const result = await pool.query(
     `WITH deduped AS (
@@ -435,7 +435,9 @@ export async function getPayrollForPeriod(userId, startDate, endDate) {
          AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL
          AND te.entry_type = 'clock_in_out'
          AND (te.shift_id IS NULL OR sh.clock_source = 'staff')
-         AND te.shift_id IS NOT NULL AND sh.status = 'approved' AND sh.approved_at IS NOT NULL
+         AND te.shift_id IS NOT NULL
+         AND sh.status IN ('approved', 'review_hours', 'completed')
+         AND sh.status != 'cancelled'
        ORDER BY te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text), te.id DESC
      )
      SELECT s.id as staff_id, s.name as staff_name, s.role, s.hourly_rate,
