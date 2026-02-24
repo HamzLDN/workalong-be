@@ -421,43 +421,31 @@ export async function getTimeEntries(userId, filters = {}) {
   return result.rows;
 }
 
-/** Payroll for a period: uses Actual Clock-In/Out from shifts (09:00 to 17:30 style),
- *  not raw device clock times. For approved shifts with clocked_in_time + clocked_out_time:
- *  hours = (clocked_out - clocked_in). For approved shifts without those: uses approved_shift hours_worked. */
+/** Payroll for a period: only actual clocked hours – when staff physically clock in and out.
+ *  Uses time_entry.clock_in_time and clock_out_time (real device times). Does NOT include
+ *  assigned/scheduled hours from manager-approved shifts without clock data. */
 export async function getPayrollForPeriod(userId, startDate, endDate) {
   const result = await pool.query(
-    `WITH
-     from_shifts AS (
-       SELECT sh.staff_id,
-              EXTRACT(EPOCH FROM (sh.clocked_out_time - sh.clocked_in_time)) / 3600.0 as hours_val
-       FROM shifts sh
-       WHERE sh.user_id = $1 AND sh.shift_date BETWEEN $2::date AND $3::date
-         AND sh.status = 'approved' AND sh.approved_at IS NOT NULL
-         AND sh.clocked_in_time IS NOT NULL AND sh.clocked_out_time IS NOT NULL
-     ),
-     from_approved AS (
-       SELECT te.staff_id,
-              (COALESCE(te.hours_worked, 0) + COALESCE(te.overtime_hours, 0))::numeric as hours_val
+    `WITH deduped AS (
+       SELECT DISTINCT ON (te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text))
+         te.staff_id, te.clock_in_time, te.clock_out_time
        FROM time_entries te
-       JOIN shifts s ON s.id = te.shift_id
+       LEFT JOIN shifts sh ON sh.id = te.shift_id
        WHERE te.user_id = $1 AND te.date BETWEEN $2 AND $3
-         AND te.entry_type = 'approved_shift'
-         AND s.status = 'approved' AND s.approved_at IS NOT NULL
-         AND (s.clocked_in_time IS NULL OR s.clocked_out_time IS NULL)
-     ),
-     combined AS (
-       SELECT staff_id, hours_val::numeric FROM from_shifts
-       UNION ALL
-       SELECT staff_id, hours_val FROM from_approved
+         AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL
+         AND te.entry_type = 'clock_in_out'
+         AND (te.shift_id IS NULL OR sh.clock_source = 'staff')
+         AND te.shift_id IS NOT NULL AND sh.status = 'approved' AND sh.approved_at IS NOT NULL
+       ORDER BY te.staff_id, te.date, COALESCE(te.shift_id::text, 'f' || te.id::text), te.id DESC
      )
      SELECT s.id as staff_id, s.name as staff_name, s.role, s.hourly_rate,
-            COALESCE(SUM(c.hours_val), 0)::numeric(10,2) as hours_worked,
-            COALESCE(SUM(c.hours_val * s.hourly_rate), 0)::numeric(12,2) as total_pay
+            COALESCE(SUM(EXTRACT(EPOCH FROM (d.clock_out_time - d.clock_in_time)) / 3600.0), 0)::numeric(10,2) as hours_worked,
+            COALESCE(SUM((EXTRACT(EPOCH FROM (d.clock_out_time - d.clock_in_time)) / 3600.0) * s.hourly_rate), 0)::numeric(12,2) as total_pay
      FROM staff s
-     LEFT JOIN combined c ON c.staff_id = s.id
+     LEFT JOIN deduped d ON d.staff_id = s.id
      WHERE s.user_id = $1 AND s.status = 'active'
      GROUP BY s.id, s.name, s.role, s.hourly_rate
-     HAVING COALESCE(SUM(c.hours_val), 0) > 0
+     HAVING COALESCE(SUM(EXTRACT(EPOCH FROM (d.clock_out_time - d.clock_in_time)) / 3600.0), 0) > 0
      ORDER BY s.name`,
     [userId, startDate, endDate]
   );
