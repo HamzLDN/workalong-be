@@ -338,13 +338,12 @@ describe('Shifts Functions', () => {
         .mockResolvedValueOnce({}) // BEGIN
         .mockResolvedValueOnce(createMockDbResult([mockShift])) // SELECT shift
         .mockResolvedValueOnce(createMockDbResult([{ total: 0 }])) // SELECT time_entries (check for clock times)
-        .mockResolvedValueOnce(createMockDbResult([{ id: 1 }])) // INSERT time entry
-        .mockResolvedValueOnce({}) // UPDATE shift
+        .mockResolvedValueOnce({}) // UPDATE shift (no INSERT – no actual clock data, approve status only)
         .mockResolvedValueOnce({}); // COMMIT
 
       const result = await approveShift(1, 1, 1);
 
-      expect(mockClient.query).toHaveBeenCalledTimes(6);
+      expect(mockClient.query).toHaveBeenCalledTimes(5);
       expect(result.success).toBe(true);
       expect(mockClient.release).toHaveBeenCalled();
     });

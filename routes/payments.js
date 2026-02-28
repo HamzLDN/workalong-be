@@ -236,7 +236,6 @@ router.post('/process/:staffId', requireAuth, async (req, res) => {
            WHERE te.staff_id = $1 AND te.user_id = $2 AND te.date BETWEEN $3 AND $4
              AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL
              AND te.entry_type = 'clock_in_out' AND te.approved_at IS NOT NULL
-             AND (te.shift_id IS NULL OR s.clock_source IS NULL OR s.clock_source != 'manager')
              AND te.shift_id IS NOT NULL
          ),
          summed AS (
@@ -331,7 +330,6 @@ router.post('/process-all', requireAuth, async (req, res) => {
            WHERE te2.user_id = $1 AND te2.date BETWEEN $2 AND $3
              AND te2.clock_in_time IS NOT NULL AND te2.clock_out_time IS NOT NULL
              AND te2.entry_type = 'clock_in_out' AND te2.approved_at IS NOT NULL
-             AND (te2.shift_id IS NULL OR sh.clock_source IS NULL OR sh.clock_source != 'manager')
              AND te2.shift_id IS NOT NULL
          ),
          summed AS (

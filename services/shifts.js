@@ -1,5 +1,6 @@
 import { pool } from '../lib/db.js';
 import { sanitizeString } from '../lib/sanitize.js';
+import fs from 'fs';
 
 export function calculateEndTime(startTime, hours) {
   const [startHour, startMin] = startTime.split(':').map(Number);
@@ -34,7 +35,8 @@ export async function getShifts(userId, filters = {}) {
       s.clocked_out_time,
       s.clock_source,
       (COALESCE(
-        NULLIF((SELECT SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0) FROM time_entries te WHERE te.shift_id = s.id AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL), 0),
+        NULLIF((SELECT SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0) FROM time_entries te WHERE te.shift_id = s.id AND te.entry_type = 'clock_in_out' AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL), 0),
+        NULLIF((SELECT SUM((COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric)) FROM time_entries te WHERE te.shift_id = s.id AND te.entry_type = 'approved_shift'), 0),
         CASE WHEN s.clocked_in_time IS NOT NULL AND s.clocked_out_time IS NOT NULL THEN EXTRACT(EPOCH FROM (s.clocked_out_time - s.clocked_in_time)) / 3600.0 ELSE 0 END
       ))::numeric(10,2) as actual_hours_worked,
       (SELECT NULLIF(TRIM(SUBSTRING(te.notes FROM 'Late clock-out reason: (.+)')), '')
@@ -434,10 +436,68 @@ export async function updateShift(shiftId, userId, data) {
     console.error(`[updateShift] No shift found with id ${shiftId} for user ${userId}`);
     return null;
   }
-  
-  console.log(`[updateShift] Shift ${shiftId} updated successfully. clocked_in_time: ${result.rows[0].clocked_in_time}, clocked_out_time: ${result.rows[0].clocked_out_time}, pay_type: ${result.rows[0].pay_type}, shift_type: ${result.rows[0].shift_type}`);
-  
-  return result.rows[0];
+
+  const updatedShift = result.rows[0];
+
+  // Sync clock times to time_entries so display and monthly payroll reflect the change
+  if (clockedInTime !== undefined && clockedOutTime !== undefined) {
+    const teResult = await pool.query(
+      `SELECT id, clock_in_time, clock_out_time FROM time_entries
+       WHERE shift_id = $1 AND user_id = $2 AND entry_type = 'clock_in_out'
+         AND clock_in_time IS NOT NULL AND clock_out_time IS NOT NULL
+       ORDER BY clock_in_time ASC`,
+      [shiftId, userId]
+    );
+    const entries = teResult.rows;
+    if (entries.length === 1) {
+      const hoursDiff = (new Date(clockedOutTime) - new Date(clockedInTime)) / (1000 * 60 * 60);
+      const hoursWorked = Math.round(Math.max(0, hoursDiff) * 100) / 100;
+      const isApproved = updatedShift.status === 'approved';
+      await pool.query(
+        `UPDATE time_entries SET clock_in_time = $1, clock_out_time = $2, hours_worked = $3, updated_at = NOW()${isApproved ? ', approved_at = NOW(), approved_by = $5' : ''}
+         WHERE id = $4`,
+        isApproved ? [clockedInTime, clockedOutTime, hoursWorked, entries[0].id, userId] : [clockedInTime, clockedOutTime, hoursWorked, entries[0].id]
+      );
+      console.log(`[updateShift] Synced clock times to time_entry ${entries[0].id} for payroll${isApproved ? ' (approved)' : ''}`);
+    } else if (entries.length > 1) {
+      // Multiple periods: update first entry's clock_in and last entry's clock_out
+      await pool.query(
+        `UPDATE time_entries SET clock_in_time = $1, updated_at = NOW() WHERE id = $2`,
+        [clockedInTime, entries[0].id]
+      );
+      await pool.query(
+        `UPDATE time_entries SET clock_out_time = $1, updated_at = NOW() WHERE id = $2`,
+        [clockedOutTime, entries[entries.length - 1].id]
+      );
+      // Recalc hours_worked for first and last entries
+      const firstOut = new Date(entries[0].clock_out_time);
+      const firstIn = new Date(clockedInTime);
+      const firstHours = Math.round(Math.max(0, (firstOut - firstIn) / (1000 * 60 * 60)) * 100) / 100;
+      await pool.query(`UPDATE time_entries SET hours_worked = $1 WHERE id = $2`, [firstHours, entries[0].id]);
+      const lastIn = new Date(entries[entries.length - 1].clock_in_time);
+      const lastOut = new Date(clockedOutTime);
+      const lastHours = Math.round(Math.max(0, (lastOut - lastIn) / (1000 * 60 * 60)) * 100) / 100;
+      await pool.query(`UPDATE time_entries SET hours_worked = $1 WHERE id = $2`, [lastHours, entries[entries.length - 1].id]);
+      console.log(`[updateShift] Synced bookend clock times to ${entries.length} time_entries for payroll`);
+    } else if (entries.length === 0) {
+      // No time_entries exist – create one so approve/dashboard counts it. If shift already approved, set approved_at now.
+      const d = updatedShift.shift_date instanceof Date ? updatedShift.shift_date : new Date(updatedShift.shift_date);
+      const shiftDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const hoursDiff = (new Date(clockedOutTime) - new Date(clockedInTime)) / (1000 * 60 * 60);
+      const hoursWorked = Math.round(Math.max(0, hoursDiff) * 100) / 100;
+      const isAlreadyApproved = updatedShift.status === 'approved';
+      await pool.query(
+        `INSERT INTO time_entries (staff_id, user_id, date, clock_in_time, clock_out_time, hours_worked, overtime_hours, entry_type, shift_id${isAlreadyApproved ? ', approved_at, approved_by' : ''})
+         VALUES ($1, $2, $3, $4, $5, $6, 0, 'clock_in_out', $7${isAlreadyApproved ? ', NOW(), $8' : ''})`,
+        isAlreadyApproved ? [updatedShift.staff_id, userId, shiftDate, clockedInTime, clockedOutTime, hoursWorked, shiftId, userId] : [updatedShift.staff_id, userId, shiftDate, clockedInTime, clockedOutTime, hoursWorked, shiftId]
+      );
+      console.log(`[updateShift] Created time_entry for actual hours (clock_in_out)${isAlreadyApproved ? ' – already approved, set approved_at' : ''}`);
+    }
+  }
+
+  console.log(`[updateShift] Shift ${shiftId} updated successfully. clocked_in_time: ${updatedShift.clocked_in_time}, clocked_out_time: ${updatedShift.clocked_out_time}, pay_type: ${updatedShift.pay_type}, shift_type: ${updatedShift.shift_type}`);
+
+  return updatedShift;
 }
 
 export async function deleteShift(shiftId, userId) {
@@ -709,6 +769,9 @@ export async function approveShift(shiftId, userId, approvedBy) {
     const shift = shiftResult.rows[0];
     const scheduledHours = parseFloat(shift.hours) || 0;
     console.log(`[Approve] Shift found: id=${shift.id}, staff_id=${shift.staff_id}, status=${shift.status}, scheduled hours=${scheduledHours}`);
+    // #region agent log
+    try{fs.appendFileSync('/root/.cursor/debug-9a8e14.log',JSON.stringify({location:'shifts.js:approveShift',message:'Approve entry',data:{shiftId,shift_date:shift.shift_date?.toString?.(),clocked_in:!!shift.clocked_in_time,clocked_out:!!shift.clocked_out_time,clock_source:shift.clock_source},timestamp:Date.now(),hypothesisId:'H1'})+'\n');}catch(_){}
+    // #endregion
     
     if (shift.status === 'approved') {
       throw new Error('Shift has already been approved');
@@ -725,6 +788,9 @@ export async function approveShift(shiftId, userId, approvedBy) {
       [shiftId]
     );
     const fromTimeEntries = parseFloat(teResult.rows[0]?.total || 0);
+    // #region agent log
+    try{fs.appendFileSync('/root/.cursor/debug-9a8e14.log',JSON.stringify({location:'shifts.js:approveShift',message:'Actual hours source',data:{fromTimeEntries,hasShiftClockedIn:!!shift.clocked_in_time,hasShiftClockedOut:!!shift.clocked_out_time},timestamp:Date.now(),hypothesisId:'H2'})+'\n');}catch(_){}
+    // #endregion
     if (fromTimeEntries > 0) {
       actualHoursWorked = Math.round(fromTimeEntries * 100) / 100;
     } else if (shift.clocked_in_time && shift.clocked_out_time) {
@@ -744,6 +810,9 @@ export async function approveShift(shiftId, userId, approvedBy) {
       }
       console.log(`[Approve] Actual hours worked: ${actualHoursWorked}h (scheduled: ${scheduledHours}h) → regular: ${regularHours}h, OT: ${overtimeHours}h`);
       if (fromTimeEntries > 0) {
+        // #region agent log
+        try{fs.appendFileSync('/root/.cursor/debug-9a8e14.log',JSON.stringify({location:'shifts.js:approveShift',message:'Branch from time_entries',data:{fromTimeEntries,branch:'update_approved_at'},timestamp:Date.now(),hypothesisId:'H1'})+'\n');}catch(_){}
+        // #endregion
         // Approve all clock_in_out time entries for this shift (per-entry approval)
         const approveResult = await client.query(
           `UPDATE time_entries SET approved_at = NOW(), approved_by = $1
@@ -761,6 +830,9 @@ export async function approveShift(shiftId, userId, approvedBy) {
           [shiftId]
         );
         const clockSource = shift.clock_source || null;
+        // #region agent log
+        try{fs.appendFileSync('/root/.cursor/debug-9a8e14.log',JSON.stringify({location:'shifts.js:approveShift',message:'Branch shift has clock times',data:{existingCount:existing.rows.length,clockSource,branch:existing.rows.length>0&&clockSource!=='manager'?'update':clockSource==='staff'?'insert_clock_in_out':'insert_approved_shift'},timestamp:Date.now(),hypothesisId:'H5'})+'\n');}catch(_){}
+        // #endregion
         if (existing.rows.length > 0 && clockSource !== 'manager') {
           await client.query(
             `UPDATE time_entries SET clock_in_time = $1, clock_out_time = $2, hours_worked = $3, overtime_hours = $4, entry_type = 'clock_in_out'
@@ -811,27 +883,11 @@ export async function approveShift(shiftId, userId, approvedBy) {
         }
       }
     } else {
-      regularHours = scheduledHours;
+      // No actual clock data: approve shift status only – do NOT add scheduled hours to dashboard.
+      // Dashboard only counts actual hours; scheduled hours without clock times must not count.
+      regularHours = 0;
       overtimeHours = 0;
-      console.log(`[Approve] No clock data, using scheduled hours: ${regularHours}h`);
-      
-      const timeEntryResult = await client.query(
-        `INSERT INTO time_entries 
-         (staff_id, user_id, date, hours_worked, overtime_hours, notes, entry_type, shift_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING id`,
-        [
-          shift.staff_id,
-          userId,
-          shift.shift_date,
-          regularHours,
-          overtimeHours,
-          shift.notes ? `Approved from shift: ${shift.notes}` : 'Approved from scheduled shift',
-          'approved_shift',
-          shiftId
-        ]
-      );
-      timeEntryId = timeEntryResult.rows[0].id;
+      console.log(`[Approve] No clock data – approving status only, no hours added to dashboard`);
     }
     
     await client.query(
@@ -845,7 +901,9 @@ export async function approveShift(shiftId, userId, approvedBy) {
     );
     
     await client.query('COMMIT');
-    
+    // #region agent log
+    try{fs.appendFileSync('/root/.cursor/debug-9a8e14.log',JSON.stringify({location:'shifts.js:approveShift',message:'Approve result',data:{timeEntryId,regularHours,overtimeHours,actualHoursWorked},timestamp:Date.now(),hypothesisId:'H3'})+'\n');}catch(_){}
+    // #endregion
     return {
       success: true,
       timeEntryId,

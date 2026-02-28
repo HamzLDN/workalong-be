@@ -38,15 +38,13 @@ done
 echo "📤 Dumping schema from main database..."
 docker exec "$MAIN_CONTAINER" pg_dump -U "$DB_USER" -d "$DB_NAME" \
   --schema-only --no-owner --no-privileges 2>/dev/null \
-  | grep -v '^--' \
-  | grep -v '^$' \
+  | grep -v '^--' | grep -v '^$' | sed '/^\\restrict /d' | sed '/^\\unrestrict /d' \
   > "$MAIN_DUMP" || true
 
 echo "📤 Dumping schema from mock database..."
 docker exec "$MOCK_CONTAINER" pg_dump -U "$DB_USER" -d "$DB_NAME" \
   --schema-only --no-owner --no-privileges 2>/dev/null \
-  | grep -v '^--' \
-  | grep -v '^$' \
+  | grep -v '^--' | grep -v '^$' | sed '/^\\restrict /d' | sed '/^\\unrestrict /d' \
   > "$MOCK_DUMP" || true
 
 # Compare
