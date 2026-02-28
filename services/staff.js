@@ -319,6 +319,12 @@ export async function getStaffStats(userId) {
            WHERE te2.staff_id = te.staff_id AND te2.date = te.date
              AND te2.entry_type = 'approved_shift' AND te2.shift_id IS NOT NULL
          ))
+         AND NOT (te.shift_id IS NOT NULL AND EXISTS (
+           SELECT 1 FROM time_entries te2
+           WHERE te2.staff_id = te.staff_id AND te2.date = te.date AND te2.shift_id = te.shift_id
+             AND te2.entry_type = 'clock_in_out' AND te2.clock_in_time IS NOT NULL AND te2.clock_out_time IS NOT NULL
+             AND te2.approved_at IS NOT NULL
+         ))
      ),
      from_manual AS (
        SELECT te.staff_id, te.date, te.shift_id,
@@ -363,6 +369,12 @@ export async function getStaffStats(userId) {
            SELECT 1 FROM time_entries te2
            WHERE te2.staff_id = te.staff_id AND te2.date = te.date
              AND te2.entry_type = 'approved_shift' AND te2.shift_id IS NOT NULL
+         ))
+         AND NOT (te.shift_id IS NOT NULL AND EXISTS (
+           SELECT 1 FROM time_entries te2
+           WHERE te2.staff_id = te.staff_id AND te2.date = te.date AND te2.shift_id = te.shift_id
+             AND te2.entry_type = 'clock_in_out' AND te2.clock_in_time IS NOT NULL AND te2.clock_out_time IS NOT NULL
+             AND te2.approved_at IS NOT NULL
          ))
      ),
      from_manual AS (
@@ -410,6 +422,12 @@ export async function getStaffStats(userId) {
            SELECT 1 FROM time_entries te2
            WHERE te2.staff_id = te.staff_id AND te2.date = te.date
              AND te2.entry_type = 'approved_shift' AND te2.shift_id IS NOT NULL
+         ))
+         AND NOT (te.shift_id IS NOT NULL AND EXISTS (
+           SELECT 1 FROM time_entries te2
+           WHERE te2.staff_id = te.staff_id AND te2.date = te.date AND te2.shift_id = te.shift_id
+             AND te2.entry_type = 'clock_in_out' AND te2.clock_in_time IS NOT NULL AND te2.clock_out_time IS NOT NULL
+             AND te2.approved_at IS NOT NULL
          ))
      ),
      from_manual AS (
@@ -596,6 +614,12 @@ export async function getPayrollForPeriod(userId, startDate, endDate) {
            WHERE te2.staff_id = te.staff_id AND te2.date = te.date
              AND te2.entry_type = 'approved_shift' AND te2.shift_id IS NOT NULL
          ))
+         AND NOT (te.shift_id IS NOT NULL AND EXISTS (
+           SELECT 1 FROM time_entries te2
+           WHERE te2.staff_id = te.staff_id AND te2.date = te.date AND te2.shift_id = te.shift_id
+             AND te2.entry_type = 'clock_in_out' AND te2.clock_in_time IS NOT NULL AND te2.clock_out_time IS NOT NULL
+             AND te2.approved_at IS NOT NULL
+         ))
      ),
      from_manual AS (
        SELECT te.staff_id, te.date, te.shift_id, 24::numeric as shift_hours,
@@ -669,6 +693,12 @@ export async function getMonthlyEarningsChart(userId, year, month) {
        LEFT JOIN shifts sh ON sh.id = te.shift_id
        WHERE te.user_id = $1 AND te.date >= $2 AND te.date <= $3
          AND te.entry_type = 'approved_shift'
+         AND NOT (te.shift_id IS NOT NULL AND EXISTS (
+           SELECT 1 FROM time_entries te2
+           WHERE te2.staff_id = te.staff_id AND te2.date = te.date AND te2.shift_id = te.shift_id
+             AND te2.entry_type = 'clock_in_out' AND te2.clock_in_time IS NOT NULL AND te2.clock_out_time IS NOT NULL
+             AND te2.approved_at IS NOT NULL
+         ))
      ),
      from_manual AS (
        SELECT te.staff_id, te.date, te.shift_id, 24::numeric as shift_hours,
@@ -957,6 +987,12 @@ export async function getBudgetStats(userId) {
              SELECT 1 FROM time_entries te2
              WHERE te2.staff_id = te.staff_id AND te2.date = te.date
                AND te2.entry_type = 'approved_shift' AND te2.shift_id IS NOT NULL
+           ))
+           AND NOT (te.shift_id IS NOT NULL AND EXISTS (
+             SELECT 1 FROM time_entries te2
+             WHERE te2.staff_id = te.staff_id AND te2.date = te.date AND te2.shift_id = te.shift_id
+               AND te2.entry_type = 'clock_in_out' AND te2.clock_in_time IS NOT NULL AND te2.clock_out_time IS NOT NULL
+               AND te2.approved_at IS NOT NULL
            ))
        ),
        from_manual AS (
