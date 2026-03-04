@@ -211,7 +211,8 @@ router.get('/', requireAuth, async (req, res) => {
 
 router.get('/stats', requireAuth, async (req, res) => {
   try {
-    const stats = await getStaffStats(req.userId);
+    const clientDate = req.query.clientDate || null;
+    const stats = await getStaffStats(req.userId, clientDate);
     res.json(stats);
   } catch (error) {
     console.error('Get stats error:', error);

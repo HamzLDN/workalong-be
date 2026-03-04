@@ -19,6 +19,7 @@ services:
       - DB_USER=workalong
       - DB_PASSWORD=admin
       - DB_NAME=users
+      - TZ=Europe/London
     volumes:
       - ../workalong-frontend/certs:/app/certs:ro
       - ../workalong-frontend/docker/ssl:/etc/nginx/ssl:ro

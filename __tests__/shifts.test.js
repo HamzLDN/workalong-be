@@ -62,6 +62,37 @@ describe('Shifts Functions', () => {
   });
 
   describe('getShifts', () => {
+    it('should NOT auto-mark overnight shift as completed when shift has just begun', async () => {
+      const overnightShift = createMockShift({
+        id: 1,
+        shift_date: '2026-02-05',
+        start_time: '17:15',
+        hours: 8,
+        status: 'scheduled',
+        clocked_in_time: null,
+        clocked_out_time: null,
+      });
+      mockQueryFn
+        .mockResolvedValueOnce(createMockDbResult([overnightShift]))
+        .mockResolvedValueOnce({ rowCount: 1 }) // UPDATE (late) - mock doesn't update DB
+        .mockResolvedValueOnce(createMockDbResult([{ id: 1, status: 'late' }])) // SELECT status re-fetch
+        .mockResolvedValueOnce(createMockDbResult([])); // time_entries for clock periods
+
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-02-05T18:00:00')); // 18:00, 45 min after 17:15 start; shift ends 01:15 next day
+
+      const result = await getShifts(1);
+
+      jest.useRealTimers();
+
+      expect(result[0].status).not.toBe('completed');
+      expect(result[0].status).not.toBe('unattended');
+      const updateToCompletedCalls = mockQueryFn.mock.calls.filter(
+        (call) => call[0]?.includes?.('UPDATE shifts') && (call[1]?.[0] === 'completed' || call[1]?.[0] === 'unattended')
+      );
+      expect(updateToCompletedCalls).toHaveLength(0);
+    });
+
     it('should get all shifts for a user', async () => {
       const mockShifts = [
         createMockShift({ id: 1 }),
@@ -322,6 +353,48 @@ describe('Shifts Functions', () => {
 
       expect(mockQueryFn).toHaveBeenCalled();
       expect(result).toBeDefined();
+    });
+
+    it('should NOT conflict when new overnight shift (17:00-01:00) vs same-day existing (00:00-08:00)', async () => {
+      const existingShift = createMockShift({
+        id: 101,
+        shift_date: '2026-02-05',
+        start_time: '00:00',
+        hours: 8,
+      });
+      mockQueryFn.mockResolvedValue(createMockDbResult([existingShift]));
+
+      const result = await checkShiftConflict(
+        1,
+        1,
+        '2026-02-05',
+        '17:00',
+        '01:00:00'
+      );
+
+      expect(result.hasConflict).toBe(false);
+      expect(result.conflictingShifts).toHaveLength(0);
+    });
+
+    it('should conflict when overlapping same-day shifts', async () => {
+      const existingShift = createMockShift({
+        id: 102,
+        shift_date: '2026-02-05',
+        start_time: '09:00',
+        hours: 8,
+      });
+      mockQueryFn.mockResolvedValue(createMockDbResult([existingShift]));
+
+      const result = await checkShiftConflict(
+        1,
+        1,
+        '2026-02-05',
+        '14:00',
+        '18:00:00'
+      );
+
+      expect(result.hasConflict).toBe(true);
+      expect(result.conflictingShifts.length).toBeGreaterThan(0);
     });
   });
 

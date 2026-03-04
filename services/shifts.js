@@ -105,29 +105,27 @@ export async function getShifts(userId, filters = {}) {
       
       const calculatedEndTime = calculateEndTime(row.start_time, row.hours);
       const endTime = calculatedEndTime.split(':').map(Number);
-      
-      const shiftStart = new Date(Date.UTC(
+      const startMins = startTime[0] * 60 + (startTime[1] || 0);
+      const endMins = endTime[0] * 60 + (endTime[1] || 0);
+      const isOvernight = endMins <= startMins; // end at 01:15, start 17:15 → end is next day
+
+      const shiftStart = new Date(
         shiftDate.getFullYear(),
         shiftDate.getMonth(),
         shiftDate.getDate(),
         startTime[0],
         startTime[1],
         startTime[2] || 0
-      ));
-      
-      const shiftEnd = new Date(Date.UTC(
+      );
+
+      const shiftEnd = new Date(
         shiftDate.getFullYear(),
         shiftDate.getMonth(),
-        shiftDate.getDate(),
+        shiftDate.getDate() + (isOvernight ? 1 : 0),
         endTime[0],
         endTime[1],
         endTime[2] || 0
-      ));
-      
-      // Handle overnight shifts (if calculated end_time < start_time, it goes to next day)
-      if (calculatedEndTime < row.start_time) {
-        shiftEnd.setUTCDate(shiftEnd.getUTCDate() + 1);
-      }
+      );
       
       const nowTimestamp = now.getTime();
       const shiftStartTimestamp = shiftStart.getTime();
@@ -703,8 +701,11 @@ export async function checkShiftConflict(userId, staffId, shiftDate, startTime, 
         // But wait - existing started at 22:20 on day 1, new starts at 03:00 on day 2, so they overlap if 03:00 < 08:20
         overlaps = (newStart < existingEnd);
       } else if (!existingIsOvernight && isOvernight) {
-        // Existing is regular, new is overnight
-        overlaps = (existingStart < newEnd);
+        // Existing is regular (00:00-08:00), new is overnight (17:00-01:00)
+        // On same day, new overnight runs 17:00 to 24:00 (not 01:00 - that's next day)
+        // Overlap if new starts before existing ends: e.g. 17:00 < 08:00? No.
+        const newEndOnSameDay = 24 * 60; // midnight
+        overlaps = (newStart < existingEnd && newEndOnSameDay > existingStart);
       } else {
         // Both overnight - they overlap
         overlaps = true;

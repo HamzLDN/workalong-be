@@ -1,6 +1,5 @@
 import { pool } from '../lib/db.js';
 import { sanitizeString } from '../lib/sanitize.js';
-import fs from 'fs';
 import { hashPassword } from './auth.js';
 import crypto from 'crypto';
 import { sendStaffPasswordSetupEmail } from '../lib/email.js';
@@ -284,18 +283,25 @@ export async function deleteStaff(staffId, userId) {
 }
 
 // Get staff statistics
-export async function getStaffStats(userId) {
+export async function getStaffStats(userId, clientDate = null) {
   const totalStaffResult = await pool.query(
     'SELECT COUNT(*) as count FROM staff WHERE user_id = $1 AND status = $2',
     [userId, 'active']
   );
   
-  // Monthly hours: current month only; use local YYYY-MM-DD (avoid toISOString timezone shift)
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = now.getMonth();
-  const startStr = `${y}-${String(m + 1).padStart(2, '0')}-01`;
-  const endStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(new Date(y, m + 1, 0).getDate()).padStart(2, '0')}`;
+  // Monthly hours: use client's local date for "this month" so timezone matches user
+  let startStr, endStr;
+  if (clientDate && /^\d{4}-\d{2}-\d{2}$/.test(clientDate)) {
+    const [y, m] = clientDate.split('-').map(Number);
+    startStr = `${y}-${String(m).padStart(2, '0')}-01`;
+    endStr = `${y}-${String(m).padStart(2, '0')}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
+  } else {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    startStr = `${y}-${String(m + 1).padStart(2, '0')}-01`;
+    endStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(new Date(y, m + 1, 0).getDate()).padStart(2, '0')}`;
+  }
 
   // Hours This Month: actual hours from clock_in_out (approved) + approved_shift + manual (no cap, include all)
   const hoursResult = await pool.query(
@@ -343,10 +349,6 @@ export async function getStaffStats(userId) {
      SELECT COALESCE(SUM(raw_hours), 0)::numeric(10,2) as total_hours FROM combined`,
     [userId, startStr, endStr]
   );
-  // #region agent log
-  const totalHours = parseFloat(hoursResult.rows[0]?.total_hours || 0);
-  try{fs.appendFileSync('/root/.cursor/debug-9a8e14.log',JSON.stringify({location:'staff.js:getStaffStats',message:'Hours result',data:{userId,totalHours,startStr,endStr},timestamp:Date.now(),hypothesisId:'H4'})+'\n');}catch(_){}
-  // #endregion
 
   // Per-staff actual hours this month (clock_in_out + approved_shift + manual)
   const attendanceHoursResult = await pool.query(
@@ -456,7 +458,7 @@ export async function getStaffStats(userId) {
     budgetPercentageUsed: null
   };
   try {
-    const budgetStats = await getBudgetStats(userId);
+    const budgetStats = await getBudgetStats(userId, clientDate);
     if (budgetStats && budgetStats.budget && budgetStats.currentMonth) {
       budgetSummary = {
         budgetMonthly: parseFloat(budgetStats.budget.monthlyBudget || budgetStats.budget.monthly_budget || 0),
@@ -949,7 +951,7 @@ export async function updateBudget(userId, budgetId, data) {
 }
 
 // Get budget statistics (spent vs budget for current month)
-export async function getBudgetStats(userId) {
+export async function getBudgetStats(userId, clientDate = null) {
   try {
     // Get active budget
     const budget = await getActiveBudget(userId);
@@ -957,12 +959,19 @@ export async function getBudgetStats(userId) {
       return null;
     }
 
-    // Get current month's start and end dates (local, avoid toISOString timezone shift)
-    const now = new Date();
-    const y = now.getFullYear();
-    const m = now.getMonth();
-    const startDateStr = `${y}-${String(m + 1).padStart(2, '0')}-01`;
-    const endDateStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(new Date(y, m + 1, 0).getDate()).padStart(2, '0')}`;
+    // Use client's local date for month range when provided (same as getStaffStats)
+    let startDateStr, endDateStr;
+    if (clientDate && /^\d{4}-\d{2}-\d{2}$/.test(clientDate)) {
+      const [y, m] = clientDate.split('-').map(Number);
+      startDateStr = `${y}-${String(m).padStart(2, '0')}-01`;
+      endDateStr = `${y}-${String(m).padStart(2, '0')}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
+    } else {
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = now.getMonth();
+      startDateStr = `${y}-${String(m + 1).padStart(2, '0')}-01`;
+      endDateStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(new Date(y, m + 1, 0).getDate()).padStart(2, '0')}`;
+    }
     
     // Same as monthlyPayroll: clock_in_out + approved_shift + manual
     const spentResult = await pool.query(
