@@ -98,62 +98,62 @@ export async function getShifts(userId, filters = {}) {
       continue;
     }
     
-    try {
-      const shiftDateStr = row.shift_date instanceof Date ? row.shift_date.toISOString().split('T')[0] : (typeof row.shift_date === 'string' ? row.shift_date.split('T')[0] : row.shift_date);
-      const shiftDate = new Date(shiftDateStr + 'T00:00:00');
-      const startTime = row.start_time.split(':').map(Number);
-      
-      const calculatedEndTime = calculateEndTime(row.start_time, row.hours);
-      const endTime = calculatedEndTime.split(':').map(Number);
-      const startMins = startTime[0] * 60 + (startTime[1] || 0);
-      const endMins = endTime[0] * 60 + (endTime[1] || 0);
-      const isOvernight = endMins <= startMins; // end at 01:15, start 17:15 → end is next day
-
-      const shiftStart = new Date(
-        shiftDate.getFullYear(),
-        shiftDate.getMonth(),
-        shiftDate.getDate(),
-        startTime[0],
-        startTime[1],
-        startTime[2] || 0
-      );
-
-      const shiftEnd = new Date(
-        shiftDate.getFullYear(),
-        shiftDate.getMonth(),
-        shiftDate.getDate() + (isOvernight ? 1 : 0),
-        endTime[0],
-        endTime[1],
-        endTime[2] || 0
-      );
-      
-      const nowTimestamp = now.getTime();
-      const shiftStartTimestamp = shiftStart.getTime();
-      const shiftEndTimestamp = shiftEnd.getTime();
-      const hasClockIn = row.clocked_in_time && row.clocked_in_time !== null;
-      
-      if (nowTimestamp > shiftEndTimestamp && !row.clocked_in_time) {
-        const hasClockOut = row.clocked_out_time && row.clocked_out_time !== null;
-        const hasCompletedHours = hasClockIn && hasClockOut;
-        const newStatus = hasCompletedHours ? 'completed' : 'unattended';
+      try {
+        const shiftDateStr = row.shift_date instanceof Date ? row.shift_date.toISOString().split('T')[0] : (typeof row.shift_date === 'string' ? row.shift_date.split('T')[0] : row.shift_date);
+        const shiftDate = new Date(shiftDateStr + 'T00:00:00');
+        const startTime = row.start_time.split(':').map(Number);
         
-        console.log(`[getShifts] Auto-marking shift ${row.id} as ${newStatus} (ended at ${shiftEnd.toISOString()}, now is ${now.toISOString()}, clocked in: ${hasClockIn}, clocked out: ${hasClockOut})`);
-        updatePromises.push(
-          pool.query(
-            `UPDATE shifts SET status = $1, updated_at = NOW() WHERE id = $2 AND status IN ('scheduled', 'late')`,
-            [newStatus, row.id]
-          ).then(result => {
-            if (result.rowCount > 0) {
-              console.log(`[getShifts] Successfully marked shift ${row.id} as ${newStatus}`);
-            } else {
-              console.log(`[getShifts] Shift ${row.id} was not updated (may have been updated concurrently)`);
-            }
-          }).catch(err => {
-            console.error(`[getShifts] Error updating shift ${row.id}:`, err);
-          })
+        const calculatedEndTime = calculateEndTime(row.start_time, row.hours);
+        const endTime = calculatedEndTime.split(':').map(Number);
+        const startMins = startTime[0] * 60 + (startTime[1] || 0);
+        const endMins = endTime[0] * 60 + (endTime[1] || 0);
+        const isOvernight = endMins <= startMins; // end at 01:15, start 17:15 → end is next day
+
+        const shiftStart = new Date(
+          shiftDate.getFullYear(),
+          shiftDate.getMonth(),
+          shiftDate.getDate(),
+          startTime[0],
+          startTime[1],
+          startTime[2] || 0
         );
-        row.status = newStatus;
-      } else if (nowTimestamp > shiftStartTimestamp && nowTimestamp < shiftEndTimestamp && !hasClockIn) {
+
+        const shiftEnd = new Date(
+          shiftDate.getFullYear(),
+          shiftDate.getMonth(),
+          shiftDate.getDate() + (isOvernight ? 1 : 0),
+          endTime[0],
+          endTime[1],
+          endTime[2] || 0
+        );
+        
+        const nowTimestamp = now.getTime();
+        const shiftStartTimestamp = shiftStart.getTime();
+        const shiftEndTimestamp = shiftEnd.getTime();
+        const hasClockIn = row.clocked_in_time && row.clocked_in_time !== null;
+        
+        if (nowTimestamp > shiftEndTimestamp && !row.clocked_in_time) {
+          const hasClockOut = row.clocked_out_time && row.clocked_out_time !== null;
+          const hasCompletedHours = hasClockIn && hasClockOut;
+          const newStatus = hasCompletedHours ? 'completed' : 'unattended';
+          
+          console.log(`[getShifts] Auto-marking shift ${row.id} as ${newStatus} (ended at ${shiftEnd.toISOString()}, now is ${now.toISOString()}, clocked in: ${hasClockIn}, clocked out: ${hasClockOut})`);
+          updatePromises.push(
+            pool.query(
+              `UPDATE shifts SET status = $1, updated_at = NOW() WHERE id = $2 AND status IN ('scheduled', 'late')`,
+              [newStatus, row.id]
+            ).then(result => {
+              if (result.rowCount > 0) {
+                console.log(`[getShifts] Successfully marked shift ${row.id} as ${newStatus}`);
+              } else {
+                console.log(`[getShifts] Shift ${row.id} was not updated (may have been updated concurrently)`);
+              }
+            }).catch(err => {
+              console.error(`[getShifts] Error updating shift ${row.id}:`, err);
+            })
+          );
+          row.status = newStatus;
+        } else if (nowTimestamp > shiftStartTimestamp && nowTimestamp < shiftEndTimestamp && !hasClockIn) {
         console.log(`[getShifts] Auto-marking shift ${row.id} as late (started at ${shiftStart.toISOString()}, now is ${now.toISOString()}, no clock-in)`);
         updatePromises.push(
           pool.query(
