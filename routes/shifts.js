@@ -134,39 +134,14 @@ router.get('/shifts', async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    const { startDate, endDate, status } = req.query;
+    const { startDate, endDate, status, staffId: filterStaffId, timezoneOffset } = req.query;
 
-    if (authResult && authResult.isStaff && authResult.staffId) {
-      let query = `
-        SELECT s.id, s.user_id, s.staff_id, s.shift_date, s.start_time, s.hours, s.break_minutes,
-          s.shift_type, s.pay_type, s.status, s.location, s.notes, s.created_at, s.updated_at,
-          s.time_entry_id, s.clocked_in_time, s.clocked_out_time,
-          st.name as staff_name, st.role, st.hourly_rate
-        FROM shifts s JOIN staff st ON s.staff_id = st.id WHERE s.user_id = $1`;
-      const params = [req.userId];
-      let paramCount = 1;
-      if (startDate) { paramCount++; query += ` AND s.shift_date >= $${paramCount}`; params.push(startDate); }
-      if (endDate) { paramCount++; query += ` AND s.shift_date <= $${paramCount}`; params.push(endDate); }
-      if (status) { paramCount++; query += ` AND s.status = $${paramCount}`; params.push(status); }
-      query += ' ORDER BY s.shift_date DESC, s.start_time ASC';
-      const result = await pool.query(query, params);
-      const shifts = result.rows.map(shift => {
-        const cleaned = { ...shift };
-        cleaned.clocked_in_time = (shift.clocked_in_time == null || shift.clocked_in_time === '') ? null : shift.clocked_in_time;
-        cleaned.clocked_out_time = (shift.clocked_out_time == null || shift.clocked_out_time === '') ? null : shift.clocked_out_time;
-        delete cleaned.approved_at;
-        delete cleaned.approved_by;
-        return cleaned;
-      });
-      return res.json({ shifts });
-    }
-
-    const { staffId: filterStaffId, timezoneOffset } = req.query;
     const filters = { startDate, endDate, staffId: filterStaffId, status };
     if (timezoneOffset !== undefined && timezoneOffset !== '') {
       const offset = parseInt(timezoneOffset, 10);
       if (!isNaN(offset)) filters.timezoneOffset = offset;
     }
+
     const shifts = await getShifts(req.userId, filters);
     res.json({ shifts });
   } catch (error) {
