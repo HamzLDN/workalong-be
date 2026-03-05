@@ -89,7 +89,21 @@ export async function getShifts(userId, filters = {}) {
   console.log(`[getShifts] Processing ${result.rows.length} shifts for auto-completion check`);
   
   for (const row of result.rows) {
-    if (row.status === 'approved' || row.status === 'completed' || row.approved_at) {
+    if (row.status === 'approved' || row.approved_at) {
+      continue;
+    }
+    // Correct wrongly marked 'completed' shifts that have no clock-in (e.g. 24hr shift bug)
+    if (row.status === 'completed' && !row.clocked_in_time) {
+      console.log(`[getShifts] Correcting shift ${row.id}: status=completed but no clock-in → unattended`);
+      updatePromises.push(
+        pool.query(
+          `UPDATE shifts SET status = 'unattended', updated_at = NOW() WHERE id = $1`,
+          [row.id]
+        ).then(r => { if (r.rowCount > 0) row.status = 'unattended'; })
+      );
+      continue;
+    }
+    if (row.status === 'completed') {
       continue;
     }
     
@@ -133,11 +147,10 @@ export async function getShifts(userId, filters = {}) {
         const hasClockIn = row.clocked_in_time && row.clocked_in_time !== null;
         
         if (nowTimestamp > shiftEndTimestamp && !row.clocked_in_time) {
-          const hasClockOut = row.clocked_out_time && row.clocked_out_time !== null;
-          const hasCompletedHours = hasClockIn && hasClockOut;
-          const newStatus = hasCompletedHours ? 'completed' : 'unattended';
+          // No clock-in = no one attended → always unattended (never completed)
+          const newStatus = 'unattended';
           
-          console.log(`[getShifts] Auto-marking shift ${row.id} as ${newStatus} (ended at ${shiftEnd.toISOString()}, now is ${now.toISOString()}, clocked in: ${hasClockIn}, clocked out: ${hasClockOut})`);
+          console.log(`[getShifts] Auto-marking shift ${row.id} as ${newStatus} (ended at ${shiftEnd.toISOString()}, now is ${now.toISOString()}, no clock-in recorded)`);
           updatePromises.push(
             pool.query(
               `UPDATE shifts SET status = $1, updated_at = NOW() WHERE id = $2 AND status IN ('scheduled', 'late')`,
