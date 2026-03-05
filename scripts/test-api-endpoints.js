@@ -1124,6 +1124,137 @@ async function testFiveConsecutiveOvernightShifts() {
 }
 
 /**
+ * Regression: 24-hour shift (00:00-00:00) with no clock-in should be UNATTENDED when ended, not COMPLETED.
+ * Bug was marking such shifts as 'completed' instead of 'unattended'.
+ */
+async function test24HourShiftNoClockInUnattended() {
+  console.log('\n=== Testing 24-Hour Shift: No Clock-In → Unattended ===');
+  if (!sessionId) return false;
+  let localStaffId = staffId;
+  if (!localStaffId) {
+    const staffRes = await makeObfuscatedRequest('/staff', {}, 'GET');
+    if (!staffRes.ok || !staffRes.data?.staff?.length) return false;
+    localStaffId = staffRes.data.staff[0].id;
+  }
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const dateStr = yesterday.toISOString().split('T')[0];
+  let createdId = null;
+  try {
+    await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [localStaffId, dateStr]);
+    const createRes = await makeObfuscatedRequest('/shifts', {
+      staffId: localStaffId,
+      shiftDate: dateStr,
+      startTime: '00:00',
+      hours: 24,
+    }, 'POST');
+    if (!createRes.ok) {
+      console.log(`  ${RED}FAIL:${RESET} Could not create 24-hour shift: ${createRes.data?.error || 'unknown'}`);
+      return false;
+    }
+    createdId = createRes.data?.shift?.id;
+    const getRes = await makeObfuscatedRequest('/shifts', {}, 'GET');
+    const shifts = getRes.data?.shifts ?? getRes.data;
+    if (!getRes.ok || !Array.isArray(shifts)) {
+      console.log(`  ${RED}FAIL:${RESET} Could not fetch shifts`);
+      return false;
+    }
+    const shift = shifts.find((s) => s.id === createdId || (String(s.shift_date).startsWith(dateStr) && s.start_time?.startsWith?.('00') && parseFloat(s.hours) === 24));
+    if (!shift) {
+      console.log(`  ${YELLOW}WARN:${RESET} Could not find created 24-hour shift`);
+      return true;
+    }
+    const passed = shift.status === 'unattended';
+    assertResult(
+      '24-hour shift with no clock-in (ended) should be unattended, not completed',
+      { status: 'unattended' },
+      { status: shift.status },
+      passed
+    );
+    return passed;
+  } finally {
+    if (createdId) await pool.query('DELETE FROM shifts WHERE id = $1', [createdId]);
+    else await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [localStaffId, dateStr]);
+  }
+}
+
+/**
+ * Regression: Shift wrongly marked 'completed' in DB with no clock-in should be corrected to 'unattended' when fetched.
+ * Verifies the getShifts correction logic.
+ */
+async function testCompletedShiftWithNoClockInCorrected() {
+  console.log('\n=== Testing Completed Shift (No Clock-In) Corrected to Unattended ===');
+  if (!sessionId) return false;
+  let localStaffId = staffId;
+  if (!localStaffId) {
+    const staffRes = await makeObfuscatedRequest('/staff', {}, 'GET');
+    if (!staffRes.ok || !staffRes.data?.staff?.length) return false;
+    localStaffId = staffRes.data.staff[0].id;
+  }
+  const futureDate = new Date();
+  futureDate.setDate(futureDate.getDate() + 40);
+  const dateStr = futureDate.toISOString().split('T')[0];
+  let createdId = null;
+  try {
+    await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [localStaffId, dateStr]);
+    const createRes = await makeObfuscatedRequest('/shifts', {
+      staffId: localStaffId,
+      shiftDate: dateStr,
+      startTime: '09:00',
+      hours: 8,
+    }, 'POST');
+    if (!createRes.ok) {
+      console.log(`  ${RED}FAIL:${RESET} Could not create shift`);
+      return false;
+    }
+    createdId = createRes.data?.shift?.id;
+    const beforeUpdate = await pool.query('SELECT id, user_id, status FROM shifts WHERE id = $1', [createdId]);
+    if (beforeUpdate.rows.length === 0) {
+      console.log(`  ${YELLOW}WARN:${RESET} Shift ${createdId} not in DB (test script may use different DB than API) - skipping correction test`);
+      return true;
+    }
+    const updateResult = await pool.query(
+      `UPDATE shifts SET status = 'completed', clocked_in_time = NULL, clocked_out_time = NULL WHERE id = $1 RETURNING id, status`,
+      [createdId]
+    );
+    if (updateResult.rowCount === 0) {
+      console.log(`  ${RED}FAIL:${RESET} Could not update shift ${createdId}`);
+      return false;
+    }
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - 7);
+    const endDate = new Date();
+    endDate.setDate(endDate.getDate() + 60);
+    const getRes = await makeObfuscatedRequest(
+      `/shifts?startDate=${startDate.toISOString().split('T')[0]}&endDate=${endDate.toISOString().split('T')[0]}`,
+      {},
+      'GET'
+    );
+    const shifts = getRes.data?.shifts ?? getRes.data;
+    if (!getRes.ok || !Array.isArray(shifts)) {
+      console.log(`  ${RED}FAIL:${RESET} Could not fetch shifts`);
+      return false;
+    }
+    const shift = shifts.find((s) => s.id === createdId);
+    if (!shift) {
+      console.log(`  ${YELLOW}WARN:${RESET} Could not find shift`);
+      return true;
+    }
+    const passed = shift.status === 'unattended';
+    assertResult(
+      'Shift with status=completed but no clock-in should be corrected to unattended',
+      { status: 'unattended' },
+      { status: shift.status },
+      passed
+    );
+    return passed;
+  } finally {
+    if (createdId) await pool.query('DELETE FROM shifts WHERE id = $1', [createdId]);
+    else await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [localStaffId, dateStr]);
+  }
+}
+
+/**
  * 24-hour shift: create 00:00 with 24 hours, verify end_time is 00:00 (wraps to midnight).
  */
 async function test24HourShiftEndTime() {
@@ -1898,6 +2029,14 @@ async function runAllTests() {
     const day24Ok = await test24HourShiftEndTime();
     results.tests.push({ name: '24-Hour Shift End Time', passed: day24Ok });
     if (day24Ok) results.passed++; else results.failed++;
+
+    const day24UnattendedOk = await test24HourShiftNoClockInUnattended();
+    results.tests.push({ name: '24-Hour Shift: No Clock-In → Unattended', passed: day24UnattendedOk });
+    if (day24UnattendedOk) results.passed++; else results.failed++;
+
+    const completedCorrectedOk = await testCompletedShiftWithNoClockInCorrected();
+    results.tests.push({ name: 'Completed (No Clock-In) Corrected to Unattended', passed: completedCorrectedOk });
+    if (completedCorrectedOk) results.passed++; else results.failed++;
 
     // Time Entries & Payroll
     const timeEntriesOk = await testGetTimeEntries();

@@ -332,6 +332,7 @@ jobs:
             -e NODE_ENV=production \
             -e DOCKER=true \
             -e DB_HOST=workalong-postgres \
+            -e TZ=Europe/London \
             -v /root/workalong-frontend/certs:/app/certs:ro \
             -v /root/workalong-frontend/docker/ssl:/etc/nginx/ssl:ro \
             --network workalong_workalong-network \
