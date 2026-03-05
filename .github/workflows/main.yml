@@ -315,7 +315,7 @@ jobs:
         run: |
           cd /root/workalong-backend
           echo "Building Docker image..."
-          docker build -f Dockerfile.backend.ubuntu -t workalong-backend:latest .
+          docker build --no-cache -f Dockerfile.backend.ubuntu -t workalong-backend:latest .
 
       - name: Start container
         run: |
