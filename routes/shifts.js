@@ -147,6 +147,8 @@ router.get('/shifts', async (req, res) => {
     }
 
     const shifts = await getShifts(req.userId, filters);
+    res.set('X-Shifts-ClientNow', filters.clientNow ? 'yes' : 'no');
+    res.set('X-Shifts-TimezoneOffset', filters.timezoneOffset !== undefined ? String(filters.timezoneOffset) : 'none');
     res.json({ shifts });
   } catch (error) {
     console.error('Get shifts error:', error);
