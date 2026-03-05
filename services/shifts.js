@@ -83,11 +83,14 @@ export async function getShifts(userId, filters = {}) {
   
   const result = await pool.query(query, params);
   
-  const now = new Date();
+  const nowTimestamp = filters.clientNow != null && !isNaN(parseInt(filters.clientNow, 10))
+    ? parseInt(filters.clientNow, 10)
+    : Date.now();
+  const now = new Date(nowTimestamp);
   const updatePromises = [];
   const tzOffset = filters.timezoneOffset != null ? parseInt(filters.timezoneOffset, 10) : null;
   
-  console.log(`[getShifts] Processing ${result.rows.length} shifts for auto-completion check${tzOffset != null ? ` (client tz offset: ${tzOffset} min)` : ''}`);
+  console.log(`[getShifts] Processing ${result.rows.length} shifts (clientNow: ${!!filters.clientNow}, tzOffset: ${tzOffset})`);
   
   for (const row of result.rows) {
     if (row.status === 'approved' || row.approved_at) {
@@ -146,7 +149,6 @@ export async function getShifts(userId, filters = {}) {
           shiftEndTimestamp = shiftEnd.getTime();
         }
         
-        const nowTimestamp = now.getTime();
         const hasClockIn = row.clocked_in_time && row.clocked_in_time !== null;
         
         if (nowTimestamp > shiftEndTimestamp && !row.clocked_in_time) {

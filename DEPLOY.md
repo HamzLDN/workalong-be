@@ -36,6 +36,18 @@ This applies the same schema changes that exist on your local mock: `approved_at
 
 ## Quick Start
 
+### 0. Push changes (triggers GitHub Actions deploy)
+
+```bash
+# Backend
+cd workalong-backend
+git add -A && git commit -m "Your commit message" && git push origin main
+
+# Frontend (if separate repo)
+cd workalong-frontend
+git add -A && git commit -m "Your commit message" && git push origin main
+```
+
 ### 1. Build the Docker Image
 
 ```bash

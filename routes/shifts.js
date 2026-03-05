@@ -134,12 +134,16 @@ router.get('/shifts', async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    const { startDate, endDate, status, staffId: filterStaffId, timezoneOffset } = req.query;
+    const { startDate, endDate, status, staffId: filterStaffId, timezoneOffset, clientNow } = req.query;
 
     const filters = { startDate, endDate, staffId: filterStaffId, status };
     if (timezoneOffset !== undefined && timezoneOffset !== '') {
       const offset = parseInt(timezoneOffset, 10);
       if (!isNaN(offset)) filters.timezoneOffset = offset;
+    }
+    if (clientNow !== undefined && clientNow !== '') {
+      const ts = parseInt(clientNow, 10);
+      if (!isNaN(ts)) filters.clientNow = ts;
     }
 
     const shifts = await getShifts(req.userId, filters);
