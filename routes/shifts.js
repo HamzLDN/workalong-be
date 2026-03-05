@@ -161,8 +161,13 @@ router.get('/shifts', async (req, res) => {
       return res.json({ shifts });
     }
 
-    const { staffId: filterStaffId } = req.query;
-    const shifts = await getShifts(req.userId, { startDate, endDate, staffId: filterStaffId, status });
+    const { staffId: filterStaffId, timezoneOffset } = req.query;
+    const filters = { startDate, endDate, staffId: filterStaffId, status };
+    if (timezoneOffset !== undefined && timezoneOffset !== '') {
+      const offset = parseInt(timezoneOffset, 10);
+      if (!isNaN(offset)) filters.timezoneOffset = offset;
+    }
+    const shifts = await getShifts(req.userId, filters);
     res.json({ shifts });
   } catch (error) {
     console.error('Get shifts error:', error);
