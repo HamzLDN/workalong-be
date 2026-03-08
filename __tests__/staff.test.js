@@ -59,10 +59,7 @@ describe('Staff Functions', () => {
 
   describe('getStaff', () => {
     it('should get all staff for a user', async () => {
-      const mockStaff = [
-        createMockStaff({ id: 1 }),
-        createMockStaff({ id: 2 }),
-      ];
+      const mockStaff = [createMockStaff({ id: 1 }), createMockStaff({ id: 2 })];
       mockQueryFn.mockResolvedValue(createMockDbResult(mockStaff));
 
       const result = await getStaff(1);
@@ -122,7 +119,7 @@ describe('Staff Functions', () => {
         name: 'John Doe',
         email: 'john@example.com',
         role: 'Manager',
-        hourlyRate: 15.50,
+        hourlyRate: 15.5,
         employmentType: 'full-time',
       };
 
@@ -141,7 +138,7 @@ describe('Staff Functions', () => {
 
       const result = await updateStaff(1, 1, {
         name: 'Updated Name',
-        hourlyRate: 20.00,
+        hourlyRate: 20.0,
       });
 
       expect(mockQueryFn).toHaveBeenCalledWith(
@@ -170,7 +167,12 @@ describe('Staff Functions', () => {
       mockQueryFn
         .mockResolvedValueOnce(createMockDbResult([{ count: '5' }])) // totalStaff
         .mockResolvedValueOnce(createMockDbResult([{ total_hours: '120.50' }])) // hoursResult (approved only)
-        .mockResolvedValueOnce(createMockDbResult([{ staff_id: 1, hours: '80' }, { staff_id: 2, hours: '40.5' }])) // attendanceHoursByStaff
+        .mockResolvedValueOnce(
+          createMockDbResult([
+            { staff_id: 1, hours: '80' },
+            { staff_id: 2, hours: '40.5' },
+          ])
+        ) // attendanceHoursByStaff
         .mockResolvedValueOnce(createMockDbResult([{ total_cost: '1807.50' }])); // payrollResult (approved only)
       // getBudgetStats may run - mock to avoid errors
       mockQueryFn.mockResolvedValue(createMockDbResult([]));
@@ -218,8 +220,22 @@ describe('Staff Functions', () => {
   describe('getPayrollForPeriod', () => {
     it('should get payroll for date range with approved shifts only', async () => {
       const mockStaff = [
-        { staff_id: 1, staff_name: 'John', role: 'Manager', hourly_rate: 15, hours_worked: '40', total_pay: '600' },
-        { staff_id: 2, staff_name: 'Jane', role: 'Worker', hourly_rate: 12, hours_worked: '20', total_pay: '240' },
+        {
+          staff_id: 1,
+          staff_name: 'John',
+          role: 'Manager',
+          hourly_rate: 15,
+          hours_worked: '40',
+          total_pay: '600',
+        },
+        {
+          staff_id: 2,
+          staff_name: 'Jane',
+          role: 'Worker',
+          hourly_rate: 12,
+          hours_worked: '20',
+          total_pay: '240',
+        },
       ];
       mockQueryFn.mockResolvedValue(createMockDbResult(mockStaff));
 
@@ -303,8 +319,8 @@ describe('Staff Functions', () => {
   describe('getMonthlyEarningsChart', () => {
     it('should get monthly earnings chart data', async () => {
       const mockData = [
-        { date: '2026-02-01', earnings: 124.00 },
-        { date: '2026-02-02', earnings: 155.00 },
+        { date: '2026-02-01', earnings: 124.0 },
+        { date: '2026-02-02', earnings: 155.0 },
       ];
       mockQueryFn.mockResolvedValue(createMockDbResult(mockData));
 
@@ -335,7 +351,7 @@ describe('Staff Functions', () => {
         id: 1,
         user_id: 1,
         name: 'Test Budget',
-        monthly_budget: 5000.00,
+        monthly_budget: 5000.0,
         start_date: '2026-02-01',
         end_date: '2026-02-28',
         status: 'active',
@@ -344,7 +360,7 @@ describe('Staff Functions', () => {
 
       const result = await createBudget(1, {
         name: 'Test Budget',
-        monthlyBudget: 5000.00,
+        monthlyBudget: 5000.0,
         startDate: '2026-02-01',
         endDate: '2026-02-28',
       });
@@ -358,7 +374,7 @@ describe('Staff Functions', () => {
     it('should get active budget', async () => {
       const mockBudget = {
         id: 1,
-        amount: 5000.00,
+        amount: 5000.0,
         is_active: true,
       };
       mockQueryFn.mockResolvedValue(createMockDbResult([mockBudget]));
@@ -376,8 +392,8 @@ describe('Staff Functions', () => {
   describe('getBudgets', () => {
     it('should get all budgets', async () => {
       const mockBudgets = [
-        { id: 1, amount: 5000.00 },
-        { id: 2, amount: 6000.00 },
+        { id: 1, amount: 5000.0 },
+        { id: 2, amount: 6000.0 },
       ];
       mockQueryFn.mockResolvedValue(createMockDbResult(mockBudgets));
 
@@ -389,10 +405,10 @@ describe('Staff Functions', () => {
 
   describe('updateBudget', () => {
     it('should update budget', async () => {
-      const mockBudget = { 
-        id: 1, 
+      const mockBudget = {
+        id: 1,
         name: 'Updated Budget',
-        monthly_budget: 5500.00,
+        monthly_budget: 5500.0,
         start_date: '2026-02-01',
         end_date: '2026-02-28',
       };
@@ -400,7 +416,7 @@ describe('Staff Functions', () => {
 
       const result = await updateBudget(1, 1, {
         name: 'Updated Budget',
-        monthlyBudget: 5500.00,
+        monthlyBudget: 5500.0,
         startDate: '2026-02-01',
         endDate: '2026-02-28',
       });
@@ -413,9 +429,9 @@ describe('Staff Functions', () => {
   describe('getBudgetStats', () => {
     it('should get budget statistics', async () => {
       const mockStats = {
-        total_budget: 5000.00,
-        spent: 3200.00,
-        remaining: 1800.00,
+        total_budget: 5000.0,
+        spent: 3200.0,
+        remaining: 1800.0,
         percentage_used: 64.0,
       };
       mockQueryFn.mockResolvedValue(createMockDbResult([mockStats]));

@@ -17,7 +17,7 @@ export async function hasActiveSubscription(userId) {
     }
 
     const user = result.rows[0];
-    
+
     // Check if user has paid or trial status
     if (user.subscription_status !== 'paid' && user.subscription_status !== 'trial') {
       return false;
@@ -29,10 +29,9 @@ export async function hasActiveSubscription(userId) {
       const now = new Date();
       if (now > endDate) {
         // Subscription expired, update status
-        await pool.query(
-          `UPDATE users SET subscription_status = 'expired' WHERE id = $1`,
-          [userId]
-        );
+        await pool.query(`UPDATE users SET subscription_status = 'expired' WHERE id = $1`, [
+          userId,
+        ]);
         return false;
       }
     }
@@ -77,13 +76,7 @@ export async function getSubscriptionDetails(userId) {
  * Update user subscription
  */
 export async function updateSubscription(userId, subscriptionData) {
-  const {
-    status,
-    plan,
-    startDate,
-    endDate,
-    paymentMethod
-  } = subscriptionData;
+  const { status, plan, startDate, endDate, paymentMethod } = subscriptionData;
 
   try {
     const result = await pool.query(
@@ -114,14 +107,14 @@ export async function updateSubscription(userId, subscriptionData) {
 export async function requirePaidSubscription(req, res, next) {
   try {
     const hasPaid = await hasActiveSubscription(req.userId);
-    
+
     if (!hasPaid) {
       return res.status(403).json({
         error: 'This feature requires a paid subscription',
-        code: 'SUBSCRIPTION_REQUIRED'
+        code: 'SUBSCRIPTION_REQUIRED',
       });
     }
-    
+
     next();
   } catch (error) {
     console.error('Subscription check error:', error);

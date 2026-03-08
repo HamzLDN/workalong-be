@@ -50,11 +50,11 @@ function obfuscateData(data, key) {
   const dataArray = Buffer.from(data, 'utf8');
   const keyArray = Buffer.from(key, 'utf8');
   const result = new Uint8Array(dataArray.length);
-  
+
   for (let i = 0; i < dataArray.length; i++) {
     result[i] = dataArray[i] ^ keyArray[i % keyArray.length];
   }
-  
+
   return Buffer.from(result).toString('base64');
 }
 
@@ -62,11 +62,11 @@ function deobfuscateData(obfuscated, key) {
   const dataArray = new Uint8Array(Buffer.from(obfuscated, 'base64'));
   const keyArray = Buffer.from(key, 'utf8');
   const result = new Uint8Array(dataArray.length);
-  
+
   for (let i = 0; i < dataArray.length; i++) {
     result[i] = dataArray[i] ^ keyArray[i % keyArray.length];
   }
-  
+
   return Buffer.from(result).toString('utf8');
 }
 
@@ -91,12 +91,12 @@ function generateDeviceFingerprint() {
     new Date().getTimezoneOffset(),
     'test-canvas-data',
     '8',
-    'Linux'
+    'Linux',
   ].join('|');
   let hash = 0;
   for (let i = 0; i < fingerprint.length; i++) {
     const char = fingerprint.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
+    hash = (hash << 5) - hash + char;
     hash = hash & hash;
   }
   return Math.abs(hash).toString(36);
@@ -107,7 +107,8 @@ function generateDeviceFingerprint() {
 async function makeClockLinkRequest(endpoint, body, method, linkToken, deviceFingerprint) {
   const clocklinkSessionId = `clocklink:${linkToken}:${deviceFingerprint}`;
   const timestamp = Date.now();
-  const nonce = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  const nonce =
+    Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
   const key = generateObfuscationKey(clocklinkSessionId);
 
   let endpointPath = endpoint;
@@ -158,19 +159,19 @@ async function makeClockLinkRequest(endpoint, body, method, linkToken, deviceFin
     'X-Request-Nonce': nonce,
     'X-Request-Signature': signature,
     'X-Link-Token': linkToken,
-    'X-Device-Fingerprint': deviceFingerprint
+    'X-Device-Fingerprint': deviceFingerprint,
   };
 
   const fetchOptions = {
     method,
-    headers
+    headers,
   };
 
   if (method !== 'GET' && method !== 'HEAD') {
     headers['Content-Type'] = 'application/x-obfuscated';
     const payload = {
       format: 'information',
-      data: obfuscatedBody || ''
+      data: obfuscatedBody || '',
     };
     fetchOptions.body = JSON.stringify(payload);
   }
@@ -206,13 +207,13 @@ async function makeClockLinkRequest(endpoint, body, method, linkToken, deviceFin
       status: response.status,
       ok: response.ok,
       data,
-      headers: Object.fromEntries(response.headers.entries())
+      headers: Object.fromEntries(response.headers.entries()),
     };
   } catch (error) {
     return {
       status: 0,
       ok: false,
-      error: error.message
+      error: error.message,
     };
   }
 }
@@ -251,12 +252,14 @@ async function makeRequest(endpoint, options = {}) {
           // Always regenerate CSRF token when session changes
           csrfToken = generateCsrfToken(sessionId);
           if (oldSessionId) {
-            console.log(`  ${YELLOW}WARNING:${RESET} Session ID changed from ${oldSessionId.substring(0, 20)}... to ${sessionId.substring(0, 20)}...`);
+            console.log(
+              `  ${YELLOW}WARNING:${RESET} Session ID changed from ${oldSessionId.substring(0, 20)}... to ${sessionId.substring(0, 20)}...`
+            );
             console.log(`  ${GREEN}PASS:${RESET} CSRF token regenerated for new session`);
           }
         }
       }
-      
+
       // Extract CSRF token from cookie if present (backend might provide it)
       if (setCookieHeader.includes('csrfToken=')) {
         const csrfMatch = setCookieHeader.match(/csrfToken=([^;]+)/);
@@ -317,7 +320,7 @@ function generateObfuscationKey(sessionId) {
 
 function generateRequestSignature(method, url, body, sessionId, timestamp, nonce) {
   const key = generateObfuscationKey(sessionId);
-  
+
   // Normalize endpoint path exactly like the backend does:
   // 1. Remove query string
   // 2. Ensure it starts with /
@@ -332,27 +335,27 @@ function generateRequestSignature(method, url, body, sessionId, timestamp, nonce
   if (endpointPath.startsWith('/api/')) {
     endpointPath = endpointPath.substring(4);
   }
-  
+
   // Use empty string for body if it's null/undefined/empty
   const bodyStr = body || '';
-  
+
   const payload = `${method}:${endpointPath}:${bodyStr}:${timestamp}:${nonce}`;
-  
+
   let hash = 0;
   for (let i = 0; i < payload.length; i++) {
     const char = payload.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
+    hash = (hash << 5) - hash + char;
     hash = hash & hash;
   }
-  
+
   const combined = `${hash}:${key}`;
   let finalHash = 0;
   for (let i = 0; i < combined.length; i++) {
     const char = combined.charCodeAt(i);
-    finalHash = ((finalHash << 5) - finalHash) + char;
+    finalHash = (finalHash << 5) - finalHash + char;
     finalHash = finalHash & finalHash;
   }
-  
+
   return Math.abs(finalHash).toString(36);
 }
 
@@ -367,9 +370,10 @@ async function makeObfuscatedRequest(endpoint, body, method = 'POST') {
   }
 
   const timestamp = Date.now();
-  const nonce = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  const nonce =
+    Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
   const key = generateObfuscationKey(sessionId);
-  
+
   // Normalize endpoint exactly like backend does
   let endpointPath = endpoint;
   if (endpointPath.includes('?')) {
@@ -381,13 +385,13 @@ async function makeObfuscatedRequest(endpoint, body, method = 'POST') {
   if (endpointPath.startsWith('/api/')) {
     endpointPath = endpointPath.substring(4);
   }
-  
+
   // Obfuscate body if present
   // Important: For empty bodies (null, undefined, or {}), we use empty string for signature
   // The backend expects the obfuscated data string (or empty string) in the signature
   let obfuscatedBody = null;
   let bodyStringForSignature = '';
-  
+
   if (body !== null && body !== undefined) {
     if (typeof body === 'object') {
       if (Object.keys(body).length > 0) {
@@ -427,8 +431,8 @@ async function makeObfuscatedRequest(endpoint, body, method = 'POST') {
     'X-Request-Timestamp': timestamp.toString(),
     'X-Request-Nonce': nonce,
     'X-Request-Signature': signature,
-    'Authorization': `Bearer ${sessionId}`,
-    'Cookie': `sessionId=${sessionId}`,
+    Authorization: `Bearer ${sessionId}`,
+    Cookie: `sessionId=${sessionId}`,
     'X-CSRF-Token': csrfToken,
   };
 
@@ -535,7 +539,7 @@ async function testSignup() {
   console.log('\n=== Testing Signup (Non-Obfuscated) ===');
   const email = `test-${Date.now()}@example.com`;
   const password = 'TestPassword123!';
-  
+
   const result = await makeRequest('/auth/signup', {
     method: 'POST',
     body: JSON.stringify({
@@ -547,7 +551,8 @@ async function testSignup() {
 
   const expected = { ok: true, hasUser: true, status: '200 or 201' };
   const actual = { ok: result.ok, hasUser: !!result.data?.user, status: result.status };
-  const passed = result.ok && !!result.data?.user && (result.status === 200 || result.status === 201);
+  const passed =
+    result.ok && !!result.data?.user && (result.status === 200 || result.status === 201);
   console.log(`  Signup:`);
   assertResult('signup', expected, actual, passed);
   if (result.ok && result.data?.user) {
@@ -572,8 +577,15 @@ async function testSignupObfuscated() {
     }),
   });
   const expected = { ok: true, hasUser: true, status: '200 or 201' };
-  const actual = { ok: signupResult.ok, hasUser: !!signupResult.data?.user, status: signupResult.status };
-  const passed = signupResult.ok && !!signupResult.data?.user && (signupResult.status === 200 || signupResult.status === 201);
+  const actual = {
+    ok: signupResult.ok,
+    hasUser: !!signupResult.data?.user,
+    status: signupResult.status,
+  };
+  const passed =
+    signupResult.ok &&
+    !!signupResult.data?.user &&
+    (signupResult.status === 200 || signupResult.status === 201);
   console.log(`  Signup (Obfuscated):`);
   assertResult('signup obfuscated', expected, actual, passed);
   return passed;
@@ -609,7 +621,11 @@ async function testSigninObfuscated() {
     }),
   });
   const expected = { ok: true, hasUser: true, status: 200 };
-  const actual = { ok: signinResult.ok, hasUser: !!signinResult.data?.user, status: signinResult.status };
+  const actual = {
+    ok: signinResult.ok,
+    hasUser: !!signinResult.data?.user,
+    status: signinResult.status,
+  };
   const passed = signinResult.ok && !!signinResult.data?.user;
   console.log(`  Signin (Obfuscated):`);
   assertResult('signin obfuscated', expected, actual, passed);
@@ -627,7 +643,11 @@ async function testGetProfile() {
 async function testGetProfileObfuscated() {
   console.log('\n=== Testing Get Profile (Obfuscated, Authenticated) ===');
   if (!sessionId) return false;
-  const result = await makeObfuscatedRequest('/auth/profile', { name: 'Test User Obfuscated' }, 'PUT');
+  const result = await makeObfuscatedRequest(
+    '/auth/profile',
+    { name: 'Test User Obfuscated' },
+    'PUT'
+  );
   return assertStatusResponse('Get Profile (Obfuscated)', result, 200);
 }
 
@@ -646,7 +666,12 @@ async function testGetShiftsObfuscated() {
     return assertStatusResponse('Get Shifts (Obfuscated)', result, 200);
   } catch (error) {
     console.log(`  ${RED}ERROR:${RESET} ${error.message}`);
-    assertResult('Get Shifts (Obfuscated)', { status: 200, ok: true }, { error: error.message }, false);
+    assertResult(
+      'Get Shifts (Obfuscated)',
+      { status: 200, ok: true },
+      { error: error.message },
+      false
+    );
     return false;
   }
 }
@@ -657,17 +682,26 @@ async function createTestStaff() {
     console.log(`${YELLOW}WARNING:${RESET} No session available for obfuscated request`);
     return null;
   }
-  const result = await makeObfuscatedRequest('/staff', {
-    name: 'Test Staff Member',
-    email: `test-staff-${Date.now()}@example.com`,
-    role: 'Server',
-    hourlyRate: 15.00,
-    employmentType: 'full-time',
-  }, 'POST');
-  
+  const result = await makeObfuscatedRequest(
+    '/staff',
+    {
+      name: 'Test Staff Member',
+      email: `test-staff-${Date.now()}@example.com`,
+      role: 'Server',
+      hourlyRate: 15.0,
+      employmentType: 'full-time',
+    },
+    'POST'
+  );
+
   const passed = result.ok && !!result.data?.staff;
   console.log(`  Create Staff:`);
-  assertResult('Create Staff', { status: 201, hasStaff: true }, { status: result.status, hasStaff: !!result.data?.staff }, passed);
+  assertResult(
+    'Create Staff',
+    { status: 201, hasStaff: true },
+    { status: result.status, hasStaff: !!result.data?.staff },
+    passed
+  );
   if (passed) {
     console.log(`  Staff: ${result.data.staff.name} (ID: ${result.data.staff.id})`);
     return result.data.staff.id;
@@ -677,12 +711,16 @@ async function createTestStaff() {
 
 async function testCreateShift() {
   console.log('\n=== Testing Create Shift (Obfuscated, Authenticated) ===');
-  
+
   // First, try to create a staff member if we don't have one
   let localStaffId = staffId;
   if (!localStaffId) {
     const staffListResult = await makeObfuscatedRequest('/staff', {}, 'GET');
-    if (staffListResult.ok && staffListResult.data?.staff && staffListResult.data.staff.length > 0) {
+    if (
+      staffListResult.ok &&
+      staffListResult.data?.staff &&
+      staffListResult.data.staff.length > 0
+    ) {
       localStaffId = staffListResult.data.staff[0].id;
       staffId = localStaffId; // Update global
       console.log(`  Using existing staff member ID: ${localStaffId}`);
@@ -691,20 +729,26 @@ async function testCreateShift() {
       if (localStaffId) staffId = localStaffId; // Update global
     }
   }
-  
+
   if (!localStaffId) {
-    console.log(`${YELLOW}WARNING:${RESET} No staff member available, skipping shift creation test`);
+    console.log(
+      `${YELLOW}WARNING:${RESET} No staff member available, skipping shift creation test`
+    );
     return true; // Not a failure, just skip
   }
-  
+
   const today = new Date().toISOString().split('T')[0];
-  const result = await makeObfuscatedRequest('/shifts', {
-    staffId: localStaffId,
-    shiftDate: today,
-    startTime: '09:00',
-    hours: 8,
-    location: 'Main Floor',
-  }, 'POST');
+  const result = await makeObfuscatedRequest(
+    '/shifts',
+    {
+      staffId: localStaffId,
+      shiftDate: today,
+      startTime: '09:00',
+      hours: 8,
+      location: 'Main Floor',
+    },
+    'POST'
+  );
   if (result.ok && result.data?.shift) {
     createdShiftId = result.data.shift.id;
   }
@@ -717,7 +761,7 @@ async function testCreateShiftObfuscated() {
     console.log(`${YELLOW}WARNING:${RESET} No session available, skipping obfuscated request`);
     return false;
   }
-  
+
   // First, try to get a staff member
   let staffId = null;
   const staffListResult = await makeObfuscatedRequest('/staff', {}, 'GET');
@@ -727,20 +771,26 @@ async function testCreateShiftObfuscated() {
   } else {
     staffId = await createTestStaff();
   }
-  
+
   if (!staffId) {
-    console.log(`${YELLOW}WARNING:${RESET} No staff member available, skipping obfuscated shift creation test`);
+    console.log(
+      `${YELLOW}WARNING:${RESET} No staff member available, skipping obfuscated shift creation test`
+    );
     return true; // Not a failure, just skip
   }
-  
+
   const today = new Date().toISOString().split('T')[0];
-  const result = await makeObfuscatedRequest('/shifts', {
-    staffId: staffId,
-    shiftDate: today,
-    startTime: '14:00',
-    hours: 4,
-    location: 'Main Floor',
-  }, 'POST');
+  const result = await makeObfuscatedRequest(
+    '/shifts',
+    {
+      staffId: staffId,
+      shiftDate: today,
+      startTime: '14:00',
+      hours: 4,
+      location: 'Main Floor',
+    },
+    'POST'
+  );
   return assertStatusResponse('Create Shift (Obfuscated)', result, [201, 409]);
 }
 
@@ -759,7 +809,12 @@ async function testGetStaffObfuscated() {
     return assertStatusResponse('Get Staff (Obfuscated)', result, 200);
   } catch (error) {
     console.log(`  ${RED}ERROR:${RESET} ${error.message}`);
-    assertResult('Get Staff (Obfuscated)', { status: 200, ok: true }, { error: error.message }, false);
+    assertResult(
+      'Get Staff (Obfuscated)',
+      { status: 200, ok: true },
+      { error: error.message },
+      false
+    );
     return false;
   }
 }
@@ -778,16 +833,20 @@ async function testContactForm() {
         name: 'Test User',
         email: `test-${Date.now()}@example.com`,
         subject: 'Test Subject',
-        message: 'This is a test message'
-      })
+        message: 'This is a test message',
+      }),
     });
   } else {
-    result = await makeObfuscatedRequest('/contact', {
-      name: 'Test User',
-      email: `test-${Date.now()}@example.com`,
-      subject: 'Test Subject',
-      message: 'This is a test message'
-    }, 'POST');
+    result = await makeObfuscatedRequest(
+      '/contact',
+      {
+        name: 'Test User',
+        email: `test-${Date.now()}@example.com`,
+        subject: 'Test Subject',
+        message: 'This is a test message',
+      },
+      'POST'
+    );
   }
   return assertStatusResponse('Contact Form', result, 200);
 }
@@ -822,8 +881,8 @@ async function testForgotPassword() {
   const result = await makeRequest('/auth/forgot-password', {
     method: 'POST',
     body: JSON.stringify({
-      email: `test-${Date.now()}@example.com`
-    })
+      email: `test-${Date.now()}@example.com`,
+    }),
   });
   const expected = { status: 200 };
   const actual = { status: result.status };
@@ -863,10 +922,14 @@ async function testUpdateStaff() {
     console.log(`  ${RED}ERROR:${RESET} No session or staff ID available`);
     return false;
   }
-  const result = await makeObfuscatedRequest(`/staff/${staffId}`, {
-    name: 'Updated Staff Member',
-    role: 'Manager'
-  }, 'PUT');
+  const result = await makeObfuscatedRequest(
+    `/staff/${staffId}`,
+    {
+      name: 'Updated Staff Member',
+      role: 'Manager',
+    },
+    'PUT'
+  );
   const passed = assertStatusResponse('Update Staff', result, 200);
   if (!passed && result?.data) {
     console.log(`  Response: ${JSON.stringify(result.data, null, 2)}`);
@@ -895,10 +958,14 @@ async function testGetShiftById() {
 async function testUpdateShift() {
   console.log('\n=== Testing Update Shift (Obfuscated) ===');
   if (!sessionId || !createdShiftId) return false;
-  const result = await makeObfuscatedRequest(`/shifts/${createdShiftId}`, {
-    startTime: '11:00',
-    hours: 7
-  }, 'PUT');
+  const result = await makeObfuscatedRequest(
+    `/shifts/${createdShiftId}`,
+    {
+      startTime: '11:00',
+      hours: 7,
+    },
+    'PUT'
+  );
   return assertStatusResponse('Update Shift', result, 200);
 }
 
@@ -944,23 +1011,34 @@ async function testShiftConflictOvernightNoFalsePositive() {
   testDate.setDate(testDate.getDate() + 14);
   const dateStr = testDate.toISOString().split('T')[0];
   try {
-    await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [localStaffId, dateStr]);
-    const shift1 = await makeObfuscatedRequest('/shifts', {
-      staffId: localStaffId,
-      shiftDate: dateStr,
-      startTime: '00:00',
-      hours: 8,
-    }, 'POST');
+    await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
+      localStaffId,
+      dateStr,
+    ]);
+    const shift1 = await makeObfuscatedRequest(
+      '/shifts',
+      {
+        staffId: localStaffId,
+        shiftDate: dateStr,
+        startTime: '00:00',
+        hours: 8,
+      },
+      'POST'
+    );
     if (!shift1.ok) {
       console.log(`  ${RED}FAIL:${RESET} Could not create first shift (00:00-08:00)`);
       return false;
     }
-    const shift2 = await makeObfuscatedRequest('/shifts', {
-      staffId: localStaffId,
-      shiftDate: dateStr,
-      startTime: '17:00',
-      hours: 8,
-    }, 'POST');
+    const shift2 = await makeObfuscatedRequest(
+      '/shifts',
+      {
+        staffId: localStaffId,
+        shiftDate: dateStr,
+        startTime: '17:00',
+        hours: 8,
+      },
+      'POST'
+    );
     const passed = shift2.status === 201;
     assertResult(
       'Overnight (17:00-01:00) vs same-day (00:00-08:00) - no conflict',
@@ -970,7 +1048,10 @@ async function testShiftConflictOvernightNoFalsePositive() {
     );
     return passed;
   } finally {
-    await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [localStaffId, dateStr]);
+    await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
+      localStaffId,
+      dateStr,
+    ]);
   }
 }
 
@@ -992,13 +1073,20 @@ async function testOvernightShiftNotCompletedPrematurely() {
   const dateStr = tomorrow.toISOString().split('T')[0];
   let createdId = null;
   try {
-    await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [localStaffId, dateStr]);
-    const createRes = await makeObfuscatedRequest('/shifts', {
-      staffId: localStaffId,
-      shiftDate: dateStr,
-      startTime: '17:15',
-      hours: 8,
-    }, 'POST');
+    await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
+      localStaffId,
+      dateStr,
+    ]);
+    const createRes = await makeObfuscatedRequest(
+      '/shifts',
+      {
+        staffId: localStaffId,
+        shiftDate: dateStr,
+        startTime: '17:15',
+        hours: 8,
+      },
+      'POST'
+    );
     if (!createRes.ok) {
       console.log(`  ${RED}FAIL:${RESET} Could not create overnight shift`);
       return false;
@@ -1010,7 +1098,11 @@ async function testOvernightShiftNotCompletedPrematurely() {
       console.log(`  ${RED}FAIL:${RESET} Could not fetch shifts`);
       return false;
     }
-    const shift = shifts.find((s) => s.id === createdId || (String(s.shift_date).startsWith(dateStr) && s.start_time?.startsWith?.('17')));
+    const shift = shifts.find(
+      (s) =>
+        s.id === createdId ||
+        (String(s.shift_date).startsWith(dateStr) && s.start_time?.startsWith?.('17'))
+    );
     if (!shift) {
       console.log(`  ${YELLOW}WARN:${RESET} Could not find created overnight shift in response`);
       return true;
@@ -1028,7 +1120,10 @@ async function testOvernightShiftNotCompletedPrematurely() {
     if (createdId) {
       await pool.query('DELETE FROM shifts WHERE id = $1', [createdId]);
     } else {
-      await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [localStaffId, dateStr]);
+      await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
+        localStaffId,
+        dateStr,
+      ]);
     }
   }
 }
@@ -1051,21 +1146,35 @@ async function testMultiDayShiftCreation() {
   const dateStr = testDate.toISOString().split('T')[0];
   let createdId = null;
   try {
-    await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [localStaffId, dateStr]);
-    const createRes = await makeObfuscatedRequest('/shifts', {
-      staffId: localStaffId,
-      shiftDate: dateStr,
-      startTime: '00:00',
-      hours: 120,
-    }, 'POST');
+    await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
+      localStaffId,
+      dateStr,
+    ]);
+    const createRes = await makeObfuscatedRequest(
+      '/shifts',
+      {
+        staffId: localStaffId,
+        shiftDate: dateStr,
+        startTime: '00:00',
+        hours: 120,
+      },
+      'POST'
+    );
     if (!createRes.ok) {
-      console.log(`  ${RED}FAIL:${RESET} Could not create 120-hour shift: ${createRes.data?.error || 'unknown'}`);
+      console.log(
+        `  ${RED}FAIL:${RESET} Could not create 120-hour shift: ${createRes.data?.error || 'unknown'}`
+      );
       return false;
     }
     createdId = createRes.data?.shift?.id;
     const storedHours = createRes.data?.shift?.hours ?? createRes.data?.shift?.hours_worked;
     const hoursOk = parseFloat(storedHours) === 120;
-    assertResult('120-hour shift stores hours correctly', { hours: 120 }, { hours: storedHours }, hoursOk);
+    assertResult(
+      '120-hour shift stores hours correctly',
+      { hours: 120 },
+      { hours: storedHours },
+      hoursOk
+    );
     const getRes = await makeObfuscatedRequest(`/shifts/${createdId}`, {}, 'GET');
     if (getRes.ok && getRes.data?.shift) {
       const s = getRes.data.shift;
@@ -1075,7 +1184,11 @@ async function testMultiDayShiftCreation() {
     return hoursOk;
   } finally {
     if (createdId) await pool.query('DELETE FROM shifts WHERE id = $1', [createdId]);
-    else await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [localStaffId, dateStr]);
+    else
+      await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
+        localStaffId,
+        dateStr,
+      ]);
   }
 }
 
@@ -1100,21 +1213,35 @@ async function testFiveConsecutiveOvernightShifts() {
       const d = new Date(base);
       d.setDate(d.getDate() + i);
       const dateStr = d.toISOString().split('T')[0];
-      await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [localStaffId, dateStr]);
-      const res = await makeObfuscatedRequest('/shifts', {
-        staffId: localStaffId,
-        shiftDate: dateStr,
-        startTime: '17:00',
-        hours: 8,
-      }, 'POST');
+      await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
+        localStaffId,
+        dateStr,
+      ]);
+      const res = await makeObfuscatedRequest(
+        '/shifts',
+        {
+          staffId: localStaffId,
+          shiftDate: dateStr,
+          startTime: '17:00',
+          hours: 8,
+        },
+        'POST'
+      );
       if (!res.ok) {
-        console.log(`  ${RED}FAIL:${RESET} Day ${i + 1} (${dateStr}): ${res.data?.error || 'unknown'}`);
+        console.log(
+          `  ${RED}FAIL:${RESET} Day ${i + 1} (${dateStr}): ${res.data?.error || 'unknown'}`
+        );
         return false;
       }
       if (res.data?.shift?.id) createdIds.push(res.data.shift.id);
     }
     const passed = createdIds.length === 5;
-    assertResult('All 5 overnight shifts created', { count: 5 }, { count: createdIds.length }, passed);
+    assertResult(
+      'All 5 overnight shifts created',
+      { count: 5 },
+      { count: createdIds.length },
+      passed
+    );
     return passed;
   } finally {
     for (const id of createdIds) {
@@ -1141,15 +1268,24 @@ async function test24HourShiftNoClockInUnattended() {
   const dateStr = yesterday.toISOString().split('T')[0];
   let createdId = null;
   try {
-    await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [localStaffId, dateStr]);
-    const createRes = await makeObfuscatedRequest('/shifts', {
-      staffId: localStaffId,
-      shiftDate: dateStr,
-      startTime: '00:00',
-      hours: 24,
-    }, 'POST');
+    await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
+      localStaffId,
+      dateStr,
+    ]);
+    const createRes = await makeObfuscatedRequest(
+      '/shifts',
+      {
+        staffId: localStaffId,
+        shiftDate: dateStr,
+        startTime: '00:00',
+        hours: 24,
+      },
+      'POST'
+    );
     if (!createRes.ok) {
-      console.log(`  ${RED}FAIL:${RESET} Could not create 24-hour shift: ${createRes.data?.error || 'unknown'}`);
+      console.log(
+        `  ${RED}FAIL:${RESET} Could not create 24-hour shift: ${createRes.data?.error || 'unknown'}`
+      );
       return false;
     }
     createdId = createRes.data?.shift?.id;
@@ -1159,7 +1295,13 @@ async function test24HourShiftNoClockInUnattended() {
       console.log(`  ${RED}FAIL:${RESET} Could not fetch shifts`);
       return false;
     }
-    const shift = shifts.find((s) => s.id === createdId || (String(s.shift_date).startsWith(dateStr) && s.start_time?.startsWith?.('00') && parseFloat(s.hours) === 24));
+    const shift = shifts.find(
+      (s) =>
+        s.id === createdId ||
+        (String(s.shift_date).startsWith(dateStr) &&
+          s.start_time?.startsWith?.('00') &&
+          parseFloat(s.hours) === 24)
+    );
     if (!shift) {
       console.log(`  ${YELLOW}WARN:${RESET} Could not find created 24-hour shift`);
       return true;
@@ -1174,7 +1316,11 @@ async function test24HourShiftNoClockInUnattended() {
     return passed;
   } finally {
     if (createdId) await pool.query('DELETE FROM shifts WHERE id = $1', [createdId]);
-    else await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [localStaffId, dateStr]);
+    else
+      await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
+        localStaffId,
+        dateStr,
+      ]);
   }
 }
 
@@ -1196,21 +1342,32 @@ async function testCompletedShiftWithNoClockInCorrected() {
   const dateStr = futureDate.toISOString().split('T')[0];
   let createdId = null;
   try {
-    await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [localStaffId, dateStr]);
-    const createRes = await makeObfuscatedRequest('/shifts', {
-      staffId: localStaffId,
-      shiftDate: dateStr,
-      startTime: '09:00',
-      hours: 8,
-    }, 'POST');
+    await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
+      localStaffId,
+      dateStr,
+    ]);
+    const createRes = await makeObfuscatedRequest(
+      '/shifts',
+      {
+        staffId: localStaffId,
+        shiftDate: dateStr,
+        startTime: '09:00',
+        hours: 8,
+      },
+      'POST'
+    );
     if (!createRes.ok) {
       console.log(`  ${RED}FAIL:${RESET} Could not create shift`);
       return false;
     }
     createdId = createRes.data?.shift?.id;
-    const beforeUpdate = await pool.query('SELECT id, user_id, status FROM shifts WHERE id = $1', [createdId]);
+    const beforeUpdate = await pool.query('SELECT id, user_id, status FROM shifts WHERE id = $1', [
+      createdId,
+    ]);
     if (beforeUpdate.rows.length === 0) {
-      console.log(`  ${YELLOW}WARN:${RESET} Shift ${createdId} not in DB (test script may use different DB than API) - skipping correction test`);
+      console.log(
+        `  ${YELLOW}WARN:${RESET} Shift ${createdId} not in DB (test script may use different DB than API) - skipping correction test`
+      );
       return true;
     }
     const updateResult = await pool.query(
@@ -1250,7 +1407,11 @@ async function testCompletedShiftWithNoClockInCorrected() {
     return passed;
   } finally {
     if (createdId) await pool.query('DELETE FROM shifts WHERE id = $1', [createdId]);
-    else await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [localStaffId, dateStr]);
+    else
+      await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
+        localStaffId,
+        dateStr,
+      ]);
   }
 }
 
@@ -1274,13 +1435,20 @@ async function test24HourShiftEndTime() {
   const nextDayStr = nextDay.toISOString().split('T')[0];
   let createdId = null;
   try {
-    await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND (shift_date = $2::date OR shift_date = $3::date)', [localStaffId, dateStr, nextDayStr]);
-    const createRes = await makeObfuscatedRequest('/shifts', {
-      staffId: localStaffId,
-      startTime: '00:00',
-      shiftDate: dateStr,
-      hours: 24,
-    }, 'POST');
+    await pool.query(
+      'DELETE FROM shifts WHERE staff_id = $1 AND (shift_date = $2::date OR shift_date = $3::date)',
+      [localStaffId, dateStr, nextDayStr]
+    );
+    const createRes = await makeObfuscatedRequest(
+      '/shifts',
+      {
+        staffId: localStaffId,
+        startTime: '00:00',
+        shiftDate: dateStr,
+        hours: 24,
+      },
+      'POST'
+    );
     if (!createRes.ok) {
       const err = createRes.data?.error || createRes.error || 'unknown';
       console.log(`  ${RED}FAIL:${RESET} Could not create 24-hour shift: ${err}`);
@@ -1289,7 +1457,13 @@ async function test24HourShiftEndTime() {
     createdId = createRes.data?.shift?.id;
     const getRes = await makeObfuscatedRequest('/shifts', {}, 'GET');
     const shifts = getRes.data?.shifts ?? getRes.data;
-    const shift = Array.isArray(shifts) ? shifts.find((s) => s.id === createdId || (String(s.shift_date).startsWith(dateStr) && s.start_time?.startsWith?.('00'))) : null;
+    const shift = Array.isArray(shifts)
+      ? shifts.find(
+          (s) =>
+            s.id === createdId ||
+            (String(s.shift_date).startsWith(dateStr) && s.start_time?.startsWith?.('00'))
+        )
+      : null;
     if (!shift) {
       console.log(`  ${YELLOW}WARN:${RESET} Could not find created shift`);
       return true;
@@ -1301,7 +1475,11 @@ async function test24HourShiftEndTime() {
     return passed;
   } finally {
     if (createdId) await pool.query('DELETE FROM shifts WHERE id = $1', [createdId]);
-    else await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [localStaffId, dateStr]);
+    else
+      await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
+        localStaffId,
+        dateStr,
+      ]);
   }
 }
 
@@ -1321,8 +1499,14 @@ async function testGetPayrollPreview() {
   if (!sessionId) return false;
   const today = new Date();
   const startDate = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
-  const endDate = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().split('T')[0];
-  const result = await makeObfuscatedRequest(`/payroll-preview?startDate=${startDate}&endDate=${endDate}`, {}, 'GET');
+  const endDate = new Date(today.getFullYear(), today.getMonth() + 1, 0)
+    .toISOString()
+    .split('T')[0];
+  const result = await makeObfuscatedRequest(
+    `/payroll-preview?startDate=${startDate}&endDate=${endDate}`,
+    {},
+    'GET'
+  );
   return assertStatusResponse('Get Payroll Preview', result, 200);
 }
 
@@ -1330,7 +1514,11 @@ async function testGetMonthlyEarnings() {
   console.log('\n=== Testing Get Monthly Earnings ===');
   if (!sessionId) return false;
   const today = new Date();
-  const result = await makeObfuscatedRequest(`/earnings/monthly?year=${today.getFullYear()}&month=${today.getMonth() + 1}`, {}, 'GET');
+  const result = await makeObfuscatedRequest(
+    `/earnings/monthly?year=${today.getFullYear()}&month=${today.getMonth() + 1}`,
+    {},
+    'GET'
+  );
   return assertStatusResponse('Get Monthly Earnings', result, 200);
 }
 
@@ -1345,12 +1533,16 @@ async function testCreateTimeEntry() {
     return false;
   }
   const today = new Date().toISOString().split('T')[0];
-  const result = await makeObfuscatedRequest('/time-entries', {
-    staffId: staffId,
-    date: today,
-    hoursWorked: 8,
-    hourlyRate: 15.00
-  }, 'POST');
+  const result = await makeObfuscatedRequest(
+    '/time-entries',
+    {
+      staffId: staffId,
+      date: today,
+      hoursWorked: 8,
+      hourlyRate: 15.0,
+    },
+    'POST'
+  );
   const passed = assertStatusResponse('Create Time Entry', result, 201);
   if (!passed && result?.data) console.log(`  Response: ${JSON.stringify(result.data)}`);
   return passed;
@@ -1373,10 +1565,14 @@ async function testGetPaymentSchedule() {
 async function testCreatePaymentSchedule() {
   console.log('\n=== Testing Create Payment Schedule (Obfuscated) ===');
   if (!sessionId) return false;
-  const result = await makeObfuscatedRequest('/payments/schedule', {
-    scheduleType: 'weekly',
-    paymentDay: 5
-  }, 'POST');
+  const result = await makeObfuscatedRequest(
+    '/payments/schedule',
+    {
+      scheduleType: 'weekly',
+      paymentDay: 5,
+    },
+    'POST'
+  );
   return assertStatusResponse('Create Payment Schedule', result, [200, 201]);
 }
 
@@ -1408,11 +1604,15 @@ async function testGetLocation() {
 async function testUpdateLocation() {
   console.log('\n=== Testing Update Location (Obfuscated) ===');
   if (!sessionId) return false;
-  const result = await makeObfuscatedRequest('/location', {
-    latitude: 51.5074,
-    longitude: -0.1278,
-    radius: 100
-  }, 'PUT');
+  const result = await makeObfuscatedRequest(
+    '/location',
+    {
+      latitude: 51.5074,
+      longitude: -0.1278,
+      radius: 100,
+    },
+    'PUT'
+  );
   return assertStatusResponse('Update Location', result, 200);
 }
 
@@ -1426,12 +1626,16 @@ async function testGetLocations() {
 async function testCreateLocation() {
   console.log('\n=== Testing Create Location (Obfuscated) ===');
   if (!sessionId) return false;
-  const result = await makeObfuscatedRequest('/locations', {
-    name: 'Test Location',
-    latitude: 51.5074,
-    longitude: -0.1278,
-    radius: 100
-  }, 'POST');
+  const result = await makeObfuscatedRequest(
+    '/locations',
+    {
+      name: 'Test Location',
+      latitude: 51.5074,
+      longitude: -0.1278,
+      radius: 100,
+    },
+    'POST'
+  );
   if (result.ok && result.data?.location) {
     createdLocationId = result.data.location.id;
   }
@@ -1461,13 +1665,19 @@ async function testCreateBudget() {
   if (!sessionId) return false;
   const today = new Date();
   const startDate = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
-  const endDate = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().split('T')[0];
-  const result = await makeObfuscatedRequest('/budgets', {
-    name: 'Test Budget',
-    monthlyBudget: 10000,
-    startDate: startDate,
-    endDate: endDate
-  }, 'POST');
+  const endDate = new Date(today.getFullYear(), today.getMonth() + 1, 0)
+    .toISOString()
+    .split('T')[0];
+  const result = await makeObfuscatedRequest(
+    '/budgets',
+    {
+      name: 'Test Budget',
+      monthlyBudget: 10000,
+      startDate: startDate,
+      endDate: endDate,
+    },
+    'POST'
+  );
   if (result.ok && result.data?.budget) {
     createdBudgetId = result.data.budget.id;
   }
@@ -1531,9 +1741,13 @@ async function testGetApiKeys() {
 async function testCreateApiKey() {
   console.log('\n=== Testing Create API Key (Obfuscated) ===');
   if (!sessionId) return false;
-  const result = await makeObfuscatedRequest('/security/api-keys', {
-    keyName: `test-key-${Date.now()}`
-  }, 'POST');
+  const result = await makeObfuscatedRequest(
+    '/security/api-keys',
+    {
+      keyName: `test-key-${Date.now()}`,
+    },
+    'POST'
+  );
   if (result.ok && result.data?.key) {
     createdApiKeyId = result.data.key.id;
   }
@@ -1569,9 +1783,13 @@ async function testGenerateClockinLink() {
     console.log(`  ${RED}ERROR:${RESET} No session available`);
     return false;
   }
-  const result = await makeObfuscatedRequest('/clockin/generate-link', {
-    deviceName: 'Test Device API Script'
-  }, 'POST');
+  const result = await makeObfuscatedRequest(
+    '/clockin/generate-link',
+    {
+      deviceName: 'Test Device API Script',
+    },
+    'POST'
+  );
   const expected = { status: 200, ok: true, hasLink: true };
   const actual = { status: result.status, ok: result.ok, hasLink: !!result.data?.link };
   console.log(`  Generate Clock-in Link:`);
@@ -1630,10 +1848,14 @@ async function testClockInFlowWithStaff() {
 
   // 1. Ensure we have a device link and token
   if (!clockinLinkToken) {
-    const genResult = await makeObfuscatedRequest('/clockin/generate-link', {
-      deviceName: 'Test Device API',
-      expiresInDays: 90
-    }, 'POST');
+    const genResult = await makeObfuscatedRequest(
+      '/clockin/generate-link',
+      {
+        deviceName: 'Test Device API',
+        expiresInDays: 90,
+      },
+      'POST'
+    );
     if (!genResult.ok || !genResult.data?.link) {
       console.log(`  ${RED}ERROR:${RESET} Could not generate link`);
       return false;
@@ -1654,16 +1876,25 @@ async function testClockInFlowWithStaff() {
   // 4. Create shift for today via API - use full-day window so "now" is always within shift (avoids timezone/timing flakiness)
   const today = new Date().toISOString().split('T')[0];
   // Remove existing shifts for this staff today to avoid 409 overlap from prior tests
-  await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [staffId, today]);
-  const shiftRes = await makeObfuscatedRequest('/shifts', {
+  await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
     staffId,
-    shiftDate: today,
-    startTime: '00:00',
-    hours: 24,
-    location: 'Test Location',
-  }, 'POST');
+    today,
+  ]);
+  const shiftRes = await makeObfuscatedRequest(
+    '/shifts',
+    {
+      staffId,
+      shiftDate: today,
+      startTime: '00:00',
+      hours: 24,
+      location: 'Test Location',
+    },
+    'POST'
+  );
   if (!shiftRes.ok) {
-    console.log(`  ${RED}ERROR:${RESET} Shift creation failed: ${shiftRes.data?.error || shiftRes.error || 'unknown'}`);
+    console.log(
+      `  ${RED}ERROR:${RESET} Shift creation failed: ${shiftRes.data?.error || shiftRes.error || 'unknown'}`
+    );
     return false;
   }
 
@@ -1680,9 +1911,16 @@ async function testClockInFlowWithStaff() {
   );
   const verifyPass = verifyResult.ok && verifyResult.data?.valid === true;
   console.log(`  Verify link:`);
-  assertResult('verify-link', { ok: true, valid: true }, { ok: verifyResult.ok, valid: verifyResult.data?.valid }, verifyPass);
+  assertResult(
+    'verify-link',
+    { ok: true, valid: true },
+    { ok: verifyResult.ok, valid: verifyResult.data?.valid },
+    verifyPass
+  );
   if (!verifyPass) {
-    console.log(`  ${RED}ERROR:${RESET} Verify link failed: ${verifyResult.data?.error || verifyResult.error}`);
+    console.log(
+      `  ${RED}ERROR:${RESET} Verify link failed: ${verifyResult.data?.error || verifyResult.error}`
+    );
     return false;
   }
 
@@ -1693,7 +1931,7 @@ async function testClockInFlowWithStaff() {
     linkToken: clockinLinkToken,
     deviceFingerprint: clockinDeviceFingerprint,
     latitude: 51.5074,
-    longitude: -0.1278
+    longitude: -0.1278,
   };
   const clockInResult = await makeClockLinkRequest(
     '/clockin/clock-action',
@@ -1704,9 +1942,16 @@ async function testClockInFlowWithStaff() {
   );
   const clockInPass = clockInResult.ok && clockInResult.data?.message;
   console.log(`  Clock-in:`);
-  assertResult('clock-in', { ok: true, hasMessage: true }, { ok: clockInResult.ok, message: clockInResult.data?.message || clockInResult.data?.error }, clockInPass);
+  assertResult(
+    'clock-in',
+    { ok: true, hasMessage: true },
+    { ok: clockInResult.ok, message: clockInResult.data?.message || clockInResult.data?.error },
+    clockInPass
+  );
   if (!clockInPass) {
-    console.log(`  ${RED}ERROR:${RESET} Clock-in failed: ${clockInResult.data?.error || clockInResult.error}`);
+    console.log(
+      `  ${RED}ERROR:${RESET} Clock-in failed: ${clockInResult.data?.error || clockInResult.error}`
+    );
     return false;
   }
 
@@ -1718,7 +1963,7 @@ async function testClockInFlowWithStaff() {
     deviceFingerprint: clockinDeviceFingerprint,
     latitude: 51.5074,
     longitude: -0.1278,
-    lateReason: 'Test clock-out (API test)'
+    lateReason: 'Test clock-out (API test)',
   };
   const clockOutResult = await makeClockLinkRequest(
     '/clockin/clock-action',
@@ -1728,7 +1973,9 @@ async function testClockInFlowWithStaff() {
     clockinDeviceFingerprint
   );
   if (!clockOutResult.ok) {
-    console.log(`  ${RED}ERROR:${RESET} Clock-out failed: ${clockOutResult.data?.error || clockOutResult.error}`);
+    console.log(
+      `  ${RED}ERROR:${RESET} Clock-out failed: ${clockOutResult.data?.error || clockOutResult.error}`
+    );
     return false;
   }
 
@@ -1740,14 +1987,24 @@ async function testClockInFlowWithStaff() {
   assertResult('status', expectedStatus, actualStatus, hasReviewHours);
 
   const actualMsg = clockOutResult.data?.message || '';
-  const hasReviewMessage = actualMsg.toLowerCase().includes('pending') || actualMsg.toLowerCase().includes('review');
+  const hasReviewMessage =
+    actualMsg.toLowerCase().includes('pending') || actualMsg.toLowerCase().includes('review');
   console.log(`  Clock-out message:`);
-  assertResult('message indicates review', 'contains "pending" or "review"', actualMsg, hasReviewMessage);
+  assertResult(
+    'message indicates review',
+    'contains "pending" or "review"',
+    actualMsg,
+    hasReviewMessage
+  );
 
   const clockOutPass = clockOutResult.ok && hasReviewHours && hasReviewMessage;
   console.log(`  Clock-out overall:`);
-  assertResult('clock-out', { ok: true, status: 'review_hours', messageIndicatesReview: true },
-    { ok: clockOutResult.ok, status: actualStatus, message: actualMsg }, clockOutPass);
+  assertResult(
+    'clock-out',
+    { ok: true, status: 'review_hours', messageIndicatesReview: true },
+    { ok: clockOutResult.ok, status: actualStatus, message: actualMsg },
+    clockOutPass
+  );
 
   return clockOutPass;
 }
@@ -1759,7 +2016,7 @@ async function testGetClockStatus() {
     console.log(`  ${YELLOW}SKIP:${RESET} Run clock-in flow first`);
     return true;
   }
-  const code = await getStaffClockinCode(staffId) || '123456';
+  const code = (await getStaffClockinCode(staffId)) || '123456';
   const result = await makeClockLinkRequest(
     `/clockin/status/${clockinLinkToken}?fingerprint=${encodeURIComponent(clockinDeviceFingerprint)}&clockinId=${code}`,
     null,
@@ -1810,13 +2067,15 @@ async function runAllTests() {
   console.log('========================================');
   console.log(`Testing against: ${API_BASE_URL}`);
   console.log(`${CYAN}Each test shows Expected vs Actual - they must match to PASS.${RESET}\n`);
-  console.log(`SESSION_SECRET: ${SESSION_SECRET ? 'Set (' + SESSION_SECRET.substring(0, 10) + '...)' : 'Not set'}`);
+  console.log(
+    `SESSION_SECRET: ${SESSION_SECRET ? 'Set (' + SESSION_SECRET.substring(0, 10) + '...)' : 'Not set'}`
+  );
   console.log(`Node version: ${process.version}`);
   console.log(`Platform: ${process.platform}`);
   console.log(`Working directory: ${process.cwd()}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'not set'}`);
   console.log('========================================\n');
-  
+
   // Test connectivity first
   console.log('Testing connectivity to API server...');
   try {
@@ -1840,10 +2099,15 @@ async function runAllTests() {
 
   // Ensure time_entries has approved_at (needed for staff stats, payroll, earnings)
   try {
-    execSync('node scripts/run-time-entry-approval-migration.js', { stdio: 'pipe', cwd: process.cwd() });
+    execSync('node scripts/run-time-entry-approval-migration.js', {
+      stdio: 'pipe',
+      cwd: process.cwd(),
+    });
     console.log(`  ${GREEN}Migration:${RESET} time_entries approved_at/approved_by`);
   } catch (err) {
-    console.log(`  ${YELLOW}Note:${RESET} Migration skipped or already applied (${err.message?.slice(0, 80)})`);
+    console.log(
+      `  ${YELLOW}Note:${RESET} Migration skipped or already applied (${err.message?.slice(0, 80)})`
+    );
   }
 
   const results = {
@@ -1855,7 +2119,8 @@ async function runAllTests() {
   // Health & Contact
   const healthOk = await testHealthCheck();
   results.tests.push({ name: 'Health Check', passed: healthOk });
-  if (healthOk) results.passed++; else results.failed++;
+  if (healthOk) results.passed++;
+  else results.failed++;
 
   // const contactOk = await testContactForm();
   // results.tests.push({ name: 'Contact Form', passed: contactOk });
@@ -1865,8 +2130,9 @@ async function runAllTests() {
   // Only do ONE signup to get a session, don't create multiple sessions
   const signupOk = await testSignup();
   results.tests.push({ name: 'Signup (Non-Obfuscated)', passed: signupOk });
-  if (signupOk) results.passed++; else results.failed++;
-  
+  if (signupOk) results.passed++;
+  else results.failed++;
+
   // Generate CSRF token from the session we just created
   if (sessionId) {
     csrfToken = generateCsrfToken(sessionId);
@@ -1888,10 +2154,14 @@ async function runAllTests() {
   }
 
   if (!sessionId) {
-    console.log(`\n${YELLOW}WARNING:${RESET} No session available, skipping authenticated endpoint tests`);
+    console.log(
+      `\n${YELLOW}WARNING:${RESET} No session available, skipping authenticated endpoint tests`
+    );
   } else if (!csrfToken) {
     csrfToken = generateCsrfToken(sessionId);
-    console.log(`\n${GREEN}PASS:${RESET} Generated CSRF token for session: ${sessionId.substring(0, 20)}...`);
+    console.log(
+      `\n${GREEN}PASS:${RESET} Generated CSRF token for session: ${sessionId.substring(0, 20)}...`
+    );
   }
 
   // If we have a session, test authenticated endpoints
@@ -1899,27 +2169,33 @@ async function runAllTests() {
     // Auth endpoints
     const meOk = await testGetMe();
     results.tests.push({ name: 'Get /auth/me', passed: meOk });
-    if (meOk) results.passed++; else results.failed++;
+    if (meOk) results.passed++;
+    else results.failed++;
 
     const csrfOk = await testGetCsrfToken();
     results.tests.push({ name: 'Get CSRF Token', passed: csrfOk });
-    if (csrfOk) results.passed++; else results.failed++;
+    if (csrfOk) results.passed++;
+    else results.failed++;
 
     const profileOk = await testGetProfile();
     results.tests.push({ name: 'Update Profile (Obfuscated)', passed: profileOk });
-    if (profileOk) results.passed++; else results.failed++;
+    if (profileOk) results.passed++;
+    else results.failed++;
 
     const profileObfOk = await testGetProfileObfuscated();
     results.tests.push({ name: 'Update Profile (Obfuscated)', passed: profileObfOk });
-    if (profileObfOk) results.passed++; else results.failed++;
+    if (profileObfOk) results.passed++;
+    else results.failed++;
 
     const twoFAOk = await test2FAStatus();
     results.tests.push({ name: '2FA Status', passed: twoFAOk });
-    if (twoFAOk) results.passed++; else results.failed++;
+    if (twoFAOk) results.passed++;
+    else results.failed++;
 
     const forgotPwdOk = await testForgotPassword();
     results.tests.push({ name: 'Forgot Password', passed: forgotPwdOk });
-    if (forgotPwdOk) results.passed++; else results.failed++;
+    if (forgotPwdOk) results.passed++;
+    else results.failed++;
 
     // Staff endpoints
     const staffResult = await makeObfuscatedRequest('/staff', {}, 'GET');
@@ -1936,7 +2212,8 @@ async function runAllTests() {
 
     const staffObfOk = await testGetStaffObfuscated();
     results.tests.push({ name: 'Get Staff (Obfuscated)', passed: staffObfOk });
-    if (staffObfOk) results.passed++; else results.failed++;
+    if (staffObfOk) results.passed++;
+    else results.failed++;
 
     const createdStaffId = await createTestStaff();
     const createStaffOk = createdStaffId !== null;
@@ -1951,28 +2228,34 @@ async function runAllTests() {
 
     const staffStatsOk = await testGetStaffStats();
     results.tests.push({ name: 'Get Staff Stats', passed: staffStatsOk });
-    if (staffStatsOk) results.passed++; else results.failed++;
+    if (staffStatsOk) results.passed++;
+    else results.failed++;
 
     const staffByIdOk = await testGetStaffById();
     results.tests.push({ name: 'Get Staff By ID', passed: staffByIdOk });
-    if (staffByIdOk) results.passed++; else results.failed++;
+    if (staffByIdOk) results.passed++;
+    else results.failed++;
 
     const updateStaffOk = await testUpdateStaff();
     results.tests.push({ name: 'Update Staff', passed: updateStaffOk });
-    if (updateStaffOk) results.passed++; else results.failed++;
+    if (updateStaffOk) results.passed++;
+    else results.failed++;
 
     // Shift endpoints
     const shiftsOk = await testGetShifts();
     results.tests.push({ name: 'Get Shifts', passed: shiftsOk });
-    if (shiftsOk) results.passed++; else results.failed++;
+    if (shiftsOk) results.passed++;
+    else results.failed++;
 
     const shiftsObfOk = await testGetShiftsObfuscated();
     results.tests.push({ name: 'Get Shifts (Obfuscated)', passed: shiftsObfOk });
-    if (shiftsObfOk) results.passed++; else results.failed++;
+    if (shiftsObfOk) results.passed++;
+    else results.failed++;
 
     const shiftStatsOk = await testGetShiftStats();
     results.tests.push({ name: 'Get Shift Stats', passed: shiftStatsOk });
-    if (shiftStatsOk) results.passed++; else results.failed++;
+    if (shiftStatsOk) results.passed++;
+    else results.failed++;
 
     // Get staff before creating shift
     if (!staffId) {
@@ -1984,76 +2267,105 @@ async function runAllTests() {
         if (createdStaffId) staffId = createdStaffId;
       }
     }
-    
+
     const createShiftResult = await testCreateShift();
     const createShiftOk = createShiftResult === true;
     results.tests.push({ name: 'Create Shift (Obfuscated)', passed: createShiftOk });
-    if (createShiftOk) results.passed++; else results.failed++;
+    if (createShiftOk) results.passed++;
+    else results.failed++;
 
     const createShiftObfOk = await testCreateShiftObfuscated();
     results.tests.push({ name: 'Create Shift (Obfuscated)', passed: createShiftObfOk });
-    if (createShiftObfOk) results.passed++; else results.failed++;
+    if (createShiftObfOk) results.passed++;
+    else results.failed++;
 
     const shiftByIdOk = await testGetShiftById();
     results.tests.push({ name: 'Get Shift By ID', passed: shiftByIdOk });
-    if (shiftByIdOk) results.passed++; else results.failed++;
+    if (shiftByIdOk) results.passed++;
+    else results.failed++;
 
     const updateShiftOk = await testUpdateShift();
     results.tests.push({ name: 'Update Shift', passed: updateShiftOk });
-    if (updateShiftOk) results.passed++; else results.failed++;
+    if (updateShiftOk) results.passed++;
+    else results.failed++;
 
     const approveShiftOk = await testApproveShift();
     results.tests.push({ name: 'Approve Shift', passed: approveShiftOk });
-    if (approveShiftOk) results.passed++; else results.failed++;
+    if (approveShiftOk) results.passed++;
+    else results.failed++;
 
     const shiftSwapsOk = await testGetShiftSwaps();
     results.tests.push({ name: 'Get Shift Swaps', passed: shiftSwapsOk });
-    if (shiftSwapsOk) results.passed++; else results.failed++;
+    if (shiftSwapsOk) results.passed++;
+    else results.failed++;
 
     const shiftConflictOk = await testShiftConflictOvernightNoFalsePositive();
-    results.tests.push({ name: 'Shift Conflict: Overnight vs Same-Day (No False Conflict)', passed: shiftConflictOk });
-    if (shiftConflictOk) results.passed++; else results.failed++;
+    results.tests.push({
+      name: 'Shift Conflict: Overnight vs Same-Day (No False Conflict)',
+      passed: shiftConflictOk,
+    });
+    if (shiftConflictOk) results.passed++;
+    else results.failed++;
 
     const overnightStatusOk = await testOvernightShiftNotCompletedPrematurely();
-    results.tests.push({ name: 'Overnight Shift: Not Completed Prematurely', passed: overnightStatusOk });
-    if (overnightStatusOk) results.passed++; else results.failed++;
+    results.tests.push({
+      name: 'Overnight Shift: Not Completed Prematurely',
+      passed: overnightStatusOk,
+    });
+    if (overnightStatusOk) results.passed++;
+    else results.failed++;
 
     const multiDayOk = await testMultiDayShiftCreation();
     results.tests.push({ name: 'Multi-Day Shift (120h) Creation', passed: multiDayOk });
-    if (multiDayOk) results.passed++; else results.failed++;
+    if (multiDayOk) results.passed++;
+    else results.failed++;
 
     const fiveOvernightOk = await testFiveConsecutiveOvernightShifts();
     results.tests.push({ name: '5 Consecutive Overnight Shifts', passed: fiveOvernightOk });
-    if (fiveOvernightOk) results.passed++; else results.failed++;
+    if (fiveOvernightOk) results.passed++;
+    else results.failed++;
 
     const day24Ok = await test24HourShiftEndTime();
     results.tests.push({ name: '24-Hour Shift End Time', passed: day24Ok });
-    if (day24Ok) results.passed++; else results.failed++;
+    if (day24Ok) results.passed++;
+    else results.failed++;
 
     const day24UnattendedOk = await test24HourShiftNoClockInUnattended();
-    results.tests.push({ name: '24-Hour Shift: No Clock-In → Unattended', passed: day24UnattendedOk });
-    if (day24UnattendedOk) results.passed++; else results.failed++;
+    results.tests.push({
+      name: '24-Hour Shift: No Clock-In → Unattended',
+      passed: day24UnattendedOk,
+    });
+    if (day24UnattendedOk) results.passed++;
+    else results.failed++;
 
     const completedCorrectedOk = await testCompletedShiftWithNoClockInCorrected();
-    results.tests.push({ name: 'Completed (No Clock-In) Corrected to Unattended', passed: completedCorrectedOk });
-    if (completedCorrectedOk) results.passed++; else results.failed++;
+    results.tests.push({
+      name: 'Completed (No Clock-In) Corrected to Unattended',
+      passed: completedCorrectedOk,
+    });
+    if (completedCorrectedOk) results.passed++;
+    else results.failed++;
 
     // Time Entries & Payroll
     const timeEntriesOk = await testGetTimeEntries();
     results.tests.push({ name: 'Get Time Entries', passed: timeEntriesOk });
-    if (timeEntriesOk) results.passed++; else results.failed++;
+    if (timeEntriesOk) results.passed++;
+    else results.failed++;
 
     const payrollOk = await testGetPayrollPreview();
     results.tests.push({ name: 'Get Payroll Preview', passed: payrollOk });
-    if (payrollOk) results.passed++; else results.failed++;
+    if (payrollOk) results.passed++;
+    else results.failed++;
 
     const earningsOk = await testGetMonthlyEarnings();
     results.tests.push({ name: 'Get Monthly Earnings', passed: earningsOk });
-    if (earningsOk) results.passed++; else results.failed++;
+    if (earningsOk) results.passed++;
+    else results.failed++;
 
     const createTimeEntryOk = await testCreateTimeEntry();
     results.tests.push({ name: 'Create Time Entry', passed: createTimeEntryOk });
-    if (createTimeEntryOk) results.passed++; else results.failed++;
+    if (createTimeEntryOk) results.passed++;
+    else results.failed++;
 
     // Payments
     // const paymentScheduleOk = await testGetPaymentSchedule();
@@ -2075,80 +2387,98 @@ async function runAllTests() {
     // Locations
     const locationOk = await testGetLocation();
     results.tests.push({ name: 'Get Location', passed: locationOk });
-    if (locationOk) results.passed++; else results.failed++;
+    if (locationOk) results.passed++;
+    else results.failed++;
 
     const updateLocationOk = await testUpdateLocation();
     results.tests.push({ name: 'Update Location', passed: updateLocationOk });
-    if (updateLocationOk) results.passed++; else results.failed++;
+    if (updateLocationOk) results.passed++;
+    else results.failed++;
 
     const locationsOk = await testGetLocations();
     results.tests.push({ name: 'Get Locations (Multi)', passed: locationsOk });
-    if (locationsOk) results.passed++; else results.failed++;
+    if (locationsOk) results.passed++;
+    else results.failed++;
 
     const createLocationOk = await testCreateLocation();
     results.tests.push({ name: 'Create Location', passed: createLocationOk });
-    if (createLocationOk) results.passed++; else results.failed++;
+    if (createLocationOk) results.passed++;
+    else results.failed++;
 
     // Budgets
     const budgetsOk = await testGetBudgets();
     results.tests.push({ name: 'Get Budgets', passed: budgetsOk });
-    if (budgetsOk) results.passed++; else results.failed++;
+    if (budgetsOk) results.passed++;
+    else results.failed++;
 
     const activeBudgetOk = await testGetActiveBudget();
     results.tests.push({ name: 'Get Active Budget', passed: activeBudgetOk });
-    if (activeBudgetOk) results.passed++; else results.failed++;
+    if (activeBudgetOk) results.passed++;
+    else results.failed++;
 
     const createBudgetOk = await testCreateBudget();
     results.tests.push({ name: 'Create Budget', passed: createBudgetOk });
-    if (createBudgetOk) results.passed++; else results.failed++;
+    if (createBudgetOk) results.passed++;
+    else results.failed++;
 
     const budgetStatsOk = await testGetBudgetStats();
     results.tests.push({ name: 'Get Budget Stats', passed: budgetStatsOk });
-    if (budgetStatsOk) results.passed++; else results.failed++;
+    if (budgetStatsOk) results.passed++;
+    else results.failed++;
 
     // Activities
     const activitiesOk = await testGetActivities();
     results.tests.push({ name: 'Get Activities', passed: activitiesOk });
-    if (activitiesOk) results.passed++; else results.failed++;
+    if (activitiesOk) results.passed++;
+    else results.failed++;
 
     const activityStatsOk = await testGetActivityStats();
     results.tests.push({ name: 'Get Activity Stats', passed: activityStatsOk });
-    if (activityStatsOk) results.passed++; else results.failed++;
+    if (activityStatsOk) results.passed++;
+    else results.failed++;
 
     // Fraud Detection
     const fraudFlagsOk = await testGetFraudFlags();
     results.tests.push({ name: 'Get Fraud Flags', passed: fraudFlagsOk });
-    if (fraudFlagsOk) results.passed++; else results.failed++;
+    if (fraudFlagsOk) results.passed++;
+    else results.failed++;
 
     const fraudStatsOk = await testGetFraudStats();
     results.tests.push({ name: 'Get Fraud Stats', passed: fraudStatsOk });
-    if (fraudStatsOk) results.passed++; else results.failed++;
+    if (fraudStatsOk) results.passed++;
+    else results.failed++;
 
     // Security
     const apiKeysOk = await testGetApiKeys();
     results.tests.push({ name: 'Get API Keys', passed: apiKeysOk });
-    if (apiKeysOk) results.passed++; else results.failed++;
+    if (apiKeysOk) results.passed++;
+    else results.failed++;
 
     const createApiKeyOk = await testCreateApiKey();
     results.tests.push({ name: 'Create API Key', passed: createApiKeyOk });
-    if (createApiKeyOk) results.passed++; else results.failed++;
+    if (createApiKeyOk) results.passed++;
+    else results.failed++;
 
     const ipWhitelistOk = await testGetIpWhitelist();
     results.tests.push({ name: 'Get IP Whitelist', passed: ipWhitelistOk });
-    if (ipWhitelistOk) results.passed++; else results.failed++;
+    if (ipWhitelistOk) results.passed++;
+    else results.failed++;
 
     const auditLogsOk = await testGetAuditLogs();
     results.tests.push({ name: 'Get Audit Logs', passed: auditLogsOk });
-    if (auditLogsOk) results.passed++; else results.failed++;
+    if (auditLogsOk) results.passed++;
+    else results.failed++;
 
     // Clock-in/Clock-out
     const clockinLinkOk = await testGenerateClockinLink();
     results.tests.push({ name: 'Generate Clock-in Link', passed: clockinLinkOk });
-    if (clockinLinkOk) results.passed++; else results.failed++;
+    if (clockinLinkOk) results.passed++;
+    else results.failed++;
 
     const clockinLinksOk = await testGetClockinLinks();
     results.tests.push({ name: 'Get Clock-in Links', passed: clockinLinksOk });
-    if (clockinLinksOk) results.passed++; else results.failed++;
+    if (clockinLinksOk) results.passed++;
+    else results.failed++;
 
     // Full clock-in flow with staff (matches frontend exactly)
     let clockInFlowOk = false;
@@ -2157,17 +2487,23 @@ async function runAllTests() {
     } catch (err) {
       console.log(`  ${RED}ERROR:${RESET} Clock-in flow: ${err.message}`);
     }
-    results.tests.push({ name: 'Clock-in Flow (verify, clock-in, clock-out)', passed: clockInFlowOk });
-    if (clockInFlowOk) results.passed++; else results.failed++;
+    results.tests.push({
+      name: 'Clock-in Flow (verify, clock-in, clock-out)',
+      passed: clockInFlowOk,
+    });
+    if (clockInFlowOk) results.passed++;
+    else results.failed++;
 
     const clockStatusOk = await testGetClockStatus();
     results.tests.push({ name: 'Get Clock Status (clock-link)', passed: clockStatusOk });
-    if (clockStatusOk) results.passed++; else results.failed++;
+    if (clockStatusOk) results.passed++;
+    else results.failed++;
 
     // Payment Endpoints (Stripe)
     const paymentConfigOk = await testGetPaymentConfig();
     results.tests.push({ name: 'Get Payment Config', passed: paymentConfigOk });
-    if (paymentConfigOk) results.passed++; else results.failed++;
+    if (paymentConfigOk) results.passed++;
+    else results.failed++;
 
     // const subscriptionOk = await testGetSubscriptionDetails();
     // results.tests.push({ name: 'Get Subscription Details', passed: subscriptionOk });
@@ -2177,7 +2513,9 @@ async function runAllTests() {
     // results.tests.push({ name: 'Get Reference Numbers', passed: referenceNumbersOk });
     // if (referenceNumbersOk) results.passed++; else results.failed++;
   } else {
-    console.log(`\n${YELLOW}WARNING:${RESET} No session available, skipping authenticated endpoint tests`);
+    console.log(
+      `\n${YELLOW}WARNING:${RESET} No session available, skipping authenticated endpoint tests`
+    );
   }
 
   // Summary
@@ -2195,7 +2533,7 @@ async function runAllTests() {
   console.log(`\nTotal: ${results.passed + results.failed} tests`);
   console.log(`Passed: ${results.passed}`);
   console.log(`Failed: ${results.failed}`);
-  
+
   if (failedTests.length > 0) {
     console.log('\n========================================');
     console.log('Failed Tests Summary:');
@@ -2206,7 +2544,7 @@ async function runAllTests() {
     console.log(`\n  See "Expected" vs "Actual" output above for each failed test.`);
   }
   console.log('========================================\n');
-  
+
   // Return whether all tests passed
   return results.failed === 0;
 }
@@ -2229,4 +2567,3 @@ runAllTests()
     console.error('\nThis will prevent deployment from proceeding.');
     process.exit(1);
   });
-

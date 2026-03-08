@@ -20,7 +20,9 @@ router.post('/create-checkout-session', requireAuth, async (req, res) => {
       email = userRow.rows[0]?.email;
     }
     if (!email || !email.trim()) {
-      return res.status(400).json({ error: 'Account email is required for checkout. Please complete your profile.' });
+      return res
+        .status(400)
+        .json({ error: 'Account email is required for checkout. Please complete your profile.' });
     }
     const { createCheckoutSessionWithAmount } = await import('../services/stripe.js');
     const session = await createCheckoutSessionWithAmount(req.userId, email.trim(), {
@@ -28,12 +30,12 @@ router.post('/create-checkout-session', requireAuth, async (req, res) => {
       billingCycle,
       staffCount: staffCount || 3,
       multiLocation: !!multiLocation,
-      promoCode: promoCode ? String(promoCode).trim() : undefined
+      promoCode: promoCode ? String(promoCode).trim() : undefined,
     });
     res.json({ sessionId: session.id, url: session.url });
   } catch (error) {
     console.error('Create checkout session error:', error);
-    const message = error.message || (error.raw?.message) || 'Failed to create checkout session';
+    const message = error.message || error.raw?.message || 'Failed to create checkout session';
     res.status(500).json({ error: message });
   }
 });
@@ -52,24 +54,24 @@ router.post('/update-subscription', requireAuth, async (req, res) => {
       totalPrice: parseFloat(totalPrice),
       billingCycle,
       staffCount: staffCount || 3,
-      multiLocation: !!multiLocation
+      multiLocation: !!multiLocation,
     });
     if (result.requiresAction && result.hostedInvoiceUrl) {
       return res.json({
         success: true,
         requiresAction: true,
         url: result.hostedInvoiceUrl,
-        message: 'Please complete payment to confirm your plan change'
+        message: 'Please complete payment to confirm your plan change',
       });
     }
     res.json({
       success: true,
       requiresAction: false,
-      message: 'Subscription updated successfully. Your new plan is active.'
+      message: 'Subscription updated successfully. Your new plan is active.',
     });
   } catch (error) {
     console.error('Update subscription error:', error);
-    const message = error.message || (error.raw?.message) || 'Failed to update subscription';
+    const message = error.message || error.raw?.message || 'Failed to update subscription';
     res.status(500).json({ error: message });
   }
 });
@@ -80,20 +82,27 @@ router.post('/verify-session', requireAuth, async (req, res) => {
     if (!sessionId) {
       return res.status(400).json({ error: 'Session ID is required' });
     }
-    const { retrieveCheckoutSession, handleSubscriptionSuccess, getPaymentReferenceNumbers } = await import('../services/stripe.js');
+    const { retrieveCheckoutSession, handleSubscriptionSuccess, getPaymentReferenceNumbers } =
+      await import('../services/stripe.js');
     const session = await retrieveCheckoutSession(sessionId);
     if (session.payment_status !== 'paid') {
       return res.status(400).json({ error: 'Payment not completed' });
     }
-    const subscriptionId = typeof session.subscription === 'string' ? session.subscription : session.subscription?.id;
+    const subscriptionId =
+      typeof session.subscription === 'string' ? session.subscription : session.subscription?.id;
     if (!subscriptionId) {
       return res.status(400).json({ error: 'No subscription found' });
     }
-    const userIdFromSession = session.metadata?.userId ? parseInt(session.metadata.userId, 10) : null;
+    const userIdFromSession = session.metadata?.userId
+      ? parseInt(session.metadata.userId, 10)
+      : null;
     if (userIdFromSession && userIdFromSession !== req.userId) {
-      const userResult = await pool.query('SELECT stripe_customer_id FROM users WHERE id = $1', [req.userId]);
+      const userResult = await pool.query('SELECT stripe_customer_id FROM users WHERE id = $1', [
+        req.userId,
+      ]);
       const dbCustomerId = userResult.rows[0]?.stripe_customer_id;
-      const sessionCustomerId = typeof session.customer === 'string' ? session.customer : session.customer?.id;
+      const sessionCustomerId =
+        typeof session.customer === 'string' ? session.customer : session.customer?.id;
       if (!dbCustomerId || dbCustomerId !== sessionCustomerId) {
         return res.status(403).json({ error: 'Session does not belong to this user' });
       }
@@ -102,10 +111,13 @@ router.post('/verify-session', requireAuth, async (req, res) => {
     session.metadata.userId = req.userId.toString();
     await handleSubscriptionSuccess(session);
     const referenceNumbers = await getPaymentReferenceNumbers(req.userId);
-    res.json({ message: 'Subscription activated successfully', referenceNumbers: referenceNumbers || null });
+    res.json({
+      message: 'Subscription activated successfully',
+      referenceNumbers: referenceNumbers || null,
+    });
   } catch (error) {
     console.error('Verify session error:', error);
-    const message = error.message || (error.raw?.message) || 'Failed to verify session';
+    const message = error.message || error.raw?.message || 'Failed to verify session';
     res.status(500).json({ error: message });
   }
 });
@@ -113,7 +125,12 @@ router.post('/verify-session', requireAuth, async (req, res) => {
 router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   try {
     const signature = req.headers['stripe-signature'];
-    const { verifyWebhookSignature, handleSubscriptionSuccess, handleSubscriptionCanceled, handleSubscriptionUpdated } = await import('../services/stripe.js');
+    const {
+      verifyWebhookSignature,
+      handleSubscriptionSuccess,
+      handleSubscriptionCanceled,
+      handleSubscriptionUpdated,
+    } = await import('../services/stripe.js');
     const event = verifyWebhookSignature(req.body, signature);
     switch (event.type) {
       case 'checkout.session.completed':
@@ -152,12 +169,14 @@ router.post('/cancel-subscription', requireAuth, async (req, res) => {
     const result = await cancelSubscription(req.userId);
     if (result && result.refunded) {
       res.json({
-        message: 'Your subscription has been cancelled and your last payment has been refunded (within the 3-day period).',
+        message:
+          'Your subscription has been cancelled and your last payment has been refunded (within the 3-day period).',
         refunded: true,
       });
     } else {
       res.json({
-        message: 'Your subscription will be cancelled at the end of the current billing period. No refund was applied.',
+        message:
+          'Your subscription will be cancelled at the end of the current billing period. No refund was applied.',
         refunded: false,
       });
     }
@@ -208,7 +227,8 @@ router.get('/reference-numbers', requireAuth, async (req, res) => {
 
 router.get('/config', (req, res) => {
   res.json({
-    publishableKey: (config.stripe && config.stripe.publishableKey) || process.env.STRIPE_PUBLISHABLE_KEY
+    publishableKey:
+      (config.stripe && config.stripe.publishableKey) || process.env.STRIPE_PUBLISHABLE_KEY,
   });
 });
 

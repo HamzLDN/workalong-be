@@ -4,7 +4,7 @@ import {
   findStaffByUsername,
   verifyStaffPassword,
   createStaffSession,
-  deleteStaffSession
+  deleteStaffSession,
 } from '../services/staff-auth.js';
 import {
   getStaff,
@@ -15,7 +15,7 @@ import {
   getStaffStats,
   validatePasswordToken,
   setPasswordWithToken,
-  resetStaffPassword
+  resetStaffPassword,
 } from '../services/staff.js';
 import { logStaffActivity } from '../lib/activity.js';
 import { requireAuth, requireStaffAuth } from '../middleware/auth.js';
@@ -47,7 +47,7 @@ router.post('/auth/login', async (req, res) => {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000
+      maxAge: 7 * 24 * 60 * 60 * 1000,
     });
     res.json({
       message: 'Staff signed in successfully',
@@ -56,9 +56,9 @@ router.post('/auth/login', async (req, res) => {
         name: staff.name,
         email: staff.email,
         role: staff.role,
-        companyName: staff.company_name
+        companyName: staff.company_name,
       },
-      session: { id: sessionId, expiresAt }
+      session: { id: sessionId, expiresAt },
     });
   } catch (error) {
     console.error('Staff login error:', error);
@@ -68,18 +68,14 @@ router.post('/auth/login', async (req, res) => {
 
 router.get('/auth/me', requireStaffAuth, async (req, res) => {
   try {
-    const staffResult = await pool.query(
-      'SELECT user_id FROM staff WHERE id = $1',
-      [req.staffId]
-    );
+    const staffResult = await pool.query('SELECT user_id FROM staff WHERE id = $1', [req.staffId]);
     let latitude = null;
     let longitude = null;
     if (staffResult.rows.length > 0) {
       const userId = staffResult.rows[0].user_id;
-      const userResult = await pool.query(
-        'SELECT latitude, longitude FROM users WHERE id = $1',
-        [userId]
-      );
+      const userResult = await pool.query('SELECT latitude, longitude FROM users WHERE id = $1', [
+        userId,
+      ]);
       if (userResult.rows.length > 0) {
         latitude = userResult.rows[0].latitude;
         longitude = userResult.rows[0].longitude;
@@ -91,9 +87,9 @@ router.get('/auth/me', requireStaffAuth, async (req, res) => {
         name: req.staff.name,
         email: req.staff.email,
         role: req.staff.role,
-        companyName: req.staff.companyName
+        companyName: req.staff.companyName,
       },
-      companyLocation: { latitude, longitude }
+      companyLocation: { latitude, longitude },
     });
   } catch (error) {
     console.error('Get staff error:', error);
@@ -103,13 +99,14 @@ router.get('/auth/me', requireStaffAuth, async (req, res) => {
 
 router.post('/auth/logout', requireStaffAuth, async (req, res) => {
   try {
-    const sessionId = req.cookies.staffSessionId ||
+    const sessionId =
+      req.cookies.staffSessionId ||
       (req.headers.authorization ? req.headers.authorization.replace('Bearer ', '') : null);
     if (sessionId) await deleteStaffSession(sessionId);
     res.clearCookie('staffSessionId', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax'
+      sameSite: 'lax',
     });
     res.json({ message: 'Staff signed out successfully' });
   } catch (error) {
@@ -145,7 +142,7 @@ router.post('/set-password', async (req, res) => {
     const result = await setPasswordWithToken(token, password);
     res.json({
       message: 'Password set successfully. You can now log in with your username and new password.',
-      username: result.username
+      username: result.username,
     });
   } catch (error) {
     console.error('Set password error:', error);
@@ -162,7 +159,8 @@ router.post('/:id/reset-password', requireAuth, async (req, res) => {
     if (isNaN(staffId)) return res.status(400).json({ error: 'Invalid staff ID' });
     await resetStaffPassword(staffId, req.userId);
     res.json({
-      message: 'Password reset email sent successfully. The staff member will receive an email with a link to set their new password.'
+      message:
+        'Password reset email sent successfully. The staff member will receive an email with a link to set their new password.',
     });
   } catch (error) {
     console.error('Reset staff password error:', error);
@@ -234,7 +232,7 @@ router.post('/clock-in', requireStaffAuth, async (req, res) => {
         error: geofenceResult.error,
         requiresLocation: geofenceResult.requiresLocation || false,
         distance: geofenceResult.distance,
-        radius: geofenceResult.radius
+        radius: geofenceResult.radius,
       });
     }
 
@@ -266,10 +264,10 @@ router.post('/clock-in', requireStaffAuth, async (req, res) => {
           [staffId, today]
         );
         if (shiftResult.rows.length > 0) {
-          await pool.query(
-            `UPDATE time_entries SET shift_id = $1 WHERE id = $2`,
-            [shiftResult.rows[0].id, existingTimeEntry.id]
-          );
+          await pool.query(`UPDATE time_entries SET shift_id = $1 WHERE id = $2`, [
+            shiftResult.rows[0].id,
+            existingTimeEntry.id,
+          ]);
         }
       }
       return res.status(400).json({ error: 'Already clocked in today. Please clock out first.' });
@@ -290,14 +288,17 @@ router.post('/clock-in', requireStaffAuth, async (req, res) => {
     if (allShiftsResult.rows.length === 0) {
       return res.status(400).json({
         error: 'No shift scheduled for today. You can only clock in if you have a scheduled shift.',
-        date: today
+        date: today,
       });
     }
 
     let shift = null;
     const validShifts = [];
     for (const s of allShiftsResult.rows) {
-      const shiftDate = s.shift_date instanceof Date ? s.shift_date.toISOString().split('T')[0] : String(s.shift_date).split('T')[0];
+      const shiftDate =
+        s.shift_date instanceof Date
+          ? s.shift_date.toISOString().split('T')[0]
+          : String(s.shift_date).split('T')[0];
       let shiftStartTime = String(s.start_time);
       const shiftHours = parseFloat(s.hours) || 0;
       let shiftEndTime = calculateEndTime(shiftStartTime, shiftHours);
@@ -306,7 +307,8 @@ router.post('/clock-in', requireStaffAuth, async (req, res) => {
       const shiftStartDateTime = new Date(`${shiftDate}T${shiftStartTime}.000Z`);
       let shiftEndDateTime = new Date(`${shiftDate}T${shiftEndTime}.000Z`);
       const isOvernight = shiftEndTime < shiftStartTime;
-      if (isOvernight) shiftEndDateTime = new Date(shiftEndDateTime.getTime() + 24 * 60 * 60 * 1000);
+      if (isOvernight)
+        shiftEndDateTime = new Date(shiftEndDateTime.getTime() + 24 * 60 * 60 * 1000);
       const earliestClockInTime = new Date(shiftStartDateTime.getTime() - 15 * 60 * 1000);
       const isTooEarly = now < earliestClockInTime;
       const isTooLate = now > shiftEndDateTime;
@@ -319,14 +321,17 @@ router.post('/clock-in', requireStaffAuth, async (req, res) => {
           isOvernight,
           shiftDate,
           shiftStartTime,
-          shiftEndTime
+          shiftEndTime,
         });
       }
     }
 
     if (validShifts.length === 0) {
-      const endedShifts = allShiftsResult.rows.filter(s => {
-        const shiftDate = s.shift_date instanceof Date ? s.shift_date.toISOString().split('T')[0] : String(s.shift_date).split('T')[0];
+      const endedShifts = allShiftsResult.rows.filter((s) => {
+        const shiftDate =
+          s.shift_date instanceof Date
+            ? s.shift_date.toISOString().split('T')[0]
+            : String(s.shift_date).split('T')[0];
         const shiftHours = parseFloat(s.hours) || 0;
         let shiftEndTime = calculateEndTime(String(s.start_time), shiftHours);
         if (shiftEndTime.split(':').length === 2) shiftEndTime += ':00';
@@ -338,7 +343,10 @@ router.post('/clock-in', requireStaffAuth, async (req, res) => {
       });
       if (endedShifts.length > 0) {
         const firstEnded = endedShifts[0];
-        const shiftDate = firstEnded.shift_date instanceof Date ? firstEnded.shift_date.toISOString().split('T')[0] : String(firstEnded.shift_date).split('T')[0];
+        const shiftDate =
+          firstEnded.shift_date instanceof Date
+            ? firstEnded.shift_date.toISOString().split('T')[0]
+            : String(firstEnded.shift_date).split('T')[0];
         const shiftHours = parseFloat(firstEnded.hours) || 0;
         let shiftEndTime = calculateEndTime(String(firstEnded.start_time), shiftHours);
         if (shiftEndTime.split(':').length === 2) shiftEndTime += ':00';
@@ -346,12 +354,12 @@ router.post('/clock-in', requireStaffAuth, async (req, res) => {
         return res.status(400).json({
           error: `Your shift has already ended. Shift end time was ${shiftEndTime}${isOvernight ? ' (next day)' : ''}.`,
           shiftEndTime,
-          currentTime: now.toISOString()
+          currentTime: now.toISOString(),
         });
       }
       return res.status(400).json({
         error: 'No valid shifts available for clock-in at this time.',
-        currentTime: now.toISOString()
+        currentTime: now.toISOString(),
       });
     }
 
@@ -364,7 +372,7 @@ router.post('/clock-in', requireStaffAuth, async (req, res) => {
       if (!shift && !vs.shift.clocked_in_time) shift = vs.shift;
     }
     if (!shift && validShifts.length > 0) {
-      const alreadyClockedIn = validShifts.find(vs => {
+      const alreadyClockedIn = validShifts.find((vs) => {
         const inValidWindow = now >= vs.earliestClockInTime && now <= vs.shiftEndDateTime;
         return vs.shift.clocked_in_time && inValidWindow;
       });
@@ -372,7 +380,7 @@ router.post('/clock-in', requireStaffAuth, async (req, res) => {
     }
     if (!shift && validShifts.length > 0) shift = validShifts[0].shift;
 
-    const selectedValidShift = validShifts.find(vs => vs.shift.id === shift.id);
+    const selectedValidShift = validShifts.find((vs) => vs.shift.id === shift.id);
     const shiftId = shift.id;
 
     const previousEntries = await pool.query(
@@ -380,7 +388,7 @@ router.post('/clock-in', requireStaffAuth, async (req, res) => {
       [staffId, today, shiftId]
     );
     if (previousEntries.rows.length > 0) {
-      const entryIds = previousEntries.rows.map(e => e.id);
+      const entryIds = previousEntries.rows.map((e) => e.id);
       await pool.query(`DELETE FROM time_entries WHERE id = ANY($1::bigint[])`, [entryIds]);
     }
 
@@ -403,7 +411,7 @@ router.post('/clock-in', requireStaffAuth, async (req, res) => {
       message: 'Clocked in successfully',
       timeEntry: result.rows[0],
       clockInTime: now,
-      shiftId
+      shiftId,
     });
   } catch (error) {
     console.error('Clock in error:', error);
@@ -421,7 +429,7 @@ router.post('/clock-out', requireStaffAuth, async (req, res) => {
       error: geofenceResult.error,
       requiresLocation: geofenceResult.requiresLocation || false,
       distance: geofenceResult.distance,
-      radius: geofenceResult.radius
+      radius: geofenceResult.radius,
     });
   }
   const client = await pool.connect();
@@ -475,7 +483,8 @@ router.post('/clock-out', requireStaffAuth, async (req, res) => {
         );
         await client.query('COMMIT');
         return res.json({
-          message: 'Clocked out successfully. (Note: Your shift was removed, but your hours have been recorded.)',
+          message:
+            'Clocked out successfully. (Note: Your shift was removed, but your hours have been recorded.)',
           timeEntry: { id: entry.id, clock_out_time: now, hours_worked: totalHoursWorked },
           clockInTime,
           clockOutTime: now,
@@ -484,7 +493,7 @@ router.post('/clock-out', requireStaffAuth, async (req, res) => {
           overtimeHours: 0,
           shiftApproved: false,
           shiftId: null,
-          shiftRemoved: true
+          shiftRemoved: true,
         });
       }
       await client.query('ROLLBACK');
@@ -521,7 +530,7 @@ router.post('/clock-out', requireStaffAuth, async (req, res) => {
         await client.query('ROLLBACK');
         return res.status(400).json({
           error: 'You clocked out more than 10 minutes late. Please provide a reason.',
-          requiresLateReason: true
+          requiresLateReason: true,
         });
       }
       notesForEntry = `Late clock-out reason: ${reason}`;
@@ -538,7 +547,12 @@ router.post('/clock-out', requireStaffAuth, async (req, res) => {
       return res.status(500).json({ error: 'Failed to update shift' });
     }
 
-    const shiftDateStr = shift.shift_date instanceof Date ? shift.shift_date.toISOString().split('T')[0] : (typeof shift.shift_date === 'string' ? shift.shift_date.split('T')[0] : shift.shift_date);
+    const shiftDateStr =
+      shift.shift_date instanceof Date
+        ? shift.shift_date.toISOString().split('T')[0]
+        : typeof shift.shift_date === 'string'
+          ? shift.shift_date.split('T')[0]
+          : shift.shift_date;
     let entryResult = await client.query(
       `SELECT * FROM time_entries WHERE staff_id = $1 AND (date = $2 OR date = $3) AND shift_id = $4 AND clock_in_time IS NOT NULL AND clock_out_time IS NULL ORDER BY clock_in_time DESC LIMIT 1`,
       [staffId, today, shiftDateStr, shiftId]
@@ -564,7 +578,10 @@ router.post('/clock-out', requireStaffAuth, async (req, res) => {
           );
       updateResult = updateEntryResult.rows[0];
       timeEntryId = updateEntryResult.rows[0].id;
-      await client.query('UPDATE shifts SET time_entry_id = $1 WHERE id = $2', [timeEntryId, shiftId]);
+      await client.query('UPDATE shifts SET time_entry_id = $1 WHERE id = $2', [
+        timeEntryId,
+        shiftId,
+      ]);
     }
     // Close other open entries - today and yesterday only (covers overnight; avoids overwriting entries from 2+ days ago)
     await client.query(
@@ -586,7 +603,7 @@ router.post('/clock-out', requireStaffAuth, async (req, res) => {
       overtimeHours,
       shiftApproved: false,
       shiftId,
-      status: 'review_hours'
+      status: 'review_hours',
     });
   } catch (error) {
     await client.query('ROLLBACK');
@@ -602,8 +619,14 @@ router.get('/my-shifts', requireStaffAuth, async (req, res) => {
     const { startDate, endDate } = req.query;
     let query = 'SELECT s.* FROM shifts s WHERE s.staff_id = $1';
     const params = [req.staffId];
-    if (startDate) { query += ` AND s.shift_date >= $${params.length + 1}`; params.push(startDate); }
-    if (endDate) { query += ` AND s.shift_date <= $${params.length + 1}`; params.push(endDate); }
+    if (startDate) {
+      query += ` AND s.shift_date >= $${params.length + 1}`;
+      params.push(startDate);
+    }
+    if (endDate) {
+      query += ` AND s.shift_date <= $${params.length + 1}`;
+      params.push(endDate);
+    }
     query += ' ORDER BY s.shift_date DESC, s.start_time ASC';
     const result = await pool.query(query, params);
     res.json({ shifts: result.rows });
@@ -618,8 +641,14 @@ router.get('/my-time-entries', requireStaffAuth, async (req, res) => {
     const { startDate, endDate } = req.query;
     let query = 'SELECT te.* FROM time_entries te WHERE te.staff_id = $1';
     const params = [req.staffId];
-    if (startDate) { query += ` AND te.date >= $${params.length + 1}`; params.push(startDate); }
-    if (endDate) { query += ` AND te.date <= $${params.length + 1}`; params.push(endDate); }
+    if (startDate) {
+      query += ` AND te.date >= $${params.length + 1}`;
+      params.push(startDate);
+    }
+    if (endDate) {
+      query += ` AND te.date <= $${params.length + 1}`;
+      params.push(endDate);
+    }
     query += ' ORDER BY te.date DESC, te.clock_in_time DESC';
     const result = await pool.query(query, params);
     res.json({ timeEntries: result.rows });
@@ -639,7 +668,11 @@ router.get('/clock-status', requireStaffAuth, async (req, res) => {
       [req.staffId, today]
     );
     if (result.rows.length === 0) return res.json({ clockedIn: false });
-    res.json({ clockedIn: true, timeEntry: result.rows[0], clockInTime: result.rows[0].clock_in_time });
+    res.json({
+      clockedIn: true,
+      timeEntry: result.rows[0],
+      clockInTime: result.rows[0].clock_in_time,
+    });
   } catch (error) {
     console.error('Get clock status error:', error);
     res.status(500).json({ error: 'Failed to get clock status' });
@@ -726,33 +759,39 @@ router.post('/', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Hourly rate must be positive' });
     }
     const [subResult, countResult] = await Promise.all([
-      pool.query('SELECT subscription_status, subscription_staff_limit FROM users WHERE id = $1', [req.userId]),
-      pool.query('SELECT COUNT(*) FROM staff WHERE user_id = $1', [req.userId])
+      pool.query('SELECT subscription_status, subscription_staff_limit FROM users WHERE id = $1', [
+        req.userId,
+      ]),
+      pool.query('SELECT COUNT(*) FROM staff WHERE user_id = $1', [req.userId]),
     ]);
     const currentCount = parseInt(countResult.rows[0].count, 10);
     const sub = subResult.rows[0];
     const isPaid = sub?.subscription_status === 'paid' || sub?.subscription_status === 'trial';
-    const staffLimit = sub?.subscription_staff_limit != null ? parseInt(sub.subscription_staff_limit, 10) : null;
+    const staffLimit =
+      sub?.subscription_staff_limit != null ? parseInt(sub.subscription_staff_limit, 10) : null;
     if (!isPaid && currentCount >= 3) {
       return res.status(403).json({
         error: 'Free plan limited to 3 staff members. Upgrade to Professional for more.',
         code: 'SUBSCRIPTION_REQUIRED',
-        upgradeUrl: '/plans'
+        upgradeUrl: '/plans',
       });
     }
     if (isPaid && staffLimit != null && currentCount >= staffLimit) {
       return res.status(403).json({
         error: `Your plan allows up to ${staffLimit} staff. Visit Plans to increase your limit.`,
         code: 'STAFF_LIMIT_REACHED',
-        upgradeUrl: '/plans'
+        upgradeUrl: '/plans',
       });
     }
     const staff = await createStaff(req.userId, { name, email, role, hourlyRate, employmentType });
-    logStaffActivity(req.userId, staff.id, name, 'created').catch(err => console.error('Failed to log activity:', err));
+    logStaffActivity(req.userId, staff.id, name, 'created').catch((err) =>
+      console.error('Failed to log activity:', err)
+    );
     const { password_hash, ...staffWithoutHash } = staff;
     res.status(201).json({
-      message: 'Staff member created successfully. A password setup email has been sent to their email address.',
-      staff: { ...staffWithoutHash, username: staff.username }
+      message:
+        'Staff member created successfully. A password setup email has been sent to their email address.',
+      staff: { ...staffWithoutHash, username: staff.username },
     });
   } catch (error) {
     console.error('Create staff error:', error);
@@ -763,11 +802,16 @@ router.post('/', requireAuth, async (req, res) => {
 router.delete('/:id', requireAuth, async (req, res) => {
   try {
     const staffId = req.params.id;
-    const staff = await pool.query('SELECT * FROM staff WHERE id = $1 AND user_id = $2', [staffId, req.userId]);
+    const staff = await pool.query('SELECT * FROM staff WHERE id = $1 AND user_id = $2', [
+      staffId,
+      req.userId,
+    ]);
     if (staff.rows.length === 0) return res.status(404).json({ error: 'Staff member not found' });
     const staffName = staff.rows[0].name;
     await pool.query('DELETE FROM staff WHERE id = $1', [staffId]);
-    logStaffActivity(req.userId, staffId, staffName, 'deleted').catch(err => console.error('Failed to log activity:', err));
+    logStaffActivity(req.userId, staffId, staffName, 'deleted').catch((err) =>
+      console.error('Failed to log activity:', err)
+    );
     res.json({ message: 'Staff member deleted successfully', id: staffId });
   } catch (error) {
     console.error('Delete staff error:', error);
@@ -778,9 +822,18 @@ router.delete('/:id', requireAuth, async (req, res) => {
 router.put('/:id', requireAuth, async (req, res) => {
   try {
     const { name, email, role, hourlyRate, employmentType, status } = req.body;
-    const staff = await updateStaff(req.params.id, req.userId, { name, email, role, hourlyRate, employmentType, status });
+    const staff = await updateStaff(req.params.id, req.userId, {
+      name,
+      email,
+      role,
+      hourlyRate,
+      employmentType,
+      status,
+    });
     if (!staff) return res.status(404).json({ error: 'Staff member not found' });
-    logStaffActivity(req.userId, req.params.id, name, 'updated').catch(err => console.error('Failed to log activity:', err));
+    logStaffActivity(req.userId, req.params.id, name, 'updated').catch((err) =>
+      console.error('Failed to log activity:', err)
+    );
     res.json({ message: 'Staff member updated successfully', staff });
   } catch (error) {
     console.error('Update staff error:', error);

@@ -23,7 +23,7 @@ let userA = {
   staffId: null,
   shiftId: null,
   budgetId: null,
-  apiKeyId: null
+  apiKeyId: null,
 };
 
 let userB = {
@@ -35,7 +35,7 @@ let userB = {
   staffId: null,
   shiftId: null,
   budgetId: null,
-  apiKeyId: null
+  apiKeyId: null,
 };
 
 // Helper functions
@@ -58,17 +58,17 @@ function obfuscateData(data, key) {
   const dataArray = Buffer.from(data, 'utf8');
   const keyArray = Buffer.from(key, 'utf8');
   const result = new Uint8Array(dataArray.length);
-  
+
   for (let i = 0; i < dataArray.length; i++) {
     result[i] = dataArray[i] ^ keyArray[i % keyArray.length];
   }
-  
+
   return Buffer.from(result).toString('base64');
 }
 
 function generateRequestSignature(method, url, body, sessionId, timestamp, nonce) {
   const key = generateObfuscationKey(sessionId);
-  
+
   // Normalize endpoint path exactly like the backend does:
   // 1. Remove query string
   // 2. Ensure it starts with /
@@ -83,27 +83,27 @@ function generateRequestSignature(method, url, body, sessionId, timestamp, nonce
   if (endpointPath.startsWith('/api/')) {
     endpointPath = endpointPath.substring(4);
   }
-  
+
   // Use empty string for body if it's null/undefined/empty
   const bodyStr = body || '';
-  
+
   const payload = `${method}:${endpointPath}:${bodyStr}:${timestamp}:${nonce}`;
-  
+
   let hash = 0;
   for (let i = 0; i < payload.length; i++) {
     const char = payload.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
+    hash = (hash << 5) - hash + char;
     hash = hash & hash;
   }
-  
+
   const combined = `${hash}:${key}`;
   let finalHash = 0;
   for (let i = 0; i < combined.length; i++) {
     const char = combined.charCodeAt(i);
-    finalHash = ((finalHash << 5) - finalHash) + char;
+    finalHash = (finalHash << 5) - finalHash + char;
     finalHash = finalHash & finalHash;
   }
-  
+
   return Math.abs(finalHash).toString(36);
 }
 
@@ -122,7 +122,7 @@ async function makeRequest(endpoint, options = {}) {
 
     const contentType = response.headers.get('content-type') || '';
     let data;
-    
+
     if (contentType.includes('application/json')) {
       data = await response.json();
     } else {
@@ -147,13 +147,13 @@ async function makeRequest(endpoint, options = {}) {
 async function makeAuthenticatedRequest(endpoint, options = {}, user) {
   const headers = {
     'Content-Type': 'application/json',
-    'Cookie': `sessionId=${user.sessionId}`,
+    Cookie: `sessionId=${user.sessionId}`,
     'X-CSRF-Token': user.csrfToken,
     ...options.headers,
   };
 
   const url = `${API_BASE_URL}${endpoint}`;
-  
+
   try {
     const response = await fetch(url, {
       ...options,
@@ -162,7 +162,7 @@ async function makeAuthenticatedRequest(endpoint, options = {}, user) {
 
     const contentType = response.headers.get('content-type') || '';
     let data;
-    
+
     if (contentType.includes('application/json')) {
       data = await response.json();
     } else {
@@ -192,7 +192,7 @@ async function makeObfuscatedRequest(endpoint, body, method, user) {
   const timestamp = Date.now();
   const nonce = Math.random().toString(36).substring(2, 15);
   const key = generateObfuscationKey(user.sessionId);
-  
+
   let endpointPath = endpoint;
   if (endpointPath.includes('?')) {
     endpointPath = endpointPath.split('?')[0];
@@ -203,10 +203,10 @@ async function makeObfuscatedRequest(endpoint, body, method, user) {
   if (endpointPath.startsWith('/api/')) {
     endpointPath = endpointPath.substring(4);
   }
-  
+
   let obfuscatedBody = null;
   let bodyStringForSignature = '';
-  
+
   if (body !== null && body !== undefined) {
     if (typeof body === 'object') {
       if (Object.keys(body).length > 0) {
@@ -241,8 +241,8 @@ async function makeObfuscatedRequest(endpoint, body, method, user) {
     'X-Request-Timestamp': timestamp.toString(),
     'X-Request-Nonce': nonce,
     'X-Request-Signature': signature,
-    'Authorization': `Bearer ${user.sessionId}`,
-    'Cookie': `sessionId=${user.sessionId}`,
+    Authorization: `Bearer ${user.sessionId}`,
+    Cookie: `sessionId=${user.sessionId}`,
     'X-CSRF-Token': user.csrfToken,
   };
 
@@ -263,11 +263,11 @@ async function makeObfuscatedRequest(endpoint, body, method, user) {
     const response = await fetch(url, fetchOptions);
     const contentType = response.headers.get('content-type') || '';
     let data;
-    
+
     try {
       const text = await response.text();
       let parsed;
-      
+
       // Try to parse as JSON first
       try {
         parsed = JSON.parse(text);
@@ -276,7 +276,7 @@ async function makeObfuscatedRequest(endpoint, body, method, user) {
         data = text;
         parsed = null;
       }
-      
+
       // Check if response is obfuscated (regardless of content-type)
       if (parsed && typeof parsed === 'object' && parsed.format === 'information' && parsed.data) {
         try {
@@ -331,8 +331,8 @@ async function setupTestUsers() {
     body: JSON.stringify({
       email: userA.email,
       password: userA.password,
-      name: 'Security Test User A'
-    })
+      name: 'Security Test User A',
+    }),
   });
 
   if (signupA.ok && signupA.data?.user) {
@@ -361,8 +361,8 @@ async function setupTestUsers() {
     body: JSON.stringify({
       email: userB.email,
       password: userB.password,
-      name: 'Security Test User B'
-    })
+      name: 'Security Test User B',
+    }),
   });
 
   if (signupB.ok && signupB.data?.user) {
@@ -391,62 +391,86 @@ async function setupTestUsers() {
     return false;
   }
 
-  const staffA = await makeObfuscatedRequest('/staff', {
-    name: 'User A Staff',
-    email: `staff-a-${Date.now()}@example.com`,
-    role: 'Server',
-    hourlyRate: 15.00,
-    employmentType: 'full-time',
-  }, 'POST', userA);
+  const staffA = await makeObfuscatedRequest(
+    '/staff',
+    {
+      name: 'User A Staff',
+      email: `staff-a-${Date.now()}@example.com`,
+      role: 'Server',
+      hourlyRate: 15.0,
+      employmentType: 'full-time',
+    },
+    'POST',
+    userA
+  );
 
   if (staffA.ok && staffA.data?.staff) {
     userA.staffId = staffA.data.staff.id;
     console.log(`${GREEN}PASS:${RESET} User A staff created (ID: ${userA.staffId})`);
   } else {
-    console.log(`${YELLOW}WARNING:${RESET} Failed to create User A staff: ${staffA.status} - ${JSON.stringify(staffA.data || staffA.error).substring(0, 100)}`);
+    console.log(
+      `${YELLOW}WARNING:${RESET} Failed to create User A staff: ${staffA.status} - ${JSON.stringify(staffA.data || staffA.error).substring(0, 100)}`
+    );
   }
 
   const today = new Date().toISOString().split('T')[0];
   if (userA.staffId) {
-    const shiftA = await makeObfuscatedRequest('/shifts', {
-      staffId: userA.staffId,
-      shiftDate: today,
-      startTime: '09:00',
-      hours: 8,
-      location: 'Test Location',
-    }, 'POST', userA);
+    const shiftA = await makeObfuscatedRequest(
+      '/shifts',
+      {
+        staffId: userA.staffId,
+        shiftDate: today,
+        startTime: '09:00',
+        hours: 8,
+        location: 'Test Location',
+      },
+      'POST',
+      userA
+    );
 
     if (shiftA.ok && shiftA.data?.shift) {
       userA.shiftId = shiftA.data.shift.id;
       console.log(`${GREEN}PASS:${RESET} User A shift created (ID: ${userA.shiftId})`);
     } else {
-      console.log(`${YELLOW}WARNING:${RESET} Failed to create User A shift: ${shiftA.status} - ${JSON.stringify(shiftA.data || shiftA.error).substring(0, 100)}`);
+      console.log(
+        `${YELLOW}WARNING:${RESET} Failed to create User A shift: ${shiftA.status} - ${JSON.stringify(shiftA.data || shiftA.error).substring(0, 100)}`
+      );
     }
   } else {
     console.log(`${YELLOW}WARNING:${RESET} Skipping User A shift creation - no staff ID`);
   }
 
   // Create resources for User B
-  const staffB = await makeObfuscatedRequest('/staff', {
-    name: 'User B Staff',
-    email: `staff-b-${Date.now()}@example.com`,
-    role: 'Server',
-    hourlyRate: 20.00,
-    employmentType: 'full-time',
-  }, 'POST', userB);
+  const staffB = await makeObfuscatedRequest(
+    '/staff',
+    {
+      name: 'User B Staff',
+      email: `staff-b-${Date.now()}@example.com`,
+      role: 'Server',
+      hourlyRate: 20.0,
+      employmentType: 'full-time',
+    },
+    'POST',
+    userB
+  );
 
   if (staffB.ok && staffB.data?.staff) {
     userB.staffId = staffB.data.staff.id;
     console.log(`${GREEN}PASS:${RESET} User B staff created (ID: ${userB.staffId})`);
   }
 
-  const shiftB = await makeObfuscatedRequest('/shifts', {
-    staffId: userB.staffId,
-    shiftDate: today,
-    startTime: '10:00',
-    hours: 8,
-    location: 'Test Location',
-  }, 'POST', userB);
+  const shiftB = await makeObfuscatedRequest(
+    '/shifts',
+    {
+      staffId: userB.staffId,
+      shiftDate: today,
+      startTime: '10:00',
+      hours: 8,
+      location: 'Test Location',
+    },
+    'POST',
+    userB
+  );
 
   if (shiftB.ok && shiftB.data?.shift) {
     userB.shiftId = shiftB.data.shift.id;
@@ -462,7 +486,7 @@ const results = {
   failed: 0,
   warnings: 0,
   tests: [],
-  warnings_list: []
+  warnings_list: [],
 };
 
 function recordTest(name, passed, details = '') {
@@ -495,7 +519,7 @@ async function testIDORVulnerabilities() {
   // Test: User A accessing User B's shift
   const shiftAccess = await makeAuthenticatedRequest(`/shifts/${userB.shiftId}`, {}, userA);
   recordTest(
-    'IDOR: User A accessing User B\'s shift',
+    "IDOR: User A accessing User B's shift",
     !shiftAccess.ok || shiftAccess.status === 403 || shiftAccess.status === 404,
     `Status: ${shiftAccess.status}`
   );
@@ -503,28 +527,37 @@ async function testIDORVulnerabilities() {
   // Test: User A accessing User B's staff member
   const staffAccess = await makeAuthenticatedRequest(`/staff/${userB.staffId}`, {}, userA);
   recordTest(
-    'IDOR: User A accessing User B\'s staff',
+    "IDOR: User A accessing User B's staff",
     !staffAccess.ok || staffAccess.status === 403 || staffAccess.status === 404,
     `Status: ${staffAccess.status}`
   );
 
   // Test: User A updating User B's shift
-  const shiftUpdate = await makeObfuscatedRequest(`/shifts/${userB.shiftId}`, {
-    startTime: '11:00',
-    hours: 7
-  }, 'PUT', userA);
+  const shiftUpdate = await makeObfuscatedRequest(
+    `/shifts/${userB.shiftId}`,
+    {
+      startTime: '11:00',
+      hours: 7,
+    },
+    'PUT',
+    userA
+  );
   recordTest(
-    'IDOR: User A updating User B\'s shift',
+    "IDOR: User A updating User B's shift",
     !shiftUpdate.ok || shiftUpdate.status === 403 || shiftUpdate.status === 404,
     `Status: ${shiftUpdate.status}`
   );
 
   // Test: User A deleting User B's staff (if delete endpoint exists)
-  const staffDelete = await makeAuthenticatedRequest(`/staff/${userB.staffId}`, {
-    method: 'DELETE'
-  }, userA);
+  const staffDelete = await makeAuthenticatedRequest(
+    `/staff/${userB.staffId}`,
+    {
+      method: 'DELETE',
+    },
+    userA
+  );
   recordTest(
-    'IDOR: User A deleting User B\'s staff',
+    "IDOR: User A deleting User B's staff",
     !staffDelete.ok || staffDelete.status === 403 || staffDelete.status === 404,
     `Status: ${staffDelete.status}`
   );
@@ -533,7 +566,7 @@ async function testIDORVulnerabilities() {
   const profileAccess = await makeAuthenticatedRequest('/auth/me', {}, userA);
   if (profileAccess.ok && profileAccess.data?.user) {
     recordTest(
-      'IDOR: User A cannot access User B\'s profile data',
+      "IDOR: User A cannot access User B's profile data",
       profileAccess.data.user.id === userA.userId,
       `Got user ID: ${profileAccess.data.user.id}, expected: ${userA.userId}`
     );
@@ -549,11 +582,11 @@ async function testCSRFProtection() {
   // Test: Request without CSRF token
   const noCsrf = await makeRequest('/auth/profile', {
     method: 'PUT',
-          headers: {
-      'Cookie': `sessionId=${userA.sessionId}`,
-      'Content-Type': 'application/json'
+    headers: {
+      Cookie: `sessionId=${userA.sessionId}`,
+      'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ name: 'Hacked Name' })
+    body: JSON.stringify({ name: 'Hacked Name' }),
   });
   recordTest(
     'CSRF: Request without CSRF token should fail',
@@ -565,11 +598,11 @@ async function testCSRFProtection() {
   const invalidCsrf = await makeRequest('/auth/profile', {
     method: 'PUT',
     headers: {
-      'Cookie': `sessionId=${userA.sessionId}`,
+      Cookie: `sessionId=${userA.sessionId}`,
       'X-CSRF-Token': 'invalid-token-12345',
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ name: 'Hacked Name' })
+    body: JSON.stringify({ name: 'Hacked Name' }),
   });
   recordTest(
     'CSRF: Request with invalid CSRF token should fail',
@@ -581,11 +614,11 @@ async function testCSRFProtection() {
   const wrongUserCsrf = await makeRequest('/auth/profile', {
     method: 'PUT',
     headers: {
-      'Cookie': `sessionId=${userA.sessionId}`,
+      Cookie: `sessionId=${userA.sessionId}`,
       'X-CSRF-Token': userB.csrfToken,
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ name: 'Hacked Name' })
+    body: JSON.stringify({ name: 'Hacked Name' }),
   });
   recordTest(
     'CSRF: Request with CSRF token from another user should fail',
@@ -611,8 +644,8 @@ async function testAuthenticationBypass() {
   // Test: Access protected endpoint with invalid session
   const invalidSession = await makeRequest('/auth/me', {
     headers: {
-      'Cookie': 'sessionId=invalid-session-id-12345'
-    }
+      Cookie: 'sessionId=invalid-session-id-12345',
+    },
   });
   recordTest(
     'Auth Bypass: Access with invalid session should fail',
@@ -623,8 +656,8 @@ async function testAuthenticationBypass() {
   // Test: Access protected endpoint with empty session
   const emptySession = await makeRequest('/auth/me', {
     headers: {
-      'Cookie': 'sessionId='
-    }
+      Cookie: 'sessionId=',
+    },
   });
   recordTest(
     'Auth Bypass: Access with empty session should fail',
@@ -636,11 +669,13 @@ async function testAuthenticationBypass() {
   try {
     const noSessionObfuscated = await makeObfuscatedRequest('/shifts', {}, 'GET', {
       sessionId: null,
-      csrfToken: null
+      csrfToken: null,
     });
     recordTest(
       'Auth Bypass: Obfuscated request without session should fail',
-      !noSessionObfuscated.ok || noSessionObfuscated.status === 401 || noSessionObfuscated.status === 403,
+      !noSessionObfuscated.ok ||
+        noSessionObfuscated.status === 401 ||
+        noSessionObfuscated.status === 403,
       `Status: ${noSessionObfuscated.status}`
     );
   } catch (error) {
@@ -662,16 +697,16 @@ async function testObfuscationSecurity() {
   const noObfuscation = await makeRequest('/shifts', {
     method: 'POST',
     headers: {
-      'Cookie': `sessionId=${userA.sessionId}`,
+      Cookie: `sessionId=${userA.sessionId}`,
       'X-CSRF-Token': userA.csrfToken,
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
     },
     body: JSON.stringify({
       staffId: userA.staffId,
       shiftDate: new Date().toISOString().split('T')[0],
       startTime: '09:00',
-      hours: 8
-    })
+      hours: 8,
+    }),
   });
   recordTest(
     'Obfuscation: Request without obfuscation headers should fail',
@@ -695,19 +730,19 @@ async function testObfuscationSecurity() {
       'X-Request-Timestamp': timestamp.toString(),
       'X-Request-Nonce': nonce,
       'X-Request-Signature': tamperedSignature,
-      'Authorization': `Bearer ${userA.sessionId}`,
-      'Cookie': `sessionId=${userA.sessionId}`,
+      Authorization: `Bearer ${userA.sessionId}`,
+      Cookie: `sessionId=${userA.sessionId}`,
       'X-CSRF-Token': userA.csrfToken,
     },
     body: JSON.stringify({
       format: 'information',
-      data: obfuscated
-    })
+      data: obfuscated,
+    }),
   });
 
   const tamperedResult = {
     status: tamperedRequest.status,
-    ok: tamperedRequest.ok
+    ok: tamperedRequest.ok,
   };
   recordTest(
     'Obfuscation: Request with tampered signature should fail',
@@ -726,14 +761,16 @@ async function testObfuscationSecurity() {
       'X-Request-Timestamp': Date.now().toString(),
       'X-Request-Nonce': Math.random().toString(36).substring(2, 15),
       'X-Request-Signature': 'wrong-signature',
-      'Authorization': `Bearer ${userA.sessionId}`,
-      'Cookie': `sessionId=${userA.sessionId}`,
+      Authorization: `Bearer ${userA.sessionId}`,
+      Cookie: `sessionId=${userA.sessionId}`,
       'X-CSRF-Token': userA.csrfToken,
-    }
+    },
   });
   recordTest(
     'Obfuscation: Request with obfuscation from wrong session should fail',
-    !wrongSessionRequest.ok || wrongSessionRequest.status === 403 || wrongSessionRequest.status === 400,
+    !wrongSessionRequest.ok ||
+      wrongSessionRequest.status === 403 ||
+      wrongSessionRequest.status === 400,
     `Status: ${wrongSessionRequest.status}`
   );
 }
@@ -758,8 +795,8 @@ async function testSessionSecurity() {
       method: 'POST',
       body: JSON.stringify({
         email: userA.email,
-        password: userA.password
-      })
+        password: userA.password,
+      }),
     });
     if (reLogin.ok) {
       const setCookie = reLogin.headers['set-cookie'] || '';
@@ -774,12 +811,12 @@ async function testSessionSecurity() {
   // Test: Using another user's session ID
   const wrongSession = await makeRequest('/auth/me', {
     headers: {
-      'Cookie': `sessionId=${userB.sessionId}`,
-      'X-CSRF-Token': userA.csrfToken // Wrong CSRF token
-    }
+      Cookie: `sessionId=${userB.sessionId}`,
+      'X-CSRF-Token': userA.csrfToken, // Wrong CSRF token
+    },
   });
   recordTest(
-    'Session: Using another user\'s session with wrong CSRF should fail',
+    "Session: Using another user's session with wrong CSRF should fail",
     !wrongSession.ok || wrongSession.status === 401 || wrongSession.status === 403,
     `Status: ${wrongSession.status}`
   );
@@ -792,7 +829,7 @@ async function testInputValidation() {
   console.log('========================================\n');
 
   // Test: SQL Injection in ID parameter
-  const sqlInjection = await makeAuthenticatedRequest('/shifts/1\' OR \'1\'=\'1', {}, userA);
+  const sqlInjection = await makeAuthenticatedRequest("/shifts/1' OR '1'='1", {}, userA);
   recordTest(
     'Input Validation: SQL injection in ID parameter should be sanitized',
     !sqlInjection.ok || sqlInjection.status === 400 || sqlInjection.status === 404,
@@ -801,9 +838,14 @@ async function testInputValidation() {
 
   // Test: XSS in user input
   const xssPayload = '<script>alert("XSS")</script>';
-  const xssTest = await makeObfuscatedRequest('/auth/profile', {
-    name: xssPayload
-  }, 'PUT', userA);
+  const xssTest = await makeObfuscatedRequest(
+    '/auth/profile',
+    {
+      name: xssPayload,
+    },
+    'PUT',
+    userA
+  );
   // Check if script tags are sanitized in response
   if (xssTest.ok && xssTest.data?.user?.name) {
     const userName = xssTest.data.user.name || '';
@@ -828,12 +870,17 @@ async function testInputValidation() {
   }
 
   // Test: Negative hours
-  const negativeHours = await makeObfuscatedRequest('/shifts', {
-    staffId: userA.staffId,
-    shiftDate: new Date().toISOString().split('T')[0],
-    startTime: '09:00',
-    hours: -5
-  }, 'POST', userA);
+  const negativeHours = await makeObfuscatedRequest(
+    '/shifts',
+    {
+      staffId: userA.staffId,
+      shiftDate: new Date().toISOString().split('T')[0],
+      startTime: '09:00',
+      hours: -5,
+    },
+    'POST',
+    userA
+  );
   recordTest(
     'Input Validation: Negative hours should be rejected',
     !negativeHours.ok || negativeHours.status === 400,
@@ -841,12 +888,17 @@ async function testInputValidation() {
   );
 
   // Test: Invalid date format
-  const invalidDate = await makeObfuscatedRequest('/shifts', {
-    staffId: userA.staffId,
-    shiftDate: 'invalid-date',
-    startTime: '09:00',
-    hours: 8
-  }, 'POST', userA);
+  const invalidDate = await makeObfuscatedRequest(
+    '/shifts',
+    {
+      staffId: userA.staffId,
+      shiftDate: 'invalid-date',
+      startTime: '09:00',
+      hours: 8,
+    },
+    'POST',
+    userA
+  );
   recordTest(
     'Input Validation: Invalid date format should be rejected',
     !invalidDate.ok || invalidDate.status === 400,
@@ -856,19 +908,21 @@ async function testInputValidation() {
   // Test: Extremely large payload
   // Note: Payload size limits are optional - server should handle gracefully
   const largePayload = {
-    name: 'A'.repeat(10000)
+    name: 'A'.repeat(10000),
   };
   const largePayloadTest = await makeObfuscatedRequest('/auth/profile', largePayload, 'PUT', userA);
   // Accept if rejected (400/413), sanitized (200), or handled without crashing (any non-500 status)
-  const handledProperly = largePayloadTest.status === 400 || 
-                         largePayloadTest.status === 413 || 
-                         largePayloadTest.status === 200 ||
-                         (largePayloadTest.status !== 500 && largePayloadTest.status !== 0);
+  const handledProperly =
+    largePayloadTest.status === 400 ||
+    largePayloadTest.status === 413 ||
+    largePayloadTest.status === 200 ||
+    (largePayloadTest.status !== 500 && largePayloadTest.status !== 0);
   recordTest(
     'Input Validation: Extremely large payload should be handled gracefully',
     handledProperly,
-    handledProperly ? `Status: ${largePayloadTest.status} - Handled properly` : 
-    `Status: ${largePayloadTest.status} - Server error`
+    handledProperly
+      ? `Status: ${largePayloadTest.status} - Handled properly`
+      : `Status: ${largePayloadTest.status} - Server error`
   );
 }
 
@@ -894,16 +948,22 @@ async function testPrivilegeEscalation() {
   );
 
   // Test: Mass assignment - trying to set admin fields
-  const massAssignment = await makeObfuscatedRequest('/auth/profile', {
-    name: 'Test User',
-    isAdmin: true,
-    subscriptionStatus: 'enterprise',
-    role: 'admin'
-  }, 'PUT', userA);
+  const massAssignment = await makeObfuscatedRequest(
+    '/auth/profile',
+    {
+      name: 'Test User',
+      isAdmin: true,
+      subscriptionStatus: 'enterprise',
+      role: 'admin',
+    },
+    'PUT',
+    userA
+  );
   if (massAssignment.ok && massAssignment.data?.user) {
     recordTest(
       'Privilege Escalation: Mass assignment of admin fields should be prevented',
-      !massAssignment.data.user.isAdmin && massAssignment.data.user.subscriptionStatus !== 'enterprise',
+      !massAssignment.data.user.isAdmin &&
+        massAssignment.data.user.subscriptionStatus !== 'enterprise',
       `User data: ${JSON.stringify(massAssignment.data.user)}`
     );
   }
@@ -916,34 +976,49 @@ async function testDataTampering() {
   console.log('========================================\n');
 
   // Test: Modifying shift that belongs to another user
-  const tamperShift = await makeObfuscatedRequest(`/shifts/${userB.shiftId}`, {
-    startTime: '11:00',
-    hours: 12
-  }, 'PUT', userA);
+  const tamperShift = await makeObfuscatedRequest(
+    `/shifts/${userB.shiftId}`,
+    {
+      startTime: '11:00',
+      hours: 12,
+    },
+    'PUT',
+    userA
+  );
   recordTest(
-    'Data Tampering: User A modifying User B\'s shift should fail',
+    "Data Tampering: User A modifying User B's shift should fail",
     !tamperShift.ok || tamperShift.status === 403 || tamperShift.status === 404,
     `Status: ${tamperShift.status}`
   );
 
   // Test: Approving shift that belongs to another user
-  const approveOtherShift = await makeObfuscatedRequest(`/shifts/${userB.shiftId}/approve`, null, 'POST', userA);
+  const approveOtherShift = await makeObfuscatedRequest(
+    `/shifts/${userB.shiftId}/approve`,
+    null,
+    'POST',
+    userA
+  );
   recordTest(
-    'Data Tampering: User A approving User B\'s shift should fail',
+    "Data Tampering: User A approving User B's shift should fail",
     !approveOtherShift.ok || approveOtherShift.status === 403 || approveOtherShift.status === 404,
     `Status: ${approveOtherShift.status}`
   );
 
   // Test: Creating shift for staff you don't own
-  const wrongStaffShift = await makeObfuscatedRequest('/shifts', {
-    staffId: userB.staffId,
-    shiftDate: new Date().toISOString().split('T')[0],
-    startTime: '09:00',
-    hours: 8,
-    location: 'Test'
-  }, 'POST', userA);
+  const wrongStaffShift = await makeObfuscatedRequest(
+    '/shifts',
+    {
+      staffId: userB.staffId,
+      shiftDate: new Date().toISOString().split('T')[0],
+      startTime: '09:00',
+      hours: 8,
+      location: 'Test',
+    },
+    'POST',
+    userA
+  );
   recordTest(
-    'Data Tampering: Creating shift for another user\'s staff should fail',
+    "Data Tampering: Creating shift for another user's staff should fail",
     !wrongStaffShift.ok || wrongStaffShift.status === 403 || wrongStaffShift.status === 400,
     `Status: ${wrongStaffShift.status}`
   );
@@ -959,19 +1034,21 @@ async function testRateLimiting() {
   // Note: Rate limiting is optional and may not be implemented in all environments
   const requests = [];
   for (let i = 0; i < 20; i++) {
-    requests.push(makeRequest('/auth/signin', {
-      method: 'POST',
-      body: JSON.stringify({
-        email: 'test@example.com',
-        password: 'wrongpassword'
+    requests.push(
+      makeRequest('/auth/signin', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: 'test@example.com',
+          password: 'wrongpassword',
+        }),
       })
-    }));
+    );
   }
   const responses = await Promise.all(requests);
-  const rateLimited = responses.some(r => r.status === 429);
+  const rateLimited = responses.some((r) => r.status === 429);
   // Rate limiting is optional - pass if implemented (429) or if all requests handled without crashing
-  const allHandled = responses.every(r => r.status !== 500 && r.status !== 0);
-  
+  const allHandled = responses.every((r) => r.status !== 500 && r.status !== 0);
+
   // Always pass the test, but warn if rate limiting is not implemented
   if (!rateLimited) {
     recordWarning(
@@ -979,7 +1056,7 @@ async function testRateLimiting() {
       'Consider implementing rate limiting to prevent DoS attacks. All 20 requests were processed without rate limiting.'
     );
   }
-  
+
   recordTest(
     'Rate Limiting: Rapid requests should be handled gracefully',
     rateLimited || allHandled,
@@ -994,22 +1071,32 @@ async function testBusinessLogic() {
   console.log('========================================\n');
 
   // Test: Creating shift with overlapping times
-  const shift1 = await makeObfuscatedRequest('/shifts', {
-    staffId: userA.staffId,
-    shiftDate: new Date().toISOString().split('T')[0],
-    startTime: '09:00',
-    hours: 8,
-    location: 'Test'
-  }, 'POST', userA);
-
-  if (shift1.ok) {
-    const overlappingShift = await makeObfuscatedRequest('/shifts', {
+  const shift1 = await makeObfuscatedRequest(
+    '/shifts',
+    {
       staffId: userA.staffId,
       shiftDate: new Date().toISOString().split('T')[0],
-      startTime: '10:00', // Overlaps with 09:00-17:00
+      startTime: '09:00',
       hours: 8,
-      location: 'Test'
-    }, 'POST', userA);
+      location: 'Test',
+    },
+    'POST',
+    userA
+  );
+
+  if (shift1.ok) {
+    const overlappingShift = await makeObfuscatedRequest(
+      '/shifts',
+      {
+        staffId: userA.staffId,
+        shiftDate: new Date().toISOString().split('T')[0],
+        startTime: '10:00', // Overlaps with 09:00-17:00
+        hours: 8,
+        location: 'Test',
+      },
+      'POST',
+      userA
+    );
     recordTest(
       'Business Logic: Overlapping shifts should be rejected',
       !overlappingShift.ok || overlappingShift.status === 409,
@@ -1020,13 +1107,18 @@ async function testBusinessLogic() {
   // Test: Creating shift in the past
   const pastDate = new Date();
   pastDate.setDate(pastDate.getDate() - 10);
-  const pastShift = await makeObfuscatedRequest('/shifts', {
-    staffId: userA.staffId,
-    shiftDate: pastDate.toISOString().split('T')[0],
-    startTime: '09:00',
-    hours: 8,
-    location: 'Test'
-  }, 'POST', userA);
+  const pastShift = await makeObfuscatedRequest(
+    '/shifts',
+    {
+      staffId: userA.staffId,
+      shiftDate: pastDate.toISOString().split('T')[0],
+      startTime: '09:00',
+      hours: 8,
+      location: 'Test',
+    },
+    'POST',
+    userA
+  );
   // This might be allowed, so we just check it doesn't crash
   recordTest(
     'Business Logic: Past date shifts should be handled appropriately',
@@ -1044,13 +1136,20 @@ async function testExtendedIDOR() {
   // Create budget for User B
   const today = new Date();
   const startDate = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
-  const endDate = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().split('T')[0];
-  const budgetB = await makeObfuscatedRequest('/budgets', {
-    name: 'User B Budget',
-    monthlyBudget: 5000,
-    startDate: startDate,
-    endDate: endDate
-  }, 'POST', userB);
+  const endDate = new Date(today.getFullYear(), today.getMonth() + 1, 0)
+    .toISOString()
+    .split('T')[0];
+  const budgetB = await makeObfuscatedRequest(
+    '/budgets',
+    {
+      name: 'User B Budget',
+      monthlyBudget: 5000,
+      startDate: startDate,
+      endDate: endDate,
+    },
+    'POST',
+    userB
+  );
 
   if (budgetB.ok && budgetB.data?.budget) {
     userB.budgetId = budgetB.data.budget.id;
@@ -1058,17 +1157,22 @@ async function testExtendedIDOR() {
     // Test: User A accessing User B's budget
     const budgetAccess = await makeAuthenticatedRequest(`/budgets/${userB.budgetId}`, {}, userA);
     recordTest(
-      'Extended IDOR: User A accessing User B\'s budget should fail',
+      "Extended IDOR: User A accessing User B's budget should fail",
       !budgetAccess.ok || budgetAccess.status === 403 || budgetAccess.status === 404,
       `Status: ${budgetAccess.status}`
     );
 
     // Test: User A updating User B's budget
-    const budgetUpdate = await makeObfuscatedRequest(`/budgets/${userB.budgetId}`, {
-      monthlyBudget: 10000
-    }, 'PUT', userA);
+    const budgetUpdate = await makeObfuscatedRequest(
+      `/budgets/${userB.budgetId}`,
+      {
+        monthlyBudget: 10000,
+      },
+      'PUT',
+      userA
+    );
     recordTest(
-      'Extended IDOR: User A updating User B\'s budget should fail',
+      "Extended IDOR: User A updating User B's budget should fail",
       !budgetUpdate.ok || budgetUpdate.status === 403 || budgetUpdate.status === 404,
       `Status: ${budgetUpdate.status}`
     );
@@ -1077,9 +1181,9 @@ async function testExtendedIDOR() {
   // Test: User A accessing User B's time entries
   const timeEntries = await makeAuthenticatedRequest('/time-entries', {}, userA);
   if (timeEntries.ok && Array.isArray(timeEntries.data)) {
-    const otherUserEntries = timeEntries.data.filter(entry => entry.user_id !== userA.userId);
+    const otherUserEntries = timeEntries.data.filter((entry) => entry.user_id !== userA.userId);
     recordTest(
-      'Extended IDOR: User A should not see User B\'s time entries',
+      "Extended IDOR: User A should not see User B's time entries",
       otherUserEntries.length === 0,
       `Found ${otherUserEntries.length} entries from other users`
     );
@@ -1088,9 +1192,11 @@ async function testExtendedIDOR() {
   // Test: User A accessing User B's payment history
   const paymentHistory = await makeAuthenticatedRequest('/payments/history', {}, userA);
   if (paymentHistory.ok && Array.isArray(paymentHistory.data)) {
-    const otherUserPayments = paymentHistory.data.filter(payment => payment.userId !== userA.userId);
+    const otherUserPayments = paymentHistory.data.filter(
+      (payment) => payment.userId !== userA.userId
+    );
     recordTest(
-      'Extended IDOR: User A should not see User B\'s payment history',
+      "Extended IDOR: User A should not see User B's payment history",
       otherUserPayments.length === 0,
       `Found ${otherUserPayments.length} payments from other users`
     );
@@ -1099,9 +1205,9 @@ async function testExtendedIDOR() {
   // Test: User A accessing User B's API keys
   const apiKeys = await makeAuthenticatedRequest('/security/api-keys', {}, userA);
   if (apiKeys.ok && Array.isArray(apiKeys.data)) {
-    const otherUserKeys = apiKeys.data.filter(key => key.userId !== userA.userId);
+    const otherUserKeys = apiKeys.data.filter((key) => key.userId !== userA.userId);
     recordTest(
-      'Extended IDOR: User A should not see User B\'s API keys',
+      "Extended IDOR: User A should not see User B's API keys",
       otherUserKeys.length === 0,
       `Found ${otherUserKeys.length} API keys from other users`
     );
@@ -1120,12 +1226,13 @@ async function testEnumerationAttacks() {
     body: JSON.stringify({
       email: userA.email, // Already exists
       password: 'Password123!',
-      name: 'Test'
-    })
+      name: 'Test',
+    }),
   });
   // Should not reveal if user exists
-  const revealsExistence = existingUser.data?.error?.toLowerCase().includes('already exists') ||
-                          existingUser.data?.error?.toLowerCase().includes('user exists');
+  const revealsExistence =
+    existingUser.data?.error?.toLowerCase().includes('already exists') ||
+    existingUser.data?.error?.toLowerCase().includes('user exists');
   recordTest(
     'Enumeration: Signup should not reveal if user exists',
     !revealsExistence,
@@ -1137,21 +1244,21 @@ async function testEnumerationAttacks() {
     method: 'POST',
     body: JSON.stringify({
       email: `nonexistent-${Date.now()}@example.com`,
-      password: 'WrongPassword123!'
-    })
+      password: 'WrongPassword123!',
+    }),
   });
   const signinWrongPassword = await makeRequest('/auth/signin', {
     method: 'POST',
     body: JSON.stringify({
       email: userA.email,
-      password: 'WrongPassword123!'
-    })
+      password: 'WrongPassword123!',
+    }),
   });
   // Both should return similar error messages/timing
   const differentErrors = signinNonExistent.data?.error !== signinWrongPassword.data?.error;
   recordTest(
     'Enumeration: Signin should not reveal if user exists vs wrong password',
-    !differentErrors || (signinNonExistent.status === signinWrongPassword.status),
+    !differentErrors || signinNonExistent.status === signinWrongPassword.status,
     `Non-existent: ${signinNonExistent.status}, Wrong password: ${signinWrongPassword.status}`
   );
 
@@ -1175,26 +1282,27 @@ async function testInformationDisclosure() {
     method: 'POST',
     body: JSON.stringify({
       email: 'test@example.com',
-      password: 'wrong'
-    })
+      password: 'wrong',
+    }),
   });
 
   const errorMessage = JSON.stringify(invalidRequest.data || {});
   // Check for actual sensitive information, not generic error messages
-  const revealsSensitive = errorMessage.includes('database') ||
-                           errorMessage.includes('sql') ||
-                           errorMessage.includes('query') ||
-                           errorMessage.includes('stack') ||
-                           errorMessage.includes('trace') ||
-                           errorMessage.includes('password hash') ||
-                           errorMessage.includes('bcrypt') ||
-                           errorMessage.includes('SELECT') ||
-                           errorMessage.includes('INSERT') ||
-                           errorMessage.includes('UPDATE') ||
-                           errorMessage.includes('DELETE') ||
-                           errorMessage.includes('at ') ||
-                           errorMessage.includes('Error:') ||
-                           errorMessage.includes('Exception');
+  const revealsSensitive =
+    errorMessage.includes('database') ||
+    errorMessage.includes('sql') ||
+    errorMessage.includes('query') ||
+    errorMessage.includes('stack') ||
+    errorMessage.includes('trace') ||
+    errorMessage.includes('password hash') ||
+    errorMessage.includes('bcrypt') ||
+    errorMessage.includes('SELECT') ||
+    errorMessage.includes('INSERT') ||
+    errorMessage.includes('UPDATE') ||
+    errorMessage.includes('DELETE') ||
+    errorMessage.includes('at ') ||
+    errorMessage.includes('Error:') ||
+    errorMessage.includes('Exception');
   recordTest(
     'Information Disclosure: Error messages should not reveal sensitive info',
     !revealsSensitive,
@@ -1206,42 +1314,44 @@ async function testInformationDisclosure() {
   const malformedRequest = await makeRequest('/shifts', {
     method: 'POST',
     headers: {
-      'Cookie': `sessionId=${userA.sessionId}`,
-      'Content-Type': 'application/json'
+      Cookie: `sessionId=${userA.sessionId}`,
+      'Content-Type': 'application/json',
     },
-    body: '{"invalid": json}' // Malformed JSON
+    body: '{"invalid": json}', // Malformed JSON
   });
-  
+
   // Handle both JSON and HTML responses
   let responseText = '';
   if (typeof malformedRequest.data === 'string') {
     responseText = malformedRequest.data;
-    } else {
+  } else {
     responseText = JSON.stringify(malformedRequest.data || {});
   }
-  
+
   // Check for actual stack trace patterns in HTML or JSON
-  const hasStackTrace = responseText.includes('at ') ||
-                        responseText.includes('Stack:') ||
-                        responseText.includes('stack:') ||
-                        responseText.includes('stackTrace') ||
-                        responseText.includes('file://') ||
-                        responseText.includes('node_modules') ||
-                        responseText.includes('.js:') ||
-                        responseText.includes('&nbsp;&nbsp;at') || // HTML encoded
-                        (responseText.includes('Error:') && responseText.includes('at ')) ||
-                        (responseText.includes('SyntaxError') && responseText.includes('at '));
-  
+  const hasStackTrace =
+    responseText.includes('at ') ||
+    responseText.includes('Stack:') ||
+    responseText.includes('stack:') ||
+    responseText.includes('stackTrace') ||
+    responseText.includes('file://') ||
+    responseText.includes('node_modules') ||
+    responseText.includes('.js:') ||
+    responseText.includes('&nbsp;&nbsp;at') || // HTML encoded
+    (responseText.includes('Error:') && responseText.includes('at ')) ||
+    (responseText.includes('SyntaxError') && responseText.includes('at '));
+
   // Check if response is HTML (indicates HTML error page)
-  const isHtmlResponse = responseText.includes('<!DOCTYPE html>') || 
-                        responseText.includes('<html') ||
-                        responseText.includes('<body>') ||
-                        responseText.includes('<pre>');
-  
+  const isHtmlResponse =
+    responseText.includes('<!DOCTYPE html>') ||
+    responseText.includes('<html') ||
+    responseText.includes('<body>') ||
+    responseText.includes('<pre>');
+
   // Stack traces in dev mode are acceptable - only fail if it's a production security issue
   // If the request was handled (not 500), it's acceptable even with stack traces in dev
   const handledProperly = malformedRequest.status !== 500 && malformedRequest.status !== 0;
-  
+
   // Warn if HTML error pages or stack traces are exposed
   if (hasStackTrace || isHtmlResponse) {
     if (isHtmlResponse) {
@@ -1257,13 +1367,15 @@ async function testInformationDisclosure() {
       );
     }
   }
-  
+
   recordTest(
     'Information Disclosure: Stack traces should not be exposed in production',
     !hasStackTrace || handledProperly,
-    hasStackTrace && handledProperly ? 'Stack traces shown (dev mode acceptable)' : 
-    hasStackTrace ? `Response contains stack trace: ${hasStackTrace}` :
-    'No stack traces found'
+    hasStackTrace && handledProperly
+      ? 'Stack traces shown (dev mode acceptable)'
+      : hasStackTrace
+        ? `Response contains stack trace: ${hasStackTrace}`
+        : 'No stack traces found'
   );
 }
 
@@ -1279,20 +1391,20 @@ async function testCookieSecurity() {
   const signupResponse = await fetch(`${API_BASE_URL}/auth/signup`, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
     },
     body: JSON.stringify({
       email: testEmail,
       password: 'TestPassword123!',
-      name: 'Cookie Test User'
-    })
+      name: 'Cookie Test User',
+    }),
   });
 
   // Get Set-Cookie header directly from response
   // Try both lowercase and original case
-  const setCookieHeader = signupResponse.headers.get('set-cookie') || 
-                          signupResponse.headers.get('Set-Cookie') || '';
-  
+  const setCookieHeader =
+    signupResponse.headers.get('set-cookie') || signupResponse.headers.get('Set-Cookie') || '';
+
   if (!setCookieHeader) {
     // Check all headers to debug
     const allHeaders = Array.from(signupResponse.headers.entries());
@@ -1345,24 +1457,36 @@ async function testConcurrency() {
     );
     return;
   }
-  
+
   if (!userA.shiftId) {
     // Try to create a shift for testing
     const today = new Date().toISOString().split('T')[0];
     if (!userA.staffId) {
       // First create staff if needed
-      console.log(`${YELLOW}WARNING:${RESET} User A has no staff, creating one for concurrency test...`);
-      const staffResult = await makeObfuscatedRequest('/staff', {
-        name: 'Concurrency Test Staff',
-        email: `concurrency-staff-${Date.now()}@example.com`,
-        role: 'Server',
-        hourlyRate: 15.00,
-        employmentType: 'full-time',
-      }, 'POST', userA);
-      
+      console.log(
+        `${YELLOW}WARNING:${RESET} User A has no staff, creating one for concurrency test...`
+      );
+      const staffResult = await makeObfuscatedRequest(
+        '/staff',
+        {
+          name: 'Concurrency Test Staff',
+          email: `concurrency-staff-${Date.now()}@example.com`,
+          role: 'Server',
+          hourlyRate: 15.0,
+          employmentType: 'full-time',
+        },
+        'POST',
+        userA
+      );
+
       // Check if response is still obfuscated (shouldn't happen, but handle it)
       let responseData = staffResult.data;
-      if (responseData && typeof responseData === 'object' && responseData.format === 'information' && responseData.data) {
+      if (
+        responseData &&
+        typeof responseData === 'object' &&
+        responseData.format === 'information' &&
+        responseData.data
+      ) {
         try {
           const key = generateObfuscationKey(userA.sessionId);
           // Deobfuscate using XOR (symmetric operation)
@@ -1378,11 +1502,13 @@ async function testConcurrency() {
           console.log(`${YELLOW}WARNING:${RESET} Failed to deobfuscate response: ${e.message}`);
         }
       }
-      
+
       if (staffResult.ok && responseData?.staff) {
         userA.staffId = responseData.staff.id;
-        console.log(`${GREEN}PASS:${RESET} Created staff for concurrency test (ID: ${userA.staffId})`);
-  } else {
+        console.log(
+          `${GREEN}PASS:${RESET} Created staff for concurrency test (ID: ${userA.staffId})`
+        );
+      } else {
         // Handle error responses
         let errorMsg = '';
         if (responseData && typeof responseData === 'object') {
@@ -1392,9 +1518,11 @@ async function testConcurrency() {
         } else {
           errorMsg = JSON.stringify(responseData || staffResult.error || {}).substring(0, 200);
         }
-        
-        console.log(`${YELLOW}WARNING:${RESET} Failed to create staff: Status ${staffResult.status}, Error: ${errorMsg}`);
-        
+
+        console.log(
+          `${YELLOW}WARNING:${RESET} Failed to create staff: Status ${staffResult.status}, Error: ${errorMsg}`
+        );
+
         // 403 might mean permission denied - this is acceptable, skip concurrency test
         // Other errors might also be acceptable (e.g., validation errors)
         if (staffResult.status === 403 || staffResult.status === 400) {
@@ -1403,7 +1531,7 @@ async function testConcurrency() {
             true,
             `Skipped - Cannot create test resources (Status: ${staffResult.status}). This may be expected behavior.`
           );
-  } else {
+        } else {
           recordTest(
             'Concurrency: Concurrent updates should handle race conditions',
             true,
@@ -1413,20 +1541,27 @@ async function testConcurrency() {
         return;
       }
     }
-    
+
     if (userA.staffId) {
-      const testShift = await makeObfuscatedRequest('/shifts', {
-        staffId: userA.staffId,
-        shiftDate: today,
-        startTime: '15:00',
-        hours: 4,
-        location: 'Test Location',
-      }, 'POST', userA);
-      
+      const testShift = await makeObfuscatedRequest(
+        '/shifts',
+        {
+          staffId: userA.staffId,
+          shiftDate: today,
+          startTime: '15:00',
+          hours: 4,
+          location: 'Test Location',
+        },
+        'POST',
+        userA
+      );
+
       if (testShift.ok && testShift.data?.shift) {
         userA.shiftId = testShift.data.shift.id;
-        console.log(`${GREEN}PASS:${RESET} Created shift for concurrency test (ID: ${userA.shiftId})`);
-    } else {
+        console.log(
+          `${GREEN}PASS:${RESET} Created shift for concurrency test (ID: ${userA.shiftId})`
+        );
+      } else {
         // Handle both JSON and text responses
         let errorMsg = '';
         if (typeof testShift.data === 'string') {
@@ -1434,7 +1569,9 @@ async function testConcurrency() {
         } else {
           errorMsg = JSON.stringify(testShift.data || testShift.error || {}).substring(0, 200);
         }
-        console.log(`${RED}ERROR:${RESET} Failed to create shift: Status ${testShift.status}, Error: ${errorMsg}`);
+        console.log(
+          `${RED}ERROR:${RESET} Failed to create shift: Status ${testShift.status}, Error: ${errorMsg}`
+        );
         recordTest(
           'Concurrency: Concurrent updates should handle race conditions',
           false,
@@ -1445,15 +1582,25 @@ async function testConcurrency() {
     }
   }
 
-  const update1 = makeObfuscatedRequest(`/shifts/${userA.shiftId}`, {
-    startTime: '10:00',
-    hours: 7
-  }, 'PUT', userA);
+  const update1 = makeObfuscatedRequest(
+    `/shifts/${userA.shiftId}`,
+    {
+      startTime: '10:00',
+      hours: 7,
+    },
+    'PUT',
+    userA
+  );
 
-  const update2 = makeObfuscatedRequest(`/shifts/${userA.shiftId}`, {
-    startTime: '11:00',
-    hours: 8
-  }, 'PUT', userA);
+  const update2 = makeObfuscatedRequest(
+    `/shifts/${userA.shiftId}`,
+    {
+      startTime: '11:00',
+      hours: 8,
+    },
+    'PUT',
+    userA
+  );
 
   const [result1, result2] = await Promise.all([update1, update2]);
   // At least one should succeed, both shouldn't cause data corruption
@@ -1466,21 +1613,31 @@ async function testConcurrency() {
   );
 
   // Test: Concurrent creation of same resource
-  const create1 = makeObfuscatedRequest('/staff', {
-    name: 'Concurrent Staff',
-    email: `concurrent-${Date.now()}@example.com`,
-    role: 'Server',
-    hourlyRate: 15.00,
-    employmentType: 'full-time',
-  }, 'POST', userA);
+  const create1 = makeObfuscatedRequest(
+    '/staff',
+    {
+      name: 'Concurrent Staff',
+      email: `concurrent-${Date.now()}@example.com`,
+      role: 'Server',
+      hourlyRate: 15.0,
+      employmentType: 'full-time',
+    },
+    'POST',
+    userA
+  );
 
-  const create2 = makeObfuscatedRequest('/staff', {
-    name: 'Concurrent Staff',
-    email: `concurrent-${Date.now()}@example.com`,
-    role: 'Server',
-    hourlyRate: 15.00,
-    employmentType: 'full-time',
-  }, 'POST', userA);
+  const create2 = makeObfuscatedRequest(
+    '/staff',
+    {
+      name: 'Concurrent Staff',
+      email: `concurrent-${Date.now()}@example.com`,
+      role: 'Server',
+      hourlyRate: 15.0,
+      employmentType: 'full-time',
+    },
+    'POST',
+    userA
+  );
 
   const [createResult1, createResult2] = await Promise.all([create1, create2]);
   recordTest(
@@ -1497,9 +1654,14 @@ async function testAPIKeySecurity() {
   console.log('========================================\n');
 
   // Create API key for User A
-  const apiKeyCreate = await makeObfuscatedRequest('/security/api-keys', {
-    keyName: `test-key-${Date.now()}`
-  }, 'POST', userA);
+  const apiKeyCreate = await makeObfuscatedRequest(
+    '/security/api-keys',
+    {
+      keyName: `test-key-${Date.now()}`,
+    },
+    'POST',
+    userA
+  );
 
   if (apiKeyCreate.ok && apiKeyCreate.data?.key) {
     userA.apiKeyId = apiKeyCreate.data.key.id;
@@ -1509,8 +1671,8 @@ async function testAPIKeySecurity() {
     const wrongUserKey = await makeRequest('/auth/me', {
       headers: {
         'X-API-Key': apiKey,
-        'Cookie': `sessionId=${userB.sessionId}` // Different user's session
-      }
+        Cookie: `sessionId=${userB.sessionId}`, // Different user's session
+      },
     });
     recordTest(
       'API Key Security: API key should be tied to correct user',
@@ -1521,8 +1683,8 @@ async function testAPIKeySecurity() {
     // Test: Using revoked/invalid API key
     const invalidKey = await makeRequest('/auth/me', {
       headers: {
-        'X-API-Key': 'invalid-api-key-12345'
-      }
+        'X-API-Key': 'invalid-api-key-12345',
+      },
     });
     recordTest(
       'API Key Security: Invalid API key should be rejected',
@@ -1533,8 +1695,8 @@ async function testAPIKeySecurity() {
     // Test: API key without proper format
     const malformedKey = await makeRequest('/auth/me', {
       headers: {
-        'X-API-Key': 'not-a-valid-key-format'
-      }
+        'X-API-Key': 'not-a-valid-key-format',
+      },
     });
     recordTest(
       'API Key Security: Malformed API key should be rejected',
@@ -1556,7 +1718,14 @@ async function testExtendedObfuscationSecurity() {
   const key = generateObfuscationKey(userA.sessionId);
   const body = JSON.stringify({ name: 'Replay Test' });
   const obfuscated = obfuscateData(body, key);
-  const signature = generateRequestSignature('POST', '/staff', obfuscated, userA.sessionId, timestamp, nonce);
+  const signature = generateRequestSignature(
+    'POST',
+    '/staff',
+    obfuscated,
+    userA.sessionId,
+    timestamp,
+    nonce
+  );
 
   const replayRequest = await fetch(`${API_BASE_URL}/staff`, {
     method: 'POST',
@@ -1566,14 +1735,14 @@ async function testExtendedObfuscationSecurity() {
       'X-Request-Timestamp': timestamp.toString(),
       'X-Request-Nonce': nonce,
       'X-Request-Signature': signature,
-      'Authorization': `Bearer ${userA.sessionId}`,
-      'Cookie': `sessionId=${userA.sessionId}`,
+      Authorization: `Bearer ${userA.sessionId}`,
+      Cookie: `sessionId=${userA.sessionId}`,
       'X-CSRF-Token': userA.csrfToken,
     },
     body: JSON.stringify({
       format: 'information',
-      data: obfuscated
-    })
+      data: obfuscated,
+    }),
   });
 
   recordTest(
@@ -1587,24 +1756,31 @@ async function testExtendedObfuscationSecurity() {
   const futureNonce = Math.random().toString(36).substring(2, 15);
   const futureBody = JSON.stringify({ name: 'Future Test' });
   const futureObfuscated = obfuscateData(futureBody, key);
-  const futureSignature = generateRequestSignature('POST', '/staff', futureObfuscated, userA.sessionId, futureTimestamp, futureNonce);
+  const futureSignature = generateRequestSignature(
+    'POST',
+    '/staff',
+    futureObfuscated,
+    userA.sessionId,
+    futureTimestamp,
+    futureNonce
+  );
 
   const futureRequest = await fetch(`${API_BASE_URL}/staff`, {
     method: 'POST',
-        headers: {
+    headers: {
       'Content-Type': 'application/x-obfuscated',
       'X-Obfuscation-Enabled': 'true',
       'X-Request-Timestamp': futureTimestamp.toString(),
       'X-Request-Nonce': futureNonce,
       'X-Request-Signature': futureSignature,
-      'Authorization': `Bearer ${userA.sessionId}`,
-      'Cookie': `sessionId=${userA.sessionId}`,
+      Authorization: `Bearer ${userA.sessionId}`,
+      Cookie: `sessionId=${userA.sessionId}`,
       'X-CSRF-Token': userA.csrfToken,
     },
     body: JSON.stringify({
       format: 'information',
-      data: futureObfuscated
-    })
+      data: futureObfuscated,
+    }),
   });
 
   recordTest(
@@ -1618,7 +1794,14 @@ async function testExtendedObfuscationSecurity() {
   const body1 = JSON.stringify({ name: 'Nonce Test 1' });
   const obfuscated1 = obfuscateData(body1, key);
   const timestamp1 = Date.now();
-  const signature1 = generateRequestSignature('POST', '/staff', obfuscated1, userA.sessionId, timestamp1, nonce1);
+  const signature1 = generateRequestSignature(
+    'POST',
+    '/staff',
+    obfuscated1,
+    userA.sessionId,
+    timestamp1,
+    nonce1
+  );
 
   const request1 = await fetch(`${API_BASE_URL}/staff`, {
     method: 'POST',
@@ -1628,21 +1811,28 @@ async function testExtendedObfuscationSecurity() {
       'X-Request-Timestamp': timestamp1.toString(),
       'X-Request-Nonce': nonce1,
       'X-Request-Signature': signature1,
-      'Authorization': `Bearer ${userA.sessionId}`,
-      'Cookie': `sessionId=${userA.sessionId}`,
+      Authorization: `Bearer ${userA.sessionId}`,
+      Cookie: `sessionId=${userA.sessionId}`,
       'X-CSRF-Token': userA.csrfToken,
     },
     body: JSON.stringify({
       format: 'information',
-      data: obfuscated1
-    })
+      data: obfuscated1,
+    }),
   });
 
   // Try to reuse the same nonce
   const body2 = JSON.stringify({ name: 'Nonce Test 2' });
   const obfuscated2 = obfuscateData(body2, key);
   const timestamp2 = Date.now();
-  const signature2 = generateRequestSignature('POST', '/staff', obfuscated2, userA.sessionId, timestamp2, nonce1); // Same nonce
+  const signature2 = generateRequestSignature(
+    'POST',
+    '/staff',
+    obfuscated2,
+    userA.sessionId,
+    timestamp2,
+    nonce1
+  ); // Same nonce
 
   const request2 = await fetch(`${API_BASE_URL}/staff`, {
     method: 'POST',
@@ -1652,14 +1842,14 @@ async function testExtendedObfuscationSecurity() {
       'X-Request-Timestamp': timestamp2.toString(),
       'X-Request-Nonce': nonce1, // Reused nonce
       'X-Request-Signature': signature2,
-      'Authorization': `Bearer ${userA.sessionId}`,
-      'Cookie': `sessionId=${userA.sessionId}`,
+      Authorization: `Bearer ${userA.sessionId}`,
+      Cookie: `sessionId=${userA.sessionId}`,
       'X-CSRF-Token': userA.csrfToken,
     },
     body: JSON.stringify({
       format: 'information',
-      data: obfuscated2
-    })
+      data: obfuscated2,
+    }),
   });
 
   recordTest(
@@ -1679,13 +1869,13 @@ async function testExtendedInputValidation() {
   const nosqlPayloads = [
     { email: { $ne: null } },
     { email: { $gt: '' } },
-    { email: { $regex: '.*' } }
+    { email: { $regex: '.*' } },
   ];
 
   for (const payload of nosqlPayloads) {
     const nosqlTest = await makeRequest('/auth/signin', {
       method: 'POST',
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     });
     recordTest(
       `Extended Input Validation: NoSQL injection attempt should be rejected (${JSON.stringify(payload).substring(0, 30)})`,
@@ -1698,7 +1888,7 @@ async function testExtendedInputValidation() {
   const commandPayloads = [
     'test@example.com; rm -rf /',
     'test@example.com | cat /etc/passwd',
-    'test@example.com && ls -la'
+    'test@example.com && ls -la',
   ];
 
   for (const payload of commandPayloads) {
@@ -1707,8 +1897,8 @@ async function testExtendedInputValidation() {
       body: JSON.stringify({
         email: payload,
         password: 'Test123!',
-        name: 'Test'
-      })
+        name: 'Test',
+      }),
     });
     // Command injection in email should be rejected (400) or sanitized (201 but email sanitized)
     // If it returns 201, check if the email was sanitized
@@ -1737,16 +1927,22 @@ async function testExtendedInputValidation() {
   );
 
   // Test: Unicode and special characters (null byte injection)
-  const unicodeTest = await makeObfuscatedRequest('/auth/profile', {
-    name: 'Test\u0000User\u0000Injection'
-  }, 'PUT', userA);
+  const unicodeTest = await makeObfuscatedRequest(
+    '/auth/profile',
+    {
+      name: 'Test\u0000User\u0000Injection',
+    },
+    'PUT',
+    userA
+  );
   // Null bytes should be handled - accept any response that doesn't indicate a critical failure
   // Status 500 might be acceptable if it's handled gracefully (error response, not crash)
-  const isHandledProperly = unicodeTest.status !== 0 && 
-                            (unicodeTest.status === 200 || 
-                             unicodeTest.status === 400 || 
-                             unicodeTest.status === 403 ||
-                             unicodeTest.status === 500); // 500 is acceptable if it returns an error response
+  const isHandledProperly =
+    unicodeTest.status !== 0 &&
+    (unicodeTest.status === 200 ||
+      unicodeTest.status === 400 ||
+      unicodeTest.status === 403 ||
+      unicodeTest.status === 500); // 500 is acceptable if it returns an error response
   recordTest(
     'Extended Input Validation: Null byte injection should be handled',
     isHandledProperly,
@@ -1754,12 +1950,17 @@ async function testExtendedInputValidation() {
   );
 
   // Test: Array injection
-  const arrayInjection = await makeObfuscatedRequest('/shifts', {
-    staffId: [userA.staffId, userB.staffId],
-    shiftDate: new Date().toISOString().split('T')[0],
-    startTime: '09:00',
-    hours: 8
-  }, 'POST', userA);
+  const arrayInjection = await makeObfuscatedRequest(
+    '/shifts',
+    {
+      staffId: [userA.staffId, userB.staffId],
+      shiftDate: new Date().toISOString().split('T')[0],
+      startTime: '09:00',
+      hours: 8,
+    },
+    'POST',
+    userA
+  );
   recordTest(
     'Extended Input Validation: Array injection should be rejected',
     !arrayInjection.ok || arrayInjection.status === 400,
@@ -1778,16 +1979,16 @@ async function testExtendedSessionSecurity() {
     method: 'POST',
     body: JSON.stringify({
       email: userA.email,
-      password: userA.password
-    })
+      password: userA.password,
+    }),
   });
 
   const session2 = await makeRequest('/auth/signin', {
     method: 'POST',
     body: JSON.stringify({
       email: userA.email,
-      password: userA.password
-    })
+      password: userA.password,
+    }),
   });
 
   if (session1.ok && session2.ok) {
@@ -1804,13 +2005,13 @@ async function testExtendedSessionSecurity() {
       // Both sessions should work independently
       const test1 = await makeRequest('/auth/me', {
         headers: {
-          'Cookie': `sessionId=${sessionId1}`
-        }
+          Cookie: `sessionId=${sessionId1}`,
+        },
       });
       const test2 = await makeRequest('/auth/me', {
         headers: {
-          'Cookie': `sessionId=${sessionId2}`
-        }
+          Cookie: `sessionId=${sessionId2}`,
+        },
       });
 
       recordTest(
@@ -1826,12 +2027,12 @@ async function testExtendedSessionSecurity() {
   const fixationTest = await makeRequest('/auth/signin', {
     method: 'POST',
     headers: {
-      'Cookie': `sessionId=${fixedSessionId}`
+      Cookie: `sessionId=${fixedSessionId}`,
     },
     body: JSON.stringify({
       email: userA.email,
-      password: userA.password
-    })
+      password: userA.password,
+    }),
   });
 
   const setCookie = fixationTest.headers['set-cookie'] || '';
@@ -1853,13 +2054,18 @@ async function testExtendedBusinessLogic() {
   console.log('========================================\n');
 
   // Test: Creating shift with end time before start time
-  const invalidTimeShift = await makeObfuscatedRequest('/shifts', {
-    staffId: userA.staffId,
-    shiftDate: new Date().toISOString().split('T')[0],
-    startTime: '17:00',
-    hours: -8, // Negative hours
-    location: 'Test'
-  }, 'POST', userA);
+  const invalidTimeShift = await makeObfuscatedRequest(
+    '/shifts',
+    {
+      staffId: userA.staffId,
+      shiftDate: new Date().toISOString().split('T')[0],
+      startTime: '17:00',
+      hours: -8, // Negative hours
+      location: 'Test',
+    },
+    'POST',
+    userA
+  );
   recordTest(
     'Extended Business Logic: Invalid time ranges should be rejected',
     !invalidTimeShift.ok || invalidTimeShift.status === 400,
@@ -1867,13 +2073,18 @@ async function testExtendedBusinessLogic() {
   );
 
   // Test: Creating shift with zero hours
-  const zeroHoursShift = await makeObfuscatedRequest('/shifts', {
-    staffId: userA.staffId,
-    shiftDate: new Date().toISOString().split('T')[0],
-    startTime: '09:00',
-    hours: 0,
-    location: 'Test'
-  }, 'POST', userA);
+  const zeroHoursShift = await makeObfuscatedRequest(
+    '/shifts',
+    {
+      staffId: userA.staffId,
+      shiftDate: new Date().toISOString().split('T')[0],
+      startTime: '09:00',
+      hours: 0,
+      location: 'Test',
+    },
+    'POST',
+    userA
+  );
   recordTest(
     'Extended Business Logic: Zero hours should be rejected',
     !zeroHoursShift.ok || zeroHoursShift.status === 400,
@@ -1881,13 +2092,18 @@ async function testExtendedBusinessLogic() {
   );
 
   // Test: Creating shift with extremely long hours
-  const longHoursShift = await makeObfuscatedRequest('/shifts', {
-    staffId: userA.staffId,
-    shiftDate: new Date().toISOString().split('T')[0],
-    startTime: '09:00',
-    hours: 1000,
-    location: 'Test'
-  }, 'POST', userA);
+  const longHoursShift = await makeObfuscatedRequest(
+    '/shifts',
+    {
+      staffId: userA.staffId,
+      shiftDate: new Date().toISOString().split('T')[0],
+      startTime: '09:00',
+      hours: 1000,
+      location: 'Test',
+    },
+    'POST',
+    userA
+  );
   recordTest(
     'Extended Business Logic: Unrealistic hours should be rejected',
     !longHoursShift.ok || longHoursShift.status === 400,
@@ -1896,12 +2112,22 @@ async function testExtendedBusinessLogic() {
 
   // Test: Updating shift after approval (if not allowed)
   if (userA.shiftId) {
-    const approve = await makeObfuscatedRequest(`/shifts/${userA.shiftId}/approve`, null, 'POST', userA);
+    const approve = await makeObfuscatedRequest(
+      `/shifts/${userA.shiftId}/approve`,
+      null,
+      'POST',
+      userA
+    );
     if (approve.ok) {
-      const updateAfterApprove = await makeObfuscatedRequest(`/shifts/${userA.shiftId}`, {
-        startTime: '12:00',
-        hours: 6
-      }, 'PUT', userA);
+      const updateAfterApprove = await makeObfuscatedRequest(
+        `/shifts/${userA.shiftId}`,
+        {
+          startTime: '12:00',
+          hours: 6,
+        },
+        'PUT',
+        userA
+      );
       // This might be allowed or not depending on business rules
       recordTest(
         'Extended Business Logic: Updating approved shift should be handled appropriately',
@@ -1925,7 +2151,7 @@ async function runSecurityTests() {
   const healthCheck = await makeRequest('/health');
   if (!healthCheck.ok) {
     console.error(`${RED}ERROR:${RESET} Cannot connect to API server`);
-  process.exit(1);
+    process.exit(1);
   }
 
   // Setup test users
@@ -1971,17 +2197,21 @@ async function runSecurityTests() {
 
   if (results.warnings > 0) {
     console.log('\nSecurity Warnings:');
-    results.warnings_list.forEach(warning => {
-      console.log(`  ${YELLOW}⚠${RESET} ${warning.message}${warning.details ? ' - ' + warning.details : ''}`);
+    results.warnings_list.forEach((warning) => {
+      console.log(
+        `  ${YELLOW}⚠${RESET} ${warning.message}${warning.details ? ' - ' + warning.details : ''}`
+      );
     });
     console.log('\n');
   }
 
   if (results.failed > 0) {
     console.log('\nFailed Tests:');
-    results.tests.filter(t => !t.passed).forEach(test => {
-      console.log(`  ${RED}✗${RESET} ${test.name}${test.details ? ' - ' + test.details : ''}`);
-    });
+    results.tests
+      .filter((t) => !t.passed)
+      .forEach((test) => {
+        console.log(`  ${RED}✗${RESET} ${test.name}${test.details ? ' - ' + test.details : ''}`);
+      });
     console.log('\n');
   }
 
@@ -1992,7 +2222,9 @@ async function runSecurityTests() {
 runSecurityTests()
   .then((allPassed) => {
     if (!allPassed) {
-      console.error(`\n${RED}ERROR:${RESET} Some security tests failed. Please review the vulnerabilities above.`);
+      console.error(
+        `\n${RED}ERROR:${RESET} Some security tests failed. Please review the vulnerabilities above.`
+      );
       process.exit(1);
     } else {
       console.log(`${GREEN}SUCCESS:${RESET} All security tests passed!`);
@@ -2004,4 +2236,3 @@ runSecurityTests()
     console.error(error.stack);
     process.exit(1);
   });
-

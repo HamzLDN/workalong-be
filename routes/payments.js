@@ -71,9 +71,9 @@ router.post('/schedule', requireAuth, async (req, res) => {
       );
     }
 
-    res.json({ 
+    res.json({
       message: 'Payment schedule saved successfully',
-      schedule: result.rows[0]
+      schedule: result.rows[0],
     });
   } catch (error) {
     console.error('Error saving payment schedule:', error);
@@ -84,10 +84,9 @@ router.post('/schedule', requireAuth, async (req, res) => {
 // DELETE deactivate payment schedule
 router.delete('/schedule', requireAuth, async (req, res) => {
   try {
-    await pool.query(
-      'UPDATE payment_schedules SET is_active = false WHERE user_id = $1',
-      [req.userId]
-    );
+    await pool.query('UPDATE payment_schedules SET is_active = false WHERE user_id = $1', [
+      req.userId,
+    ]);
 
     res.json({ message: 'Payment schedule deactivated' });
   } catch (error) {
@@ -134,21 +133,14 @@ router.get('/staff/:staffId/details', requireAuth, async (req, res) => {
 router.post('/staff/:staffId/details', requireAuth, async (req, res) => {
   try {
     const { staffId } = req.params;
-    const {
-      paymentMethod,
-      accountHolderName,
-      bankName,
-      accountNumber,
-      sortCode,
-      iban,
-      swiftBic
-    } = req.body;
+    const { paymentMethod, accountHolderName, bankName, accountNumber, sortCode, iban, swiftBic } =
+      req.body;
 
     // Verify staff belongs to user
-    const staffCheck = await pool.query(
-      'SELECT id FROM staff WHERE id = $1 AND user_id = $2',
-      [staffId, req.userId]
-    );
+    const staffCheck = await pool.query('SELECT id FROM staff WHERE id = $1 AND user_id = $2', [
+      staffId,
+      req.userId,
+    ]);
 
     if (staffCheck.rows.length === 0) {
       return res.status(404).json({ error: 'Staff member not found' });
@@ -170,8 +162,17 @@ router.post('/staff/:staffId/details', requireAuth, async (req, res) => {
              is_verified = false, updated_at = CURRENT_TIMESTAMP
          WHERE staff_id = $8 AND user_id = $9
          RETURNING id, staff_id, payment_method, account_holder_name, bank_name, is_verified`,
-        [paymentMethod, accountHolderName, bankName, accountNumber, sortCode, 
-         iban, swiftBic, staffId, req.userId]
+        [
+          paymentMethod,
+          accountHolderName,
+          bankName,
+          accountNumber,
+          sortCode,
+          iban,
+          swiftBic,
+          staffId,
+          req.userId,
+        ]
       );
     } else {
       // Create new
@@ -181,14 +182,23 @@ router.post('/staff/:staffId/details', requireAuth, async (req, res) => {
           account_number, sort_code, iban, swift_bic)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING id, staff_id, payment_method, account_holder_name, bank_name, is_verified`,
-        [staffId, req.userId, paymentMethod, accountHolderName, bankName,
-         accountNumber, sortCode, iban, swiftBic]
+        [
+          staffId,
+          req.userId,
+          paymentMethod,
+          accountHolderName,
+          bankName,
+          accountNumber,
+          sortCode,
+          iban,
+          swiftBic,
+        ]
       );
     }
 
     res.json({
       message: 'Payment details saved successfully',
-      paymentDetails: result.rows[0]
+      paymentDetails: result.rows[0],
     });
   } catch (error) {
     console.error('Error saving payment details:', error);
@@ -256,7 +266,9 @@ router.post('/process/:staffId', requireAuth, async (req, res) => {
     }
 
     if (amount == null || amount < 0) {
-      return res.status(400).json({ error: 'Valid amount or period (periodStart, periodEnd) required' });
+      return res
+        .status(400)
+        .json({ error: 'Valid amount or period (periodStart, periodEnd) required' });
     }
     if (amount === 0) {
       return res.status(400).json({ error: 'No clocked hours in this period for this staff' });
@@ -269,8 +281,7 @@ router.post('/process/:staffId', requireAuth, async (req, res) => {
         payment_method, payment_status, scheduled_date, is_automatic, notes)
        VALUES ($1, $2, $3, $4, $5, $6, 'pending', CURRENT_DATE, false, $7)
        RETURNING *`,
-      [req.userId, staffId, amount, periodStart, periodEnd, 
-       staff.payment_method, notes]
+      [req.userId, staffId, amount, periodStart, periodEnd, staff.payment_method, notes]
     );
 
     const payment = paymentResult.rows[0];
@@ -302,8 +313,8 @@ router.post('/process/:staffId', requireAuth, async (req, res) => {
       message: 'Payment initiated successfully',
       payment: {
         ...payment,
-        payment_status: 'processing'
-      }
+        payment_status: 'processing',
+      },
     });
   } catch (error) {
     console.error('Error processing payment:', error);
@@ -374,8 +385,15 @@ router.post('/process-all', requireAuth, async (req, res) => {
           payment_method, payment_status, scheduled_date, is_automatic)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'processing', CURRENT_DATE, true)
          RETURNING *`,
-        [req.userId, staff.id, amount, staff.hours_worked || 0, 
-         periodStart, periodEnd, staff.payment_method]
+        [
+          req.userId,
+          staff.id,
+          amount,
+          staff.hours_worked || 0,
+          periodStart,
+          periodEnd,
+          staff.payment_method,
+        ]
       );
 
       payments.push(paymentResult.rows[0]);
@@ -402,7 +420,7 @@ router.post('/process-all', requireAuth, async (req, res) => {
       message: `Payment initiated for ${staffPaid} staff members`,
       totalAmount: totalPaid,
       staffPaid,
-      payments
+      payments,
     });
   } catch (error) {
     console.error('Error processing batch payments:', error);
@@ -446,19 +464,23 @@ router.get('/history', requireAuth, async (req, res) => {
     const countParams = [req.userId];
     if (status) countQuery += ` AND payment_status = $2`;
     if (staffId) countQuery += ` AND staff_id = $${status ? 3 : 2}`;
-    
-    const countResult = await pool.query(countQuery, 
-      status && staffId ? [req.userId, status, staffId] :
-      status ? [req.userId, status] :
-      staffId ? [req.userId, staffId] :
-      [req.userId]
+
+    const countResult = await pool.query(
+      countQuery,
+      status && staffId
+        ? [req.userId, status, staffId]
+        : status
+          ? [req.userId, status]
+          : staffId
+            ? [req.userId, staffId]
+            : [req.userId]
     );
 
     res.json({
       payments: result.rows,
       total: parseInt(countResult.rows[0].count),
       limit: parseInt(limit),
-      offset: parseInt(offset)
+      offset: parseInt(offset),
     });
   } catch (error) {
     console.error('Error fetching payment history:', error);
@@ -500,7 +522,15 @@ function calculateNextPaymentDate(scheduleType, paymentDay) {
 
   switch (scheduleType) {
     case 'weekly':
-      const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const daysOfWeek = [
+        'Sunday',
+        'Monday',
+        'Tuesday',
+        'Wednesday',
+        'Thursday',
+        'Friday',
+        'Saturday',
+      ];
       const targetDay = daysOfWeek.indexOf(paymentDay);
       const currentDay = today.getDay();
       let daysUntilPayment = targetDay - currentDay;
@@ -530,4 +560,3 @@ function calculateNextPaymentDate(scheduleType, paymentDay) {
 }
 
 export default router;
-

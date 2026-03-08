@@ -17,7 +17,7 @@ router.get('/', requireAuth, async (req, res) => {
     res.json({
       latitude: user.latitude,
       longitude: user.longitude,
-      radius: user.location_radius || 100
+      radius: user.location_radius || 100,
     });
   } catch (error) {
     console.error('Get location error:', error);
@@ -40,7 +40,9 @@ router.put('/', requireAuth, async (req, res) => {
     }
     if (radius !== undefined && radius !== null) {
       if (typeof radius !== 'number' || radius < 10 || radius > 10000) {
-        return res.status(400).json({ error: 'Invalid radius. Must be between 10 and 10000 meters' });
+        return res
+          .status(400)
+          .json({ error: 'Invalid radius. Must be between 10 and 10000 meters' });
       }
     }
     const result = await pool.query(
@@ -55,7 +57,7 @@ router.put('/', requireAuth, async (req, res) => {
       message: 'Location settings updated successfully',
       latitude: result.rows[0].latitude,
       longitude: result.rows[0].longitude,
-      radius: result.rows[0].location_radius
+      radius: result.rows[0].location_radius,
     });
   } catch (error) {
     console.error('Update location error:', error);

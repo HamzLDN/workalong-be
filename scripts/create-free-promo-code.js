@@ -11,7 +11,7 @@ if (!stripeSecretKey || !String(stripeSecretKey).startsWith('sk_')) {
 }
 
 const stripe = new Stripe(stripeSecretKey, {
-  apiVersion: '2024-11-20.acacia'
+  apiVersion: '2024-11-20.acacia',
 });
 
 /**
@@ -21,10 +21,10 @@ const stripe = new Stripe(stripeSecretKey, {
 async function createFreePromoCode() {
   try {
     const customCode = process.argv[2] || `FREE100_${Date.now().toString(36).toUpperCase()}`;
-    
+
     console.log('Creating 100% free promo code...');
     console.log(`Custom code: ${customCode}`);
-    
+
     // Create a coupon with 100% discount, applies to first invoice only
     const coupon = await stripe.coupons.create({
       percent_off: 100,
@@ -33,12 +33,12 @@ async function createFreePromoCode() {
       metadata: {
         created_by: 'admin',
         purpose: 'custom_free_client',
-        code: customCode
-      }
+        code: customCode,
+      },
     });
-    
+
     console.log(`✅ Coupon created: ${coupon.id}`);
-    
+
     // Create a promotion code linked to the coupon
     // Set max_redemptions to 1 so it can only be used once
     const promotionCode = await stripe.promotionCodes.create({
@@ -48,10 +48,10 @@ async function createFreePromoCode() {
       max_redemptions: 1, // Limit to single use
       metadata: {
         created_by: 'admin',
-        purpose: 'custom_free_client'
-      }
+        purpose: 'custom_free_client',
+      },
     });
-    
+
     console.log('\n✅ Promotion code created successfully!');
     console.log('========================================');
     console.log(`Promo Code: ${promotionCode.code}`);
@@ -67,7 +67,7 @@ async function createFreePromoCode() {
     console.log('3. They will be charged £0.00');
     console.log('4. They get full access forever');
     console.log('\n✅ Note: This code can only be redeemed once');
-    
+
     return { coupon, promotionCode };
   } catch (error) {
     console.error('❌ Error creating promo code:', error.message);
@@ -79,4 +79,3 @@ async function createFreePromoCode() {
 }
 
 createFreePromoCode();
-

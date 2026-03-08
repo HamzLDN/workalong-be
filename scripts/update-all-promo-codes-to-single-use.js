@@ -11,7 +11,7 @@ if (!stripeSecretKey || !String(stripeSecretKey).startsWith('sk_')) {
 }
 
 const stripe = new Stripe(stripeSecretKey, {
-  apiVersion: '2024-11-20.acacia'
+  apiVersion: '2024-11-20.acacia',
 });
 
 /**
@@ -36,16 +36,16 @@ async function updateAllPromoCodesToSingleUse() {
     // Fetch all promotion codes (Stripe paginates results)
     while (hasMore) {
       const params = {
-        limit: 100
+        limit: 100,
       };
-      
+
       if (startingAfter) {
         params.starting_after = startingAfter;
       }
 
       const response = await stripe.promotionCodes.list(params);
       allPromoCodes = allPromoCodes.concat(response.data);
-      
+
       hasMore = response.has_more;
       if (hasMore && response.data.length > 0) {
         startingAfter = response.data[response.data.length - 1].id;
@@ -55,7 +55,7 @@ async function updateAllPromoCodesToSingleUse() {
     console.log(`Found ${allPromoCodes.length} total promotion codes\n`);
 
     // Filter to only active codes that don't have max_redemptions set to 1
-    const codesToUpdate = allPromoCodes.filter(code => {
+    const codesToUpdate = allPromoCodes.filter((code) => {
       // Skip if already has max_redemptions: 1
       if (code.max_redemptions === 1) {
         return false;
@@ -85,7 +85,7 @@ async function updateAllPromoCodesToSingleUse() {
     // Update each code
     const results = {
       success: [],
-      failed: []
+      failed: [],
     };
 
     for (const promoCode of codesToUpdate) {
@@ -95,8 +95,9 @@ async function updateAllPromoCodesToSingleUse() {
         console.log(`  Times redeemed: ${promoCode.times_redeemed || 0}`);
 
         // Get the coupon ID
-        const couponId = typeof promoCode.coupon === 'string' ? promoCode.coupon : promoCode.coupon?.id;
-        
+        const couponId =
+          typeof promoCode.coupon === 'string' ? promoCode.coupon : promoCode.coupon?.id;
+
         if (!couponId) {
           console.log(`  ⚠️  Skipping: No coupon found`);
           results.failed.push({ code: promoCode.code, reason: 'No coupon found' });
@@ -105,7 +106,7 @@ async function updateAllPromoCodesToSingleUse() {
 
         // Deactivate the old promotion code
         await stripe.promotionCodes.update(promoCode.id, {
-          active: false
+          active: false,
         });
         console.log(`  ✅ Deactivated old code`);
 
@@ -115,24 +116,23 @@ async function updateAllPromoCodesToSingleUse() {
           code: promoCode.code,
           active: true,
           max_redemptions: 1,
-          metadata: promoCode.metadata || {}
+          metadata: promoCode.metadata || {},
         });
 
         console.log(`  ✅ Created new code with max_redemptions: 1`);
         console.log(`  New Promotion Code ID: ${newPromoCode.id}`);
-        
+
         results.success.push({
           oldId: promoCode.id,
           newId: newPromoCode.id,
           code: promoCode.code,
-          timesRedeemed: promoCode.times_redeemed || 0
+          timesRedeemed: promoCode.times_redeemed || 0,
         });
-
       } catch (error) {
         console.error(`  ❌ Error updating ${promoCode.code}:`, error.message);
         results.failed.push({
           code: promoCode.code,
-          reason: error.message
+          reason: error.message,
         });
       }
     }
@@ -143,7 +143,7 @@ async function updateAllPromoCodesToSingleUse() {
     console.log('========================================');
     console.log(`✅ Successfully updated: ${results.success.length}`);
     console.log(`❌ Failed: ${results.failed.length}`);
-    
+
     if (results.success.length > 0) {
       console.log('\nSuccessfully updated codes:');
       results.success.forEach((result, index) => {
@@ -164,7 +164,6 @@ async function updateAllPromoCodesToSingleUse() {
     console.log('\n========================================');
     console.log(`Total processed: ${codesToUpdate.length}`);
     console.log('========================================\n');
-
   } catch (error) {
     console.error('❌ Error updating promotion codes:', error.message);
     if (error.type === 'StripeAuthenticationError') {
@@ -175,5 +174,3 @@ async function updateAllPromoCodesToSingleUse() {
 }
 
 updateAllPromoCodesToSingleUse();
-
-

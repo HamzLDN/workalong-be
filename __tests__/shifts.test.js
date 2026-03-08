@@ -88,24 +88,20 @@ describe('Shifts Functions', () => {
       expect(result[0].status).not.toBe('completed');
       expect(result[0].status).not.toBe('unattended');
       const updateToCompletedCalls = mockQueryFn.mock.calls.filter(
-        (call) => call[0]?.includes?.('UPDATE shifts') && (call[1]?.[0] === 'completed' || call[1]?.[0] === 'unattended')
+        (call) =>
+          call[0]?.includes?.('UPDATE shifts') &&
+          (call[1]?.[0] === 'completed' || call[1]?.[0] === 'unattended')
       );
       expect(updateToCompletedCalls).toHaveLength(0);
     });
 
     it('should get all shifts for a user', async () => {
-      const mockShifts = [
-        createMockShift({ id: 1 }),
-        createMockShift({ id: 2 }),
-      ];
+      const mockShifts = [createMockShift({ id: 1 }), createMockShift({ id: 2 })];
       mockQueryFn.mockResolvedValue(createMockDbResult(mockShifts));
 
       const result = await getShifts(1);
 
-      expect(mockQueryFn).toHaveBeenCalledWith(
-        expect.stringContaining('SELECT'),
-        [1]
-      );
+      expect(mockQueryFn).toHaveBeenCalledWith(expect.stringContaining('SELECT'), [1]);
       expect(result.length).toBeGreaterThanOrEqual(0);
     });
 
@@ -163,9 +159,24 @@ describe('Shifts Functions', () => {
         createMockShift({ id: 2, status: 'approved' }),
       ];
       const mockTimeEntries = [
-        { shift_id: 1, clock_in_time: new Date('2026-02-05T09:00:00'), clock_out_time: new Date('2026-02-05T11:00:00'), hours_worked: 2 },
-        { shift_id: 1, clock_in_time: new Date('2026-02-05T12:00:00'), clock_out_time: new Date('2026-02-05T17:00:00'), hours_worked: 5 },
-        { shift_id: 2, clock_in_time: new Date('2026-02-06T09:00:00'), clock_out_time: new Date('2026-02-06T17:00:00'), hours_worked: 8 },
+        {
+          shift_id: 1,
+          clock_in_time: new Date('2026-02-05T09:00:00'),
+          clock_out_time: new Date('2026-02-05T11:00:00'),
+          hours_worked: 2,
+        },
+        {
+          shift_id: 1,
+          clock_in_time: new Date('2026-02-05T12:00:00'),
+          clock_out_time: new Date('2026-02-05T17:00:00'),
+          hours_worked: 5,
+        },
+        {
+          shift_id: 2,
+          clock_in_time: new Date('2026-02-06T09:00:00'),
+          clock_out_time: new Date('2026-02-06T17:00:00'),
+          hours_worked: 8,
+        },
       ];
       mockQueryFn
         .mockResolvedValueOnce(createMockDbResult(mockShifts))
@@ -204,7 +215,9 @@ describe('Shifts Functions', () => {
       const result = await getShiftById(1, 1);
 
       expect(mockQueryFn).toHaveBeenCalledWith(
-        expect.stringContaining('SELECT s.*, s.shift_date::text as shift_date, st.name as staff_name'),
+        expect.stringContaining(
+          'SELECT s.*, s.shift_date::text as shift_date, st.name as staff_name'
+        ),
         [1, 1]
       );
       expect(result).toBeDefined();
@@ -285,10 +298,7 @@ describe('Shifts Functions', () => {
       };
       mockConnectFn.mockResolvedValue(mockClient);
 
-      const mockShifts = [
-        createMockShift({ id: 1 }),
-        createMockShift({ id: 2 }),
-      ];
+      const mockShifts = [createMockShift({ id: 1 }), createMockShift({ id: 2 })];
       mockClient.query
         .mockResolvedValueOnce({}) // BEGIN
         .mockResolvedValueOnce(createMockDbResult([{ hours: 8 }])) // Calculate hours for shift 1
@@ -343,13 +353,7 @@ describe('Shifts Functions', () => {
       const mockConflict = createMockShift();
       mockQueryFn.mockResolvedValue(createMockDbResult([mockConflict]));
 
-      const result = await checkShiftConflict(
-        1,
-        1,
-        '2026-02-05',
-        '09:00',
-        '17:00'
-      );
+      const result = await checkShiftConflict(1, 1, '2026-02-05', '09:00', '17:00');
 
       expect(mockQueryFn).toHaveBeenCalled();
       expect(result).toBeDefined();
@@ -364,13 +368,7 @@ describe('Shifts Functions', () => {
       });
       mockQueryFn.mockResolvedValue(createMockDbResult([existingShift]));
 
-      const result = await checkShiftConflict(
-        1,
-        1,
-        '2026-02-05',
-        '17:00',
-        '01:00:00'
-      );
+      const result = await checkShiftConflict(1, 1, '2026-02-05', '17:00', '01:00:00');
 
       expect(result.hasConflict).toBe(false);
       expect(result.conflictingShifts).toHaveLength(0);
@@ -385,13 +383,7 @@ describe('Shifts Functions', () => {
       });
       mockQueryFn.mockResolvedValue(createMockDbResult([existingShift]));
 
-      const result = await checkShiftConflict(
-        1,
-        1,
-        '2026-02-05',
-        '14:00',
-        '18:00:00'
-      );
+      const result = await checkShiftConflict(1, 1, '2026-02-05', '14:00', '18:00:00');
 
       expect(result.hasConflict).toBe(true);
       expect(result.conflictingShifts.length).toBeGreaterThan(0);

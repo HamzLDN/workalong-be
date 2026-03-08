@@ -17,8 +17,16 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const MIGRATIONS = [
-  { name: 'subscription_discount_percent', file: 'add-discount-percent-column.sql', dir: __dirname },
-  { name: 'time_entries approved_at/approved_by', file: 'add-time-entry-approval.sql', dir: path.join(__dirname, '..', 'database-schema') },
+  {
+    name: 'subscription_discount_percent',
+    file: 'add-discount-percent-column.sql',
+    dir: __dirname,
+  },
+  {
+    name: 'time_entries approved_at/approved_by',
+    file: 'add-time-entry-approval.sql',
+    dir: path.join(__dirname, '..', 'database-schema'),
+  },
 ];
 
 async function runMigrations() {

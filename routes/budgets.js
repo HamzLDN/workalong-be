@@ -4,7 +4,7 @@ import {
   getActiveBudget,
   createBudget,
   updateBudget,
-  getBudgetStats
+  getBudgetStats,
 } from '../services/staff.js';
 import { requireAuth } from '../middleware/auth.js';
 
@@ -43,7 +43,12 @@ router.post('/', requireAuth, async (req, res) => {
     if (isNaN(budgetAmount) || budgetAmount < 0) {
       return res.status(400).json({ error: 'Monthly budget must be a positive number' });
     }
-    const budget = await createBudget(req.userId, { name, monthlyBudget: budgetAmount, startDate, endDate });
+    const budget = await createBudget(req.userId, {
+      name,
+      monthlyBudget: budgetAmount,
+      startDate,
+      endDate,
+    });
     res.status(201).json({ message: 'Budget created successfully', budget });
   } catch (error) {
     console.error('Create budget error:', error);
@@ -76,7 +81,7 @@ router.put('/:id', requireAuth, async (req, res) => {
       monthlyBudget: budgetAmount,
       startDate,
       endDate,
-      status
+      status,
     });
     res.json({ message: 'Budget updated successfully', budget });
   } catch (error) {

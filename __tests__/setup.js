@@ -31,7 +31,7 @@ export function createMockStaff(overrides = {}) {
     name: 'John Doe',
     email: 'john@example.com',
     role: 'Manager',
-    hourly_rate: 15.50,
+    hourly_rate: 15.5,
     clockin_id: '123456',
     employment_type: 'full-time',
     is_active: true,

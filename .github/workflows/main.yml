@@ -10,9 +10,49 @@ on:
       - 'Dockerfile*'
       - 'docker-compose*.yml'
       - '.github/workflows/main.yml'
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
+  lint:
+    name: ESLint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run lint
+
+  format:
+    name: Prettier
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run format:check
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm audit --audit-level=high
+        continue-on-error: true
+
   test:
     name: Test Backend API
     runs-on: self-hosted  # Runs on your server, can access localhost:8081 directly
@@ -293,7 +333,7 @@ jobs:
 
   deploy:
     name: Deploy Backend to Server
-    needs: test
+    needs: [test, lint, format]
     runs-on: self-hosted
     if: github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.test.result == 'success'
     

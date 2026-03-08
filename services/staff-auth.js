@@ -10,7 +10,7 @@ export async function findStaffByUsername(username) {
      WHERE s.username = $1`,
     [username]
   );
-  
+
   return result.rows[0];
 }
 
@@ -21,13 +21,13 @@ export async function verifyStaffPassword(password, hash) {
 export async function createStaffSession(staffId, ipAddress, userAgent) {
   const sessionId = uuidv4();
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
-  
+
   await pool.query(
     `INSERT INTO staff_sessions (id, staff_id, expires_at, ip_address, user_agent) 
      VALUES ($1, $2, $3, $4, $5)`,
     [sessionId, staffId, expiresAt, ipAddress, userAgent]
   );
-  
+
   return { sessionId, expiresAt };
 }
 
@@ -41,7 +41,7 @@ export async function getStaffSession(sessionId) {
      WHERE ss.id = $1 AND ss.expires_at > NOW()`,
     [sessionId]
   );
-  
+
   return result.rows[0];
 }
 

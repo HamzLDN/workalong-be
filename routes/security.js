@@ -8,57 +8,69 @@ import {
   removeIpFromWhitelist,
   getUserWhitelistedIps,
   logSecurityEvent,
-  getSecurityAuditLogs
+  getSecurityAuditLogs,
 } from '../lib/api-security.js';
 import { createRateLimiter } from '../middleware/security.js';
 import { requireAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
-router.post('/api-keys', requireAuth, createRateLimiter({ limitPerMinute: 5 }), async (req, res) => {
-  try {
-    const { keyName, expiresAt, allowedIps, allowedEndpoints, rateLimitPerMinute, rateLimitPerHour } = req.body;
-    if (!keyName) {
-      return res.status(400).json({ error: 'Key name is required' });
-    }
-    const result = await createApiKey(req.userId, keyName, {
-      expiresAt: expiresAt ? new Date(expiresAt) : null,
-      allowedIps: allowedIps || [],
-      allowedEndpoints: allowedEndpoints || [],
-      rateLimitPerMinute: rateLimitPerMinute || 60,
-      rateLimitPerHour: rateLimitPerHour || 1000
-    });
-    await logSecurityEvent('api_key_created', {
-      userId: req.userId,
-      ipAddress: req.ip,
-      endpoint: req.path,
-      requestMethod: req.method,
-      details: { keyName, prefix: result.api_key_prefix },
-      severity: 'info'
-    });
-    res.status(201).json({
-      message: 'API key created successfully',
-      apiKey: result.apiKey,
-      key: {
-        id: result.id,
-        keyName: result.key_name,
-        prefix: result.api_key_prefix,
-        expiresAt: result.expires_at,
-        allowedIps: result.allowed_ips,
-        allowedEndpoints: result.allowed_endpoints,
-        rateLimitPerMinute: result.rate_limit_per_minute,
-        rateLimitPerHour: result.rate_limit_per_hour,
-        createdAt: result.created_at
+router.post(
+  '/api-keys',
+  requireAuth,
+  createRateLimiter({ limitPerMinute: 5 }),
+  async (req, res) => {
+    try {
+      const {
+        keyName,
+        expiresAt,
+        allowedIps,
+        allowedEndpoints,
+        rateLimitPerMinute,
+        rateLimitPerHour,
+      } = req.body;
+      if (!keyName) {
+        return res.status(400).json({ error: 'Key name is required' });
       }
-    });
-  } catch (error) {
-    console.error('Create API key error:', error);
-    if (error.constraint === 'unique_user_key_name') {
-      return res.status(400).json({ error: 'API key with this name already exists' });
+      const result = await createApiKey(req.userId, keyName, {
+        expiresAt: expiresAt ? new Date(expiresAt) : null,
+        allowedIps: allowedIps || [],
+        allowedEndpoints: allowedEndpoints || [],
+        rateLimitPerMinute: rateLimitPerMinute || 60,
+        rateLimitPerHour: rateLimitPerHour || 1000,
+      });
+      await logSecurityEvent('api_key_created', {
+        userId: req.userId,
+        ipAddress: req.ip,
+        endpoint: req.path,
+        requestMethod: req.method,
+        details: { keyName, prefix: result.api_key_prefix },
+        severity: 'info',
+      });
+      res.status(201).json({
+        message: 'API key created successfully',
+        apiKey: result.apiKey,
+        key: {
+          id: result.id,
+          keyName: result.key_name,
+          prefix: result.api_key_prefix,
+          expiresAt: result.expires_at,
+          allowedIps: result.allowed_ips,
+          allowedEndpoints: result.allowed_endpoints,
+          rateLimitPerMinute: result.rate_limit_per_minute,
+          rateLimitPerHour: result.rate_limit_per_hour,
+          createdAt: result.created_at,
+        },
+      });
+    } catch (error) {
+      console.error('Create API key error:', error);
+      if (error.constraint === 'unique_user_key_name') {
+        return res.status(400).json({ error: 'API key with this name already exists' });
+      }
+      res.status(500).json({ error: 'Failed to create API key' });
     }
-    res.status(500).json({ error: 'Failed to create API key' });
   }
-});
+);
 
 router.get('/api-keys', requireAuth, async (req, res) => {
   try {
@@ -83,7 +95,7 @@ router.post('/api-keys/:keyId/revoke', requireAuth, async (req, res) => {
       endpoint: req.path,
       requestMethod: req.method,
       details: { keyId },
-      severity: 'info'
+      severity: 'info',
     });
     res.json({ message: 'API key revoked successfully' });
   } catch (error) {
@@ -105,7 +117,7 @@ router.delete('/api-keys/:keyId', requireAuth, async (req, res) => {
       endpoint: req.path,
       requestMethod: req.method,
       details: { keyId },
-      severity: 'info'
+      severity: 'info',
     });
     res.json({ message: 'API key deleted successfully' });
   } catch (error) {
@@ -127,7 +139,7 @@ router.post('/ip-whitelist', requireAuth, async (req, res) => {
       endpoint: req.path,
       requestMethod: req.method,
       details: { whitelistedIp: ipAddress },
-      severity: 'info'
+      severity: 'info',
     });
     res.status(201).json({ message: 'IP address added to whitelist', ip: result });
   } catch (error) {
@@ -164,19 +176,16 @@ router.get('/audit-logs', requireAuth, async (req, res) => {
   try {
     // Audit logs are admin-only - check if user is admin
     const { pool } = await import('../lib/db.js');
-    
+
     // Check if is_admin column exists, if not deny access
     let isAdmin = false;
     try {
-      const userResult = await pool.query(
-        'SELECT is_admin FROM users WHERE id = $1',
-        [req.userId]
-      );
-      
+      const userResult = await pool.query('SELECT is_admin FROM users WHERE id = $1', [req.userId]);
+
       if (userResult.rows.length === 0) {
         return res.status(403).json({ error: 'Access denied. Admin privileges required.' });
       }
-      
+
       isAdmin = userResult.rows[0].is_admin === true;
     } catch (columnError) {
       // Column doesn't exist - deny access
@@ -186,11 +195,11 @@ router.get('/audit-logs', requireAuth, async (req, res) => {
       }
       throw columnError;
     }
-    
+
     if (!isAdmin) {
       return res.status(403).json({ error: 'Access denied. Admin privileges required.' });
     }
-    
+
     const limit = parseInt(req.query.limit) || 100;
     // Admins can see all logs (no userId filter)
     const logs = await getSecurityAuditLogs(null, limit);

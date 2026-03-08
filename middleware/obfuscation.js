@@ -15,11 +15,11 @@ function deobfuscateData(obfuscated, key) {
     const dataArray = new Uint8Array(Buffer.from(obfuscated, 'base64'));
     const keyArray = Buffer.from(key, 'utf8');
     const result = new Uint8Array(dataArray.length);
-    
+
     for (let i = 0; i < dataArray.length; i++) {
       result[i] = dataArray[i] ^ keyArray[i % keyArray.length];
     }
-    
+
     return Buffer.from(result).toString('utf8');
   } catch (error) {
     throw new Error('Failed to deobfuscate data');
@@ -30,33 +30,33 @@ function obfuscateData(data, key) {
   const dataArray = Buffer.from(data, 'utf8');
   const keyArray = Buffer.from(key, 'utf8');
   const result = new Uint8Array(dataArray.length);
-  
+
   for (let i = 0; i < dataArray.length; i++) {
     result[i] = dataArray[i] ^ keyArray[i % keyArray.length];
   }
-  
+
   return Buffer.from(result).toString('base64');
 }
 
 function generateRequestSignature(method, url, body, sessionId, timestamp, nonce) {
   const key = generateObfuscationKey(sessionId);
   const payload = `${method}:${url}:${body || ''}:${timestamp}:${nonce}`;
-  
+
   let hash = 0;
   for (let i = 0; i < payload.length; i++) {
     const char = payload.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
+    hash = (hash << 5) - hash + char;
     hash = hash & hash;
   }
-  
+
   const combined = `${hash}:${key}`;
   let finalHash = 0;
   for (let i = 0; i < combined.length; i++) {
     const char = combined.charCodeAt(i);
-    finalHash = ((finalHash << 5) - finalHash) + char;
+    finalHash = (finalHash << 5) - finalHash + char;
     finalHash = finalHash & finalHash;
   }
-  
+
   return Math.abs(finalHash).toString(36);
 }
 
@@ -69,23 +69,26 @@ function verifyRequestSignature(method, endpoint, body, sessionId, timestamp, no
     timestamp,
     nonce
   );
-  
+
   return expectedSignature === signature;
 }
 
 function deobfuscateEndpoint(obfuscated) {
   try {
-    const derotated = obfuscated.split('').map((char, idx) => {
-      const code = char.charCodeAt(0);
-      if (code >= 65 && code <= 90) {
-        return String.fromCharCode(((code - 65 - idx + 26) % 26) + 65);
-      }
-      if (code >= 97 && code <= 122) {
-        return String.fromCharCode(((code - 97 - idx + 26) % 26) + 97);
-      }
-      return char;
-    }).join('');
-    
+    const derotated = obfuscated
+      .split('')
+      .map((char, idx) => {
+        const code = char.charCodeAt(0);
+        if (code >= 65 && code <= 90) {
+          return String.fromCharCode(((code - 65 - idx + 26) % 26) + 65);
+        }
+        if (code >= 97 && code <= 122) {
+          return String.fromCharCode(((code - 97 - idx + 26) % 26) + 97);
+        }
+        return char;
+      })
+      .join('');
+
     return '/' + Buffer.from(derotated, 'base64').toString('utf8');
   } catch (error) {
     throw new Error('Invalid obfuscated endpoint');
@@ -121,7 +124,7 @@ const PUBLIC_ENDPOINTS = [
   '/payment/config',
   '/api/payment/config',
   '/payment/verify-session',
-  '/api/payment/verify-session'
+  '/api/payment/verify-session',
 ];
 
 function isPublicEndpoint(path) {
@@ -137,7 +140,10 @@ function isPublicEndpoint(path) {
   if (normalized.startsWith('/api/')) {
     normalized = '/' + normalized.substring(5); // /api/activities -> /activities
   }
-  const isPublic = PUBLIC_ENDPOINTS.includes(normalized) || PUBLIC_ENDPOINTS.includes(cleanPath) || PUBLIC_ENDPOINTS.includes('/api' + normalized);
+  const isPublic =
+    PUBLIC_ENDPOINTS.includes(normalized) ||
+    PUBLIC_ENDPOINTS.includes(cleanPath) ||
+    PUBLIC_ENDPOINTS.includes('/api' + normalized);
   return isPublic;
 }
 
@@ -146,25 +152,30 @@ function hasRequestBody(req) {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'DELETE') {
     return false;
   }
-  
+
   // Check content-type and body
   const contentType = req.headers['content-type'] || '';
   const hasBody = req.body && Object.keys(req.body).length > 0;
   const hasRawBody = req.body && typeof req.body === 'string' && req.body.length > 0;
-  
-  return hasBody || hasRawBody || contentType.includes('application/json') || contentType.includes('application/x-obfuscated');
+
+  return (
+    hasBody ||
+    hasRawBody ||
+    contentType.includes('application/json') ||
+    contentType.includes('application/x-obfuscated')
+  );
 }
 
 export async function verifyObfuscatedRequest(req, res, next) {
   try {
     const obfuscationEnabled = req.headers['x-obfuscation-enabled'] === 'true';
     const isPublic = isPublicEndpoint(req.path);
-    
+
     // Public endpoints don't require obfuscation
     if (isPublic) {
       return next();
     }
-    
+
     // All non-public endpoints require obfuscation (including GET like /activities, /staff)
     if (!obfuscationEnabled) {
       await logSecurityEvent('obfuscation_required', {
@@ -174,13 +185,14 @@ export async function verifyObfuscatedRequest(req, res, next) {
         details: {
           hasBody: !!req.body,
           contentType: req.headers['content-type'],
-          requestMethod: req.method
+          requestMethod: req.method,
         },
-        severity: 'warning'
+        severity: 'warning',
       });
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Obfuscation required',
-        message: 'All requests to this endpoint must use obfuscation. Include X-Obfuscation-Enabled: true header.'
+        message:
+          'All requests to this endpoint must use obfuscation. Include X-Obfuscation-Enabled: true header.',
       });
     }
 
@@ -200,12 +212,12 @@ export async function verifyObfuscatedRequest(req, res, next) {
         ipAddress: req.ip,
         endpoint: req.path,
         requestMethod: req.method,
-        details: { 
+        details: {
           hasCookie: !!req.cookies.sessionId,
           hasAuthHeader: !!req.headers.authorization,
-          authHeader: req.headers.authorization ? 'present' : 'missing'
+          authHeader: req.headers.authorization ? 'present' : 'missing',
         },
-        severity: 'warning'
+        severity: 'warning',
       });
       return res.status(401).json({ error: 'Session required for obfuscated requests' });
     }
@@ -219,7 +231,7 @@ export async function verifyObfuscatedRequest(req, res, next) {
         ipAddress: req.ip,
         endpoint: req.path,
         requestMethod: req.method,
-        severity: 'warning'
+        severity: 'warning',
       });
       return res.status(400).json({ error: 'Missing obfuscation headers' });
     }
@@ -232,7 +244,7 @@ export async function verifyObfuscatedRequest(req, res, next) {
         endpoint: req.path,
         requestMethod: req.method,
         details: { timestamp, now },
-        severity: 'warning'
+        severity: 'warning',
       });
       return res.status(400).json({ error: 'Request timestamp too old or invalid' });
     }
@@ -249,9 +261,9 @@ export async function verifyObfuscatedRequest(req, res, next) {
         parsedBody = {};
       }
     }
-    
+
     let bodyString = '';
-    
+
     if (parsedBody && typeof parsedBody === 'object') {
       // Check if it's the obfuscated format - data can be empty string, so check for property existence
       if (parsedBody.format === 'information' && parsedBody.hasOwnProperty('data')) {
@@ -267,21 +279,21 @@ export async function verifyObfuscatedRequest(req, res, next) {
     } else if (parsedBody !== undefined && parsedBody !== null) {
       bodyString = String(parsedBody);
     }
-    
+
     let endpointPath = req.path;
-    
+
     if (endpointPath.includes('?')) {
       endpointPath = endpointPath.split('?')[0];
     }
-    
+
     if (!endpointPath.startsWith('/')) {
       endpointPath = '/' + endpointPath;
     }
-    
+
     if (endpointPath.startsWith('/api/')) {
       endpointPath = endpointPath.substring(4);
     }
-    
+
     const isValid = verifyRequestSignature(
       req.method,
       endpointPath,
@@ -301,7 +313,7 @@ export async function verifyObfuscatedRequest(req, res, next) {
         timestamp,
         nonce
       );
-      
+
       console.error('Signature verification failed:', {
         method: req.method,
         originalPath: req.path,
@@ -309,9 +321,9 @@ export async function verifyObfuscatedRequest(req, res, next) {
         receivedSignature: signature,
         expectedSignature: expectedSignature,
         bodyLength: bodyString ? bodyString.length : 0,
-        sessionIdPrefix: sessionId ? sessionId.substring(0, 8) : 'none'
+        sessionIdPrefix: sessionId ? sessionId.substring(0, 8) : 'none',
       });
-      
+
       await logSecurityEvent('obfuscation_signature_invalid', {
         ipAddress: req.ip,
         endpoint: req.path,
@@ -321,9 +333,9 @@ export async function verifyObfuscatedRequest(req, res, next) {
           receivedSignature: signature,
           expectedSignature: expectedSignature,
           bodyType: typeof bodyString,
-          bodyLength: bodyString ? bodyString.length : 0
+          bodyLength: bodyString ? bodyString.length : 0,
         },
-        severity: 'warning'
+        severity: 'warning',
       });
       return res.status(401).json({ error: 'Invalid request signature' });
     }
@@ -343,7 +355,7 @@ export async function verifyObfuscatedRequest(req, res, next) {
           ipAddress: req.ip,
           endpoint: req.path,
           requestMethod: req.method,
-          severity: 'error'
+          severity: 'error',
         });
         return res.status(400).json({ error: 'Failed to deobfuscate request body' });
       }
@@ -354,7 +366,7 @@ export async function verifyObfuscatedRequest(req, res, next) {
     req.obfuscation = {
       enabled: true,
       sessionId,
-      key: generateObfuscationKey(sessionId)
+      key: generateObfuscationKey(sessionId),
     };
 
     next();
@@ -365,7 +377,7 @@ export async function verifyObfuscatedRequest(req, res, next) {
       endpoint: req.path,
       requestMethod: req.method,
       details: { error: error.message },
-      severity: 'error'
+      severity: 'error',
     });
     res.status(500).json({ error: 'Obfuscation verification failed' });
   }
@@ -376,14 +388,15 @@ export function obfuscateResponse(req, res, next) {
   const isPublic = isPublicEndpoint(req.path);
   const hasData = hasRequestBody(req);
   const obfuscationRequested = req.headers['x-obfuscation-enabled'] === 'true';
-  
+
   // Obfuscate if:
   // 1. Request was obfuscated (req.obfuscation exists)
   // 2. OR it's an authenticated endpoint with data (not public)
-  const shouldObfuscate = (req.obfuscation && req.obfuscation.enabled) || 
-                          (obfuscationRequested && !isPublic && hasData) ||
-                          (!isPublic && hasData && (req.userId || req.staffId));
-  
+  const shouldObfuscate =
+    (req.obfuscation && req.obfuscation.enabled) ||
+    (obfuscationRequested && !isPublic && hasData) ||
+    (!isPublic && hasData && (req.userId || req.staffId));
+
   if (!shouldObfuscate) {
     return next();
   }
@@ -414,14 +427,14 @@ export function obfuscateResponse(req, res, next) {
   }
 
   const originalJson = res.json.bind(res);
-  
-  res.json = function(data) {
+
+  res.json = function (data) {
     try {
       const obfuscated = obfuscateData(JSON.stringify(data), obfuscationKey);
       res.setHeader('Content-Type', 'application/json');
       return originalJson({
         format: 'information',
-        data: obfuscated
+        data: obfuscated,
       });
     } catch (error) {
       console.error('Failed to obfuscate response:', error);
@@ -456,12 +469,12 @@ export async function requireSubscription(req, res, next) {
         endpoint: req.path,
         requestMethod: req.method,
         details: { status: verification.status, message: verification.message },
-        severity: 'info'
+        severity: 'info',
       });
       return res.status(403).json({
         error: 'Premium subscription required',
         currentPlan: verification.subscriptionPlan || 'free',
-        requiredPlan: 'professional'
+        requiredPlan: 'professional',
       });
     }
 
@@ -472,7 +485,7 @@ export async function requireSubscription(req, res, next) {
         endpoint: req.path,
         requestMethod: req.method,
         details: { headerPlan: subscriptionPlan, verifiedPlan: verification.subscriptionPlan },
-        severity: 'warning'
+        severity: 'warning',
       });
     }
 
@@ -483,4 +496,3 @@ export async function requireSubscription(req, res, next) {
     res.status(500).json({ error: 'Subscription verification failed' });
   }
 }
-

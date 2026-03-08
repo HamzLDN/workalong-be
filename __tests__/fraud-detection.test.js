@@ -47,7 +47,7 @@ describe('Fraud Detection', () => {
 
       const result = await analyzeFraudPatterns(1, 1, 30);
 
-      const exactTimeFlag = result.find(flag => flag.type === 'exact-times');
+      const exactTimeFlag = result.find((flag) => flag.type === 'exact-times');
       expect(exactTimeFlag).toBeDefined();
       expect(exactTimeFlag.severity).toBe('medium');
     });
@@ -61,7 +61,7 @@ describe('Fraud Detection', () => {
 
       const result = await analyzeFraudPatterns(1, 1, 30);
 
-      const manualFlag = result.find(flag => flag.type === 'always-manual');
+      const manualFlag = result.find((flag) => flag.type === 'always-manual');
       expect(manualFlag).toBeDefined();
       expect(manualFlag.severity).toBe('medium');
     });
@@ -76,7 +76,7 @@ describe('Fraud Detection', () => {
 
       const result = await analyzeFraudPatterns(1, 1, 30);
 
-      const longHoursFlag = result.find(flag => flag.type === 'long-hours');
+      const longHoursFlag = result.find((flag) => flag.type === 'long-hours');
       if (longHoursFlag) {
         expect(longHoursFlag.severity).toBe('high');
       }

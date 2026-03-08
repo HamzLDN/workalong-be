@@ -16,7 +16,7 @@ import {
   calculateEndTime,
   approveShift,
   approveShifts,
-  unapproveShift
+  unapproveShift,
 } from '../services/shifts.js';
 import {
   createSwapRequest,
@@ -25,7 +25,7 @@ import {
   acceptSwapRequest,
   rejectSwapRequest,
   cancelSwapRequest,
-  getSwapRequestById
+  getSwapRequestById,
 } from '../services/shift-swaps.js';
 import { requireAuth, requireStaffAuth, authenticateStaffOrUser } from '../middleware/auth.js';
 import { requireSubscription } from '../middleware/obfuscation.js';
@@ -87,7 +87,8 @@ const router = express.Router();
  */
 router.get('/shifts', async (req, res) => {
   try {
-    const apiKey = req.headers['x-api-key'] ||
+    const apiKey =
+      req.headers['x-api-key'] ||
       (req.headers.authorization && req.headers.authorization.startsWith('Bearer wak_')
         ? req.headers.authorization.replace('Bearer ', '')
         : null);
@@ -116,12 +117,18 @@ router.get('/shifts', async (req, res) => {
       const csrfToken = req.headers['x-csrf-token'];
       if (!csrfToken) {
         return res.status(403).json({
-          error: 'CSRF token required. Include X-CSRF-Token header. Get token from /api/auth/csrf-token endpoint.'
+          error:
+            'CSRF token required. Include X-CSRF-Token header. Get token from /api/auth/csrf-token endpoint.',
         });
       }
       const expectedToken = crypto
         .createHash('sha256')
-        .update(sessionId + (process.env.SESSION_SECRET || config.sessionSecret || 'change-this-secret-key-in-production'))
+        .update(
+          sessionId +
+            (process.env.SESSION_SECRET ||
+              config.sessionSecret ||
+              'change-this-secret-key-in-production')
+        )
         .digest('hex');
       if (csrfToken !== expectedToken) {
         return res.status(403).json({ error: 'Invalid CSRF token' });
@@ -134,7 +141,14 @@ router.get('/shifts', async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    const { startDate, endDate, status, staffId: filterStaffId, timezoneOffset, clientNow } = req.query;
+    const {
+      startDate,
+      endDate,
+      status,
+      staffId: filterStaffId,
+      timezoneOffset,
+      clientNow,
+    } = req.query;
 
     const filters = { startDate, endDate, staffId: filterStaffId, status };
     if (timezoneOffset !== undefined && timezoneOffset !== '') {
@@ -148,7 +162,10 @@ router.get('/shifts', async (req, res) => {
 
     const shifts = await getShifts(req.userId, filters);
     res.set('X-Shifts-ClientNow', filters.clientNow ? 'yes' : 'no');
-    res.set('X-Shifts-TimezoneOffset', filters.timezoneOffset !== undefined ? String(filters.timezoneOffset) : 'none');
+    res.set(
+      'X-Shifts-TimezoneOffset',
+      filters.timezoneOffset !== undefined ? String(filters.timezoneOffset) : 'none'
+    );
     res.json({ shifts });
   } catch (error) {
     console.error('Get shifts error:', error);
@@ -180,19 +197,35 @@ router.get('/shifts/:id', requireAuth, async (req, res) => {
 
 router.post('/shifts', requireAuth, async (req, res) => {
   try {
-    const { staffId, shiftDate, startTime, hours, breakMinutes, shiftType, payType, location, notes } = req.body;
+    const {
+      staffId,
+      shiftDate,
+      startTime,
+      hours,
+      breakMinutes,
+      shiftType,
+      payType,
+      location,
+      notes,
+    } = req.body;
     if (!staffId || !shiftDate || !startTime || !hours) {
       return res.status(400).json({ error: 'Staff ID, date, start time, and hours are required' });
     }
     const normalizedDate = shiftDate.split('T')[0];
     const calculatedEndTime = calculateEndTime(startTime, parseFloat(hours));
-    const conflictResult = await checkShiftConflict(req.userId, staffId, normalizedDate, startTime, calculatedEndTime);
+    const conflictResult = await checkShiftConflict(
+      req.userId,
+      staffId,
+      normalizedDate,
+      startTime,
+      calculatedEndTime
+    );
     if (conflictResult.hasConflict) {
       const conflicts = conflictResult.conflictingShifts;
-      const conflictTimes = conflicts.map(c => `${c.start}-${c.end}`).join(', ');
+      const conflictTimes = conflicts.map((c) => `${c.start}-${c.end}`).join(', ');
       return res.status(409).json({
         error: `This shift conflicts with an existing shift for this staff member. Conflicting shift time(s): ${conflictTimes}`,
-        conflictingShifts: conflicts
+        conflictingShifts: conflicts,
       });
     }
     // Sanitize string inputs to remove null bytes
@@ -205,13 +238,15 @@ router.post('/shifts', requireAuth, async (req, res) => {
       shiftType,
       payType,
       location: location ? sanitizeString(location) : location,
-      notes: notes ? sanitizeString(notes) : notes
+      notes: notes ? sanitizeString(notes) : notes,
     });
     res.status(201).json({ message: 'Shift created successfully', shift });
   } catch (error) {
     console.error('Create shift error:', error);
     if (error.message && error.message.includes('does not belong to this user')) {
-      return res.status(403).json({ error: 'You do not have permission to create shifts for this staff member' });
+      return res
+        .status(403)
+        .json({ error: 'You do not have permission to create shifts for this staff member' });
     }
     res.status(500).json({ error: 'Failed to create shift', details: error.message });
   }
@@ -223,18 +258,23 @@ router.post('/shifts/bulk', requireAuth, requireSubscription, async (req, res) =
     if (!shifts || !Array.isArray(shifts) || shifts.length === 0) {
       return res.status(400).json({ error: 'Shifts array is required' });
     }
-    const validatedShifts = shifts.map(shift => {
+    const validatedShifts = shifts.map((shift) => {
       if (!shift.staffId || !shift.shiftDate || !shift.startTime || !shift.hours) {
         throw new Error('Each shift must have staffId, shiftDate, startTime, and hours');
       }
       return { ...shift, hours: parseFloat(shift.hours) };
     });
     const createdShifts = await createBulkShifts(req.userId, validatedShifts);
-    res.status(201).json({ message: `${createdShifts.length} shifts created successfully`, shifts: createdShifts });
+    res.status(201).json({
+      message: `${createdShifts.length} shifts created successfully`,
+      shifts: createdShifts,
+    });
   } catch (error) {
     console.error('Create bulk shifts error:', error);
     if (error.message && error.message.includes('does not belong to this user')) {
-      return res.status(403).json({ error: 'You do not have permission to create shifts for one or more staff members' });
+      return res.status(403).json({
+        error: 'You do not have permission to create shifts for one or more staff members',
+      });
     }
     res.status(500).json({ error: 'Failed to create shifts' });
   }
@@ -242,19 +282,39 @@ router.post('/shifts/bulk', requireAuth, requireSubscription, async (req, res) =
 
 router.put('/shifts/:id', requireAuth, async (req, res) => {
   try {
-    const { staffId, shiftDate, startTime, hours, breakMinutes, shiftType, payType, status, location, notes, clockedInTime, clockedOutTime } = req.body;
+    const {
+      staffId,
+      shiftDate,
+      startTime,
+      hours,
+      breakMinutes,
+      shiftType,
+      payType,
+      status,
+      location,
+      notes,
+      clockedInTime,
+      clockedOutTime,
+    } = req.body;
     let calculatedEndTime = null;
     if (startTime && hours) {
       calculatedEndTime = calculateEndTime(startTime, parseFloat(hours));
     }
     if (staffId && shiftDate && startTime && calculatedEndTime) {
-      const conflictResult = await checkShiftConflict(req.userId, staffId, shiftDate, startTime, calculatedEndTime, req.params.id);
+      const conflictResult = await checkShiftConflict(
+        req.userId,
+        staffId,
+        shiftDate,
+        startTime,
+        calculatedEndTime,
+        req.params.id
+      );
       if (conflictResult.hasConflict) {
         const conflicts = conflictResult.conflictingShifts;
-        const conflictTimes = conflicts.map(c => `${c.start}-${c.end}`).join(', ');
+        const conflictTimes = conflicts.map((c) => `${c.start}-${c.end}`).join(', ');
         return res.status(409).json({
           error: `This shift conflicts with an existing shift for this staff member. Conflicting shift time(s): ${conflictTimes}`,
-          conflictingShifts: conflicts
+          conflictingShifts: conflicts,
         });
       }
     }
@@ -270,7 +330,7 @@ router.put('/shifts/:id', requireAuth, async (req, res) => {
       location,
       notes,
       clockedInTime,
-      clockedOutTime
+      clockedOutTime,
     });
     if (!shift) return res.status(404).json({ error: 'Shift not found' });
     res.json({ message: 'Shift updated successfully', shift });
@@ -309,7 +369,7 @@ router.post('/shifts/:id/approve', requireAuth, async (req, res) => {
       regularHours: result.regularHours,
       overtimeHours: result.overtimeHours,
       scheduledHours: result.scheduledHours,
-      actualHoursWorked: result.actualHoursWorked
+      actualHoursWorked: result.actualHoursWorked,
     });
   } catch (error) {
     console.error('Approve shift error:', error);
@@ -325,12 +385,18 @@ router.post('/shifts/approve-bulk', requireAuth, requireSubscription, async (req
     }
     const { results, errors } = await approveShifts(shiftIds, req.userId, req.userId);
     for (const result of results) {
-      await logShiftActivity(req.userId, result.shift.staff_id, result.shift.id, 'approved', `Approved shift for ${result.shift.staff_name}`);
+      await logShiftActivity(
+        req.userId,
+        result.shift.staff_id,
+        result.shift.id,
+        'approved',
+        `Approved shift for ${result.shift.staff_name}`
+      );
     }
     res.json({
       message: `${results.length} shifts approved successfully`,
       results,
-      errors: errors.length > 0 ? errors : undefined
+      errors: errors.length > 0 ? errors : undefined,
     });
   } catch (error) {
     console.error('Bulk approve shifts error:', error);
@@ -352,7 +418,12 @@ router.post('/shifts/:id/swap-request', requireStaffAuth, async (req, res) => {
   try {
     const { requestedShiftId, message } = req.body;
     if (!requestedShiftId) return res.status(400).json({ error: 'requestedShiftId is required' });
-    const swapRequest = await createSwapRequest(req.staffId, req.params.id, requestedShiftId, message);
+    const swapRequest = await createSwapRequest(
+      req.staffId,
+      req.params.id,
+      requestedShiftId,
+      message
+    );
     res.status(201).json({ message: 'Swap request created successfully', swapRequest });
   } catch (error) {
     console.error('Create swap request error:', error);
@@ -421,7 +492,10 @@ router.get('/shift-swaps/:id', async (req, res) => {
 router.post('/shift-swaps/:id/accept', requireStaffAuth, async (req, res) => {
   try {
     const swapRequest = await acceptSwapRequest(req.params.id, req.staffId);
-    res.json({ message: 'Swap request accepted successfully. Shifts have been swapped.', swapRequest });
+    res.json({
+      message: 'Swap request accepted successfully. Shifts have been swapped.',
+      swapRequest,
+    });
   } catch (error) {
     console.error('Accept swap request error:', error);
     res.status(400).json({ error: error.message || 'Failed to accept swap request' });

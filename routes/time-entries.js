@@ -7,7 +7,7 @@ import {
   approveTimeEntry,
   unapproveTimeEntry,
   getMonthlyEarningsChart,
-  getPayrollForPeriod
+  getPayrollForPeriod,
 } from '../services/staff.js';
 import { requireAuth } from '../middleware/auth.js';
 
@@ -98,7 +98,7 @@ router.post('/time-entries', requireAuth, async (req, res) => {
       date,
       hoursWorked,
       overtimeHours,
-      notes
+      notes,
     });
     res.status(201).json({ message: 'Time entry created successfully', entry });
   } catch (error) {

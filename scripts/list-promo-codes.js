@@ -11,7 +11,7 @@ if (!stripeSecretKey || !String(stripeSecretKey).startsWith('sk_')) {
 }
 
 const stripe = new Stripe(stripeSecretKey, {
-  apiVersion: '2024-11-20.acacia'
+  apiVersion: '2024-11-20.acacia',
 });
 
 /**
@@ -34,16 +34,16 @@ async function listPromoCodes() {
     // Fetch all promotion codes (Stripe paginates results)
     while (hasMore) {
       const params = {
-        limit: 100
+        limit: 100,
       };
-      
+
       if (startingAfter) {
         params.starting_after = startingAfter;
       }
 
       const response = await stripe.promotionCodes.list(params);
       allPromoCodes = allPromoCodes.concat(response.data);
-      
+
       hasMore = response.has_more;
       if (hasMore && response.data.length > 0) {
         startingAfter = response.data[response.data.length - 1].id;
@@ -57,16 +57,17 @@ async function listPromoCodes() {
 
     if (customOnly) {
       // Filter for codes created by admin for custom free clients
-      filteredCodes = allPromoCodes.filter(code => 
-        code.metadata?.created_by === 'admin' || 
-        code.metadata?.purpose === 'custom_free_client' ||
-        code.coupon?.metadata?.purpose === 'custom_free_client'
+      filteredCodes = allPromoCodes.filter(
+        (code) =>
+          code.metadata?.created_by === 'admin' ||
+          code.metadata?.purpose === 'custom_free_client' ||
+          code.coupon?.metadata?.purpose === 'custom_free_client'
       );
       console.log(`Filtered to ${filteredCodes.length} custom free client codes\n`);
     }
 
     if (activeOnly) {
-      filteredCodes = filteredCodes.filter(code => code.active);
+      filteredCodes = filteredCodes.filter((code) => code.active);
       console.log(`Filtered to ${filteredCodes.length} active codes\n`);
     }
 
@@ -97,18 +98,20 @@ async function listPromoCodes() {
       console.log(`${index + 1}. ${promoCode.code}`);
       console.log(`   Status: ${promoCode.active ? '✅ Active' : '❌ Inactive'}`);
       console.log(`   Promotion Code ID: ${promoCode.id}`);
-      
+
       if (coupon) {
         console.log(`   Coupon ID: ${coupon.id}`);
-        console.log(`   Discount: ${coupon.percent_off ? `${coupon.percent_off}% off` : coupon.amount_off ? `£${(coupon.amount_off / 100).toFixed(2)} off` : 'N/A'}`);
+        console.log(
+          `   Discount: ${coupon.percent_off ? `${coupon.percent_off}% off` : coupon.amount_off ? `£${(coupon.amount_off / 100).toFixed(2)} off` : 'N/A'}`
+        );
         console.log(`   Duration: ${coupon.duration}`);
         console.log(`   Name: ${coupon.name || 'N/A'}`);
-        
+
         if (coupon.metadata && Object.keys(coupon.metadata).length > 0) {
           console.log(`   Metadata:`, coupon.metadata);
         }
       }
-      
+
       if (promoCode.metadata && Object.keys(promoCode.metadata).length > 0) {
         console.log(`   Promo Metadata:`, promoCode.metadata);
       }
@@ -138,7 +141,6 @@ async function listPromoCodes() {
     console.log('  --all          Show all promotion codes (not just custom ones)');
     console.log('  --active-only   Show only active codes');
     console.log('  --custom-only   Show only custom free client codes (default)');
-
   } catch (error) {
     console.error('❌ Error listing promo codes:', error.message);
     if (error.type === 'StripeAuthenticationError') {
@@ -149,6 +151,3 @@ async function listPromoCodes() {
 }
 
 listPromoCodes();
-
-
-

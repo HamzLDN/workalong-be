@@ -31,8 +31,8 @@ router.post('/generate-link', requireAuth, async (req, res) => {
         url: clockinUrl,
         expiresAt: link.expires_at,
         createdAt: link.created_at,
-        deviceName: deviceName || null
-      }
+        deviceName: deviceName || null,
+      },
     });
   } catch (error) {
     console.error('Generate device link error:', error);
@@ -47,7 +47,7 @@ router.get('/links', requireAuth, async (req, res) => {
       [req.userId]
     );
     const baseUrl = process.env.FRONTEND_URL || 'https://workalong.co.uk';
-    const links = result.rows.map(link => ({
+    const links = result.rows.map((link) => ({
       id: link.id,
       token: link.link_token,
       url: `${baseUrl}/clockin/${link.link_token}`,
@@ -56,7 +56,7 @@ router.get('/links', requireAuth, async (req, res) => {
       isActive: link.is_active,
       createdAt: link.created_at,
       expiresAt: link.expires_at,
-      lastUsedAt: link.last_used_at
+      lastUsedAt: link.last_used_at,
     }));
     res.json({ links });
   } catch (error) {
@@ -85,20 +85,25 @@ router.get('/verify-link/:token', async (req, res) => {
     const { token } = req.params;
     const deviceFingerprint = req.headers['x-device-fingerprint'] || req.query.fingerprint;
     if (!deviceFingerprint) {
-      return res.status(400).json({ error: 'Device fingerprint is required', requiresFingerprint: true });
+      return res
+        .status(400)
+        .json({ error: 'Device fingerprint is required', requiresFingerprint: true });
     }
     const linkResult = await pool.query(
       `SELECT dl.* FROM device_links dl WHERE dl.link_token = $1 AND dl.is_active = TRUE`,
       [token]
     );
-    if (linkResult.rows.length === 0) return res.status(404).json({ error: 'Invalid or inactive link' });
+    if (linkResult.rows.length === 0)
+      return res.status(404).json({ error: 'Invalid or inactive link' });
     const link = linkResult.rows[0];
     if (link.expires_at && new Date(link.expires_at) < new Date()) {
       return res.status(410).json({ error: 'Link has expired' });
     }
     if (link.device_fingerprint) {
       if (link.device_fingerprint !== deviceFingerprint) {
-        return res.status(403).json({ error: 'This link is locked to a different device', lockedDevice: true });
+        return res
+          .status(403)
+          .json({ error: 'This link is locked to a different device', lockedDevice: true });
       }
     } else {
       await pool.query(
@@ -119,25 +124,34 @@ router.post('/clock-action', async (req, res) => {
     const { clockinId, action, linkToken, latitude, longitude } = req.body;
     const deviceFingerprint = req.headers['x-device-fingerprint'] || req.body.deviceFingerprint;
     if (!clockinId || !action || !linkToken) {
-      return res.status(400).json({ error: 'Clock-in code (or username), action, and link token are required' });
+      return res
+        .status(400)
+        .json({ error: 'Clock-in code (or username), action, and link token are required' });
     }
-    if (!deviceFingerprint) return res.status(400).json({ error: 'Device fingerprint is required' });
+    if (!deviceFingerprint)
+      return res.status(400).json({ error: 'Device fingerprint is required' });
 
     const raw = String(clockinId || '').trim();
     const digits = raw.replace(/\D/g, '');
     const code = digits.slice(-6);
     if (code.length !== 6) {
-      return res.status(400).json({ error: 'Enter your 6-digit clock-in code or username (e.g. dan.411125 – we use the last 6 digits)' });
+      return res.status(400).json({
+        error:
+          'Enter your 6-digit clock-in code or username (e.g. dan.411125 – we use the last 6 digits)',
+      });
     }
 
     const linkResult = await pool.query(
       `SELECT dl.* FROM device_links dl WHERE dl.link_token = $1 AND dl.is_active = TRUE`,
       [linkToken]
     );
-    if (linkResult.rows.length === 0) return res.status(404).json({ error: 'Invalid or inactive link' });
+    if (linkResult.rows.length === 0)
+      return res.status(404).json({ error: 'Invalid or inactive link' });
     const link = linkResult.rows[0];
     if (link.device_fingerprint && link.device_fingerprint !== deviceFingerprint) {
-      return res.status(403).json({ error: 'Device fingerprint mismatch', code: 'DEVICE_MISMATCH' });
+      return res
+        .status(403)
+        .json({ error: 'Device fingerprint mismatch', code: 'DEVICE_MISMATCH' });
     }
     if (link.expires_at && new Date(link.expires_at) < new Date()) {
       return res.status(410).json({ error: 'Link has expired' });
@@ -180,7 +194,7 @@ router.post('/clock-action', async (req, res) => {
     if (staffResult.rows.length === 0) {
       return res.status(403).json({
         error: 'Invalid clock-in ID or staff member not found',
-        code: 'STAFF_NOT_FOUND'
+        code: 'STAFF_NOT_FOUND',
       });
     }
     const staffId = staffResult.rows[0].staff_id;
@@ -193,13 +207,16 @@ router.post('/clock-action', async (req, res) => {
       if (hasValidLocation) {
         const geofenceResult = await checkGeofence(staffId, latitude, longitude);
         if (!geofenceResult.allowed) {
-          console.log('[clock-action] 403: Geofence failed (clock-in)', { staffId, distance: geofenceResult.distance });
+          console.log('[clock-action] 403: Geofence failed (clock-in)', {
+            staffId,
+            distance: geofenceResult.distance,
+          });
           return res.status(403).json({
             error: geofenceResult.error,
             code: 'GEOFENCE_FAILED',
             requiresLocation: geofenceResult.requiresLocation || false,
             distance: geofenceResult.distance,
-            radius: geofenceResult.radius
+            radius: geofenceResult.radius,
           });
         }
       }
@@ -233,7 +250,10 @@ router.post('/clock-action', async (req, res) => {
         [staffId, now]
       );
       if (shiftResult.rows.length === 0) {
-        return res.status(400).json({ error: 'No shift scheduled with hours remaining. You can only clock in during your scheduled shift.' });
+        return res.status(400).json({
+          error:
+            'No shift scheduled with hours remaining. You can only clock in during your scheduled shift.',
+        });
       }
 
       const shift = shiftResult.rows[0];
@@ -245,7 +265,9 @@ router.post('/clock-action', async (req, res) => {
         [staffId, today, shiftId]
       );
       if (previousEntries.rows.length > 0) {
-        await pool.query(`DELETE FROM time_entries WHERE id = ANY($1::bigint[])`, [previousEntries.rows.map(e => e.id)]);
+        await pool.query(`DELETE FROM time_entries WHERE id = ANY($1::bigint[])`, [
+          previousEntries.rows.map((e) => e.id),
+        ]);
       }
       await pool.query(
         `UPDATE shifts SET clocked_in_time = $1, clocked_out_time = NULL, clock_source = 'staff', status = 'in_progress' WHERE id = $2`,
@@ -258,12 +280,18 @@ router.post('/clock-action', async (req, res) => {
       );
       await pool.query('UPDATE device_links SET last_used_at = NOW() WHERE id = $1', [link.id]);
       const timeStr = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-      res.json({ message: `Clocked in at ${timeStr}`, timeEntry: timeEntryResult.rows[0], clockInTime: now });
+      res.json({
+        message: `Clocked in at ${timeStr}`,
+        timeEntry: timeEntryResult.rows[0],
+        clockInTime: now,
+      });
     } else if (action === 'clock-out') {
       const { lateReason } = req.body;
       const now = new Date();
       const today = now.toISOString().split('T')[0];
-      const yesterdayStr = new Date(new Date().setDate(new Date().getDate() - 1)).toISOString().split('T')[0];
+      const yesterdayStr = new Date(new Date().setDate(new Date().getDate() - 1))
+        .toISOString()
+        .split('T')[0];
       const hasValidLocation = typeof latitude === 'number' && typeof longitude === 'number';
       let geofenceNote = null;
       if (hasValidLocation) {
@@ -274,7 +302,7 @@ router.post('/clock-action', async (req, res) => {
             staffId,
             distance: geofenceResult.distance,
             radius: geofenceResult.radius,
-            error: geofenceResult.error
+            error: geofenceResult.error,
           });
         }
       }
@@ -320,7 +348,7 @@ router.post('/clock-action', async (req, res) => {
             clockInTime,
             clockOutTime: now,
             hoursWorked: totalHoursWorked,
-            shiftRemoved: true
+            shiftRemoved: true,
           });
         }
         return res.status(400).json({ error: 'No active clock-in found. Please clock in first.' });
@@ -345,7 +373,7 @@ router.post('/clock-action', async (req, res) => {
         if (!reason) {
           return res.status(400).json({
             error: 'You clocked out more than 10 minutes late. Please provide a reason.',
-            requiresLateReason: true
+            requiresLateReason: true,
           });
         }
         await pool.query(
@@ -373,14 +401,17 @@ router.post('/clock-action', async (req, res) => {
           [clockOutTime, staffId, today]
         );
         await pool.query('UPDATE device_links SET last_used_at = NOW() WHERE id = $1', [link.id]);
-        const outStr = clockOutTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        const outStr = clockOutTime.toLocaleTimeString('en-GB', {
+          hour: '2-digit',
+          minute: '2-digit',
+        });
         const hrsStr = ((clockOutTime - clockInTime) / (1000 * 60 * 60)).toFixed(2);
         return res.json({
           message: `Clocked out at ${outStr}. You worked ${hrsStr} hours. (Marked for review – late clock-out.)`,
           clockInTime,
           clockOutTime,
           hoursWorked: (clockOutTime - clockInTime) / (1000 * 60 * 60),
-          status: 'review_hours'
+          status: 'review_hours',
         });
       }
 
@@ -414,14 +445,17 @@ router.post('/clock-action', async (req, res) => {
         [clockOutTime, staffId, today]
       );
       await pool.query('UPDATE device_links SET last_used_at = NOW() WHERE id = $1', [link.id]);
-      const outStr = clockOutTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+      const outStr = clockOutTime.toLocaleTimeString('en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
       const hrsStr = totalHoursWorked.toFixed(2);
       res.json({
         message: `Clocked out at ${outStr}. You worked ${hrsStr} hours. Pending manager approval.`,
         clockInTime,
         clockOutTime,
         hoursWorked: totalHoursWorked,
-        status: 'review_hours'
+        status: 'review_hours',
       });
     } else {
       return res.status(400).json({ error: 'Invalid action. Use "clock-in" or "clock-out"' });
@@ -446,11 +480,14 @@ router.get('/status/:linkToken', async (req, res) => {
       `SELECT dl.* FROM device_links dl WHERE dl.link_token = $1 AND dl.is_active = TRUE`,
       [linkToken]
     );
-    if (linkResult.rows.length === 0) return res.status(404).json({ error: 'Invalid or inactive link' });
+    if (linkResult.rows.length === 0)
+      return res.status(404).json({ error: 'Invalid or inactive link' });
     const link = linkResult.rows[0];
     if (link.device_fingerprint && link.device_fingerprint !== deviceFingerprint) {
       console.log('[clock-action] 403: Device fingerprint mismatch (status)');
-      return res.status(403).json({ error: 'Device fingerprint mismatch', code: 'DEVICE_MISMATCH' });
+      return res
+        .status(403)
+        .json({ error: 'Device fingerprint mismatch', code: 'DEVICE_MISMATCH' });
     }
     // Lookup staff by: 1) clockin_id, 2) last 6 chars/digits of username, 3) exact username
     let staffResult = await pool.query(
@@ -497,7 +534,7 @@ router.get('/status/:linkToken', async (req, res) => {
     res.json({
       clockInTime: entry.clock_in_time,
       clockOutTime: null,
-      timeEntry: entry
+      timeEntry: entry,
     });
   } catch (error) {
     console.error('Get clock status error:', error);

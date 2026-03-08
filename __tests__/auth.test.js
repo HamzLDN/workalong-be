@@ -81,10 +81,11 @@ describe('Auth Functions', () => {
       await createUser('test@example.com', 'password123', 'Test User', 'Test Company');
 
       // Company parameter is accepted but not stored (no company column in users table)
-      expect(mockQueryFn).toHaveBeenCalledWith(
-        expect.stringContaining('INSERT INTO users'),
-        ['test@example.com', '$2b$10$hashedPassword', 'Test User']
-      );
+      expect(mockQueryFn).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO users'), [
+        'test@example.com',
+        '$2b$10$hashedPassword',
+        'Test User',
+      ]);
       // Verify company is NOT in the SQL query
       const callArgs = mockQueryFn.mock.calls[0];
       expect(callArgs[0]).not.toContain('company');
@@ -99,10 +100,9 @@ describe('Auth Functions', () => {
 
       const result = await findUserByEmail('TEST@EXAMPLE.COM');
 
-      expect(mockQueryFn).toHaveBeenCalledWith(
-        expect.stringContaining('LOWER(email) = LOWER'),
-        ['TEST@EXAMPLE.COM']
-      );
+      expect(mockQueryFn).toHaveBeenCalledWith(expect.stringContaining('LOWER(email) = LOWER'), [
+        'TEST@EXAMPLE.COM',
+      ]);
       expect(result).toEqual(mockUser);
     });
 
@@ -154,10 +154,13 @@ describe('Auth Functions', () => {
       const result = await createSession(1, '127.0.0.1', 'test-agent');
 
       expect(mockUuidv4Fn).toHaveBeenCalled();
-      expect(mockQueryFn).toHaveBeenCalledWith(
-        expect.stringContaining('INSERT INTO sessions'),
-        [mockSessionId, 1, expect.any(Date), '127.0.0.1', 'test-agent']
-      );
+      expect(mockQueryFn).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO sessions'), [
+        mockSessionId,
+        1,
+        expect.any(Date),
+        '127.0.0.1',
+        'test-agent',
+      ]);
       expect(result.sessionId).toBe(mockSessionId);
       expect(result.expiresAt).toBeInstanceOf(Date);
     });
@@ -192,10 +195,9 @@ describe('Auth Functions', () => {
 
       await deleteSession('session-id');
 
-      expect(mockQueryFn).toHaveBeenCalledWith(
-        'DELETE FROM sessions WHERE id = $1',
-        ['session-id']
-      );
+      expect(mockQueryFn).toHaveBeenCalledWith('DELETE FROM sessions WHERE id = $1', [
+        'session-id',
+      ]);
     });
   });
 
@@ -205,9 +207,7 @@ describe('Auth Functions', () => {
 
       await cleanupExpiredSessions();
 
-      expect(mockQueryFn).toHaveBeenCalledWith(
-        'DELETE FROM sessions WHERE expires_at < NOW()'
-      );
+      expect(mockQueryFn).toHaveBeenCalledWith('DELETE FROM sessions WHERE expires_at < NOW()');
     });
   });
 

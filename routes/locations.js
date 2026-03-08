@@ -17,10 +17,7 @@ async function hasMultiLocation(userId) {
     // Fallback: check Stripe metadata (fixes users who upgraded but DB wasn't synced)
     const sub = await getSubscriptionDetails(userId);
     if (!sub || sub.metadata?.multiLocation !== '1') return false;
-    await pool.query(
-      'UPDATE users SET multi_location_enabled = TRUE WHERE id = $1',
-      [userId]
-    );
+    await pool.query('UPDATE users SET multi_location_enabled = TRUE WHERE id = $1', [userId]);
     return true;
   } catch (e) {
     if (e.code === '42703' || String(e.message || '').includes('multi_location_enabled')) {
@@ -34,7 +31,9 @@ router.get('/', requireAuth, async (req, res) => {
   try {
     const hasMulti = await hasMultiLocation(req.userId);
     if (!hasMulti) {
-      return res.status(403).json({ error: 'Multi-location is not enabled for your plan. Upgrade to add multiple locations.' });
+      return res.status(403).json({
+        error: 'Multi-location is not enabled for your plan. Upgrade to add multiple locations.',
+      });
     }
     const result = await pool.query(
       `SELECT id, name, latitude, longitude, radius, sort_order, created_at 
@@ -54,7 +53,9 @@ router.post('/', requireAuth, async (req, res) => {
   try {
     const hasMulti = await hasMultiLocation(req.userId);
     if (!hasMulti) {
-      return res.status(403).json({ error: 'Multi-location is not enabled for your plan. Upgrade to add multiple locations.' });
+      return res.status(403).json({
+        error: 'Multi-location is not enabled for your plan. Upgrade to add multiple locations.',
+      });
     }
     const { name, latitude, longitude, radius } = req.body;
     if (!name || typeof name !== 'string' || !name.trim()) {
@@ -121,7 +122,9 @@ router.put('/:id', requireAuth, async (req, res) => {
     if (radius !== undefined) {
       const rad = parseInt(radius, 10);
       if (Number.isNaN(rad) || rad < 10 || rad > 10000) {
-        return res.status(400).json({ error: 'Invalid radius. Must be between 10 and 10000 meters' });
+        return res
+          .status(400)
+          .json({ error: 'Invalid radius. Must be between 10 and 10000 meters' });
       }
       updates.push(`radius = $${i++}`);
       values.push(rad);

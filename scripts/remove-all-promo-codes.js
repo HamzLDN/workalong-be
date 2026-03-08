@@ -11,13 +11,13 @@ if (!stripeSecretKey || !String(stripeSecretKey).startsWith('sk_')) {
 }
 
 const stripe = new Stripe(stripeSecretKey, {
-  apiVersion: '2024-11-20.acacia'
+  apiVersion: '2024-11-20.acacia',
 });
 
 /**
  * Remove all promotion codes (deactivate them)
  * Usage: node scripts/remove-all-promo-codes.js [--dry-run] [--delete]
- * 
+ *
  * By default, codes are deactivated (can be reactivated later)
  * Use --delete to permanently delete them (cannot be undone)
  */
@@ -47,16 +47,16 @@ async function removeAllPromoCodes() {
     // Fetch all promotion codes (Stripe paginates results)
     while (hasMore) {
       const params = {
-        limit: 100
+        limit: 100,
       };
-      
+
       if (startingAfter) {
         params.starting_after = startingAfter;
       }
 
       const response = await stripe.promotionCodes.list(params);
       allPromoCodes = allPromoCodes.concat(response.data);
-      
+
       hasMore = response.has_more;
       if (hasMore && response.data.length > 0) {
         startingAfter = response.data[response.data.length - 1].id;
@@ -66,7 +66,7 @@ async function removeAllPromoCodes() {
     console.log(`Found ${allPromoCodes.length} total promotion codes\n`);
 
     // Filter to only active codes
-    const activeCodes = allPromoCodes.filter(code => code.active === true);
+    const activeCodes = allPromoCodes.filter((code) => code.active === true);
 
     console.log(`Found ${activeCodes.length} active promotion codes\n`);
 
@@ -82,14 +82,16 @@ async function removeAllPromoCodes() {
         console.log(`   Times redeemed: ${code.times_redeemed || 0}`);
         console.log(`   Max redemptions: ${code.max_redemptions || 'unlimited'}`);
       });
-      console.log(`\nRun without --dry-run to ${deletePermanently ? 'delete' : 'deactivate'} these codes`);
+      console.log(
+        `\nRun without --dry-run to ${deletePermanently ? 'delete' : 'deactivate'} these codes`
+      );
       return;
     }
 
     // Remove each code
     const results = {
       success: [],
-      failed: []
+      failed: [],
     };
 
     for (const promoCode of activeCodes) {
@@ -100,27 +102,28 @@ async function removeAllPromoCodes() {
         if (deletePermanently) {
           // Note: Stripe doesn't allow deleting promotion codes directly
           // We can only deactivate them
-          console.log(`  ⚠️  Note: Stripe doesn't allow deleting promotion codes. Deactivating instead.`);
+          console.log(
+            `  ⚠️  Note: Stripe doesn't allow deleting promotion codes. Deactivating instead.`
+          );
         }
 
         // Deactivate the promotion code
         await stripe.promotionCodes.update(promoCode.id, {
-          active: false
+          active: false,
         });
 
         console.log(`  ✅ ${deletePermanently ? 'Deactivated' : 'Deactivated'} code`);
-        
+
         results.success.push({
           id: promoCode.id,
           code: promoCode.code,
-          timesRedeemed: promoCode.times_redeemed || 0
+          timesRedeemed: promoCode.times_redeemed || 0,
         });
-
       } catch (error) {
         console.error(`  ❌ Error removing ${promoCode.code}:`, error.message);
         results.failed.push({
           code: promoCode.code,
-          reason: error.message
+          reason: error.message,
         });
       }
     }
@@ -129,9 +132,11 @@ async function removeAllPromoCodes() {
     console.log('\n========================================');
     console.log('SUMMARY');
     console.log('========================================');
-    console.log(`✅ Successfully ${deletePermanently ? 'deleted' : 'deactivated'}: ${results.success.length}`);
+    console.log(
+      `✅ Successfully ${deletePermanently ? 'deleted' : 'deactivated'}: ${results.success.length}`
+    );
     console.log(`❌ Failed: ${results.failed.length}`);
-    
+
     if (results.success.length > 0) {
       console.log(`\nSuccessfully ${deletePermanently ? 'deleted' : 'deactivated'} codes:`);
       results.success.forEach((result, index) => {
@@ -156,7 +161,6 @@ async function removeAllPromoCodes() {
       console.log('   They can be reactivated in the Stripe dashboard if needed.');
       console.log('   Stripe does not allow permanent deletion of promotion codes.\n');
     }
-
   } catch (error) {
     console.error('❌ Error removing promotion codes:', error.message);
     if (error.type === 'StripeAuthenticationError') {
@@ -167,5 +171,3 @@ async function removeAllPromoCodes() {
 }
 
 removeAllPromoCodes();
-
-

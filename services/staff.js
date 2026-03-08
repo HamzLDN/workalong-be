@@ -20,10 +20,10 @@ export async function getStaff(userId) {
 
 // Get single staff member
 export async function getStaffById(staffId, userId) {
-  const result = await pool.query(
-    'SELECT * FROM staff WHERE id = $1 AND user_id = $2',
-    [staffId, userId]
-  );
+  const result = await pool.query('SELECT * FROM staff WHERE id = $1 AND user_id = $2', [
+    staffId,
+    userId,
+  ]);
   return result.rows[0];
 }
 
@@ -44,10 +44,10 @@ function generatePasswordToken() {
 export async function createStaff(userId, data) {
   const { name, email, role, hourlyRate, employmentType } = data;
   const client = await pool.connect();
-  
+
   try {
     await client.query('BEGIN');
-    
+
     // Generate unique 6-digit suffix for username (used for clock-in - last 6 digits of username)
     let code6;
     let attempts = 0;
@@ -76,41 +76,48 @@ export async function createStaff(userId, data) {
     const sanitizedName = sanitizeString(name);
     const sanitizedEmail = email ? sanitizeString(email) : email;
     const sanitizedRole = role ? sanitizeString(role) : role;
-    
+
     const result = await client.query(
       `INSERT INTO staff (user_id, name, email, role, hourly_rate, employment_type, username, password_hash, password_set, clockin_id) 
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, $9) 
        RETURNING *`,
-      [userId, sanitizedName, sanitizedEmail, sanitizedRole, hourlyRate, employmentType || 'full-time', username, passwordHash, code6]
+      [
+        userId,
+        sanitizedName,
+        sanitizedEmail,
+        sanitizedRole,
+        hourlyRate,
+        employmentType || 'full-time',
+        username,
+        passwordHash,
+        code6,
+      ]
     );
     const staffId = result.rows[0].id;
-    
+
     // Generate password setup token (expires in 7 days)
     const token = generatePasswordToken();
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
-    
+
     // Save token to database
     await client.query(
       `INSERT INTO staff_password_tokens (staff_id, token, expires_at)
        VALUES ($1, $2, $3)`,
       [staffId, token, expiresAt]
     );
-    
+
     await client.query('COMMIT');
-    
+
     // Send password setup email (don't await - send in background)
-    sendStaffPasswordSetupEmail(email, name, username, token).catch(err => {
+    sendStaffPasswordSetupEmail(email, name, username, token).catch((err) => {
       console.error('Failed to send password setup email:', err);
       // Don't fail the request if email fails - token is still valid
     });
-    
+
     // Get the created staff member to return
-    const staffResult = await pool.query(
-      'SELECT * FROM staff WHERE id = $1',
-      [staffId]
-    );
-    
+    const staffResult = await pool.query('SELECT * FROM staff WHERE id = $1', [staffId]);
+
     return staffResult.rows[0];
   } catch (error) {
     await client.query('ROLLBACK');
@@ -131,68 +138,72 @@ export async function validatePasswordToken(token) {
      AND spt.used_at IS NULL`,
     [token]
   );
-  
+
   if (result.rows.length === 0) {
     return null;
   }
-  
+
   return result.rows[0];
 }
 
 // Reset staff password - generates new token and sends email
 export async function resetStaffPassword(staffId, userId) {
   const client = await pool.connect();
-  
+
   try {
     await client.query('BEGIN');
-    
+
     // Verify staff belongs to user
     const staffResult = await client.query(
       'SELECT id, name, email, username FROM staff WHERE id = $1 AND user_id = $2',
       [staffId, userId]
     );
-    
+
     if (staffResult.rows.length === 0) {
       throw new Error('Staff member not found');
     }
-    
+
     const staff = staffResult.rows[0];
-    
+
     // Generate new password setup token (expires in 7 days)
     const token = generatePasswordToken();
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
-    
+
     // Delete any existing unused tokens for this staff member
     await client.query(
       `DELETE FROM staff_password_tokens 
        WHERE staff_id = $1 AND used_at IS NULL`,
       [staffId]
     );
-    
+
     // Save new token to database
     await client.query(
       `INSERT INTO staff_password_tokens (staff_id, token, expires_at)
        VALUES ($1, $2, $3)`,
       [staffId, token, expiresAt]
     );
-    
+
     await client.query('COMMIT');
-    
+
     // Send password reset email
-    console.log(`[resetStaffPassword] Sending password reset email to ${staff.email} for staff ${staff.name} (ID: ${staffId})`);
+    console.log(
+      `[resetStaffPassword] Sending password reset email to ${staff.email} for staff ${staff.name} (ID: ${staffId})`
+    );
     try {
       await sendStaffPasswordSetupEmail(staff.email, staff.name, staff.username, token);
       console.log(`[resetStaffPassword] Password reset email sent successfully to ${staff.email}`);
     } catch (emailError) {
       console.error(`[resetStaffPassword] Failed to send email to ${staff.email}:`, emailError);
       // Don't fail the request if email fails - token is still valid and user can request again
-      throw new Error(`Password reset token created but email failed to send: ${emailError.message}`);
+      throw new Error(
+        `Password reset token created but email failed to send: ${emailError.message}`
+      );
     }
-    
+
     return {
       success: true,
-      message: 'Password reset email sent successfully'
+      message: 'Password reset email sent successfully',
     };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -205,19 +216,19 @@ export async function resetStaffPassword(staffId, userId) {
 // Set password using token
 export async function setPasswordWithToken(token, newPassword) {
   const client = await pool.connect();
-  
+
   try {
     await client.query('BEGIN');
-    
+
     // Validate token
     const tokenData = await validatePasswordToken(token);
     if (!tokenData) {
       throw new Error('Invalid or expired token');
     }
-    
+
     // Hash new password
     const passwordHash = await hashPassword(newPassword);
-    
+
     // Update staff password and mark as set
     await client.query(
       `UPDATE staff 
@@ -225,7 +236,7 @@ export async function setPasswordWithToken(token, newPassword) {
        WHERE id = $2`,
       [passwordHash, tokenData.staff_id]
     );
-    
+
     // Mark token as used
     await client.query(
       `UPDATE staff_password_tokens 
@@ -233,13 +244,13 @@ export async function setPasswordWithToken(token, newPassword) {
        WHERE token = $1`,
       [token]
     );
-    
+
     await client.query('COMMIT');
-    
+
     return {
       success: true,
       staffId: tokenData.staff_id,
-      username: tokenData.username
+      username: tokenData.username,
     };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -252,12 +263,12 @@ export async function setPasswordWithToken(token, newPassword) {
 // Update staff member
 export async function updateStaff(staffId, userId, data) {
   const { name, email, role, hourlyRate, employmentType, status } = data;
-  
+
   // Sanitize string inputs to remove null bytes
   const sanitizedName = name !== undefined ? (name ? sanitizeString(name) : name) : undefined;
   const sanitizedEmail = email !== undefined ? (email ? sanitizeString(email) : email) : undefined;
   const sanitizedRole = role !== undefined ? (role ? sanitizeString(role) : role) : undefined;
-  
+
   const result = await pool.query(
     `UPDATE staff 
      SET name = COALESCE($1, name),
@@ -268,18 +279,24 @@ export async function updateStaff(staffId, userId, data) {
          status = COALESCE($6, status)
      WHERE id = $7 AND user_id = $8
      RETURNING *`,
-    [sanitizedName, sanitizedEmail, sanitizedRole, hourlyRate, employmentType, status, staffId, userId]
+    [
+      sanitizedName,
+      sanitizedEmail,
+      sanitizedRole,
+      hourlyRate,
+      employmentType,
+      status,
+      staffId,
+      userId,
+    ]
   );
-  
+
   return result.rows[0];
 }
 
 // Delete staff member
 export async function deleteStaff(staffId, userId) {
-  await pool.query(
-    'DELETE FROM staff WHERE id = $1 AND user_id = $2',
-    [staffId, userId]
-  );
+  await pool.query('DELETE FROM staff WHERE id = $1 AND user_id = $2', [staffId, userId]);
 }
 
 // Get staff statistics
@@ -288,7 +305,7 @@ export async function getStaffStats(userId, clientDate = null) {
     'SELECT COUNT(*) as count FROM staff WHERE user_id = $1 AND status = $2',
     [userId, 'active']
   );
-  
+
   // Monthly hours: use client's local date for "this month" so timezone matches user
   let startStr, endStr;
   if (clientDate && /^\d{4}-\d{2}-\d{2}$/.test(clientDate)) {
@@ -400,7 +417,7 @@ export async function getStaffStats(userId, clientDate = null) {
   attendanceHoursResult.rows.forEach((r) => {
     attendanceHoursByStaff[r.staff_id] = parseFloat(r.hours || 0);
   });
-  
+
   // Monthly payroll: clock_in_out + approved_shift + manual (same sources as hours, cap for payroll)
   const payrollResult = await pool.query(
     `WITH from_clocked AS (
@@ -450,46 +467,47 @@ export async function getStaffStats(userId, clientDate = null) {
      WHERE st.user_id = $1`,
     [userId, startStr, endStr]
   );
-  
+
   // Try to get active budget stats for current month (may be null if no budget)
   let budgetSummary = {
     budgetMonthly: null,
     budgetSpentThisMonth: null,
-    budgetPercentageUsed: null
+    budgetPercentageUsed: null,
   };
   try {
     const budgetStats = await getBudgetStats(userId, clientDate);
     if (budgetStats && budgetStats.budget && budgetStats.currentMonth) {
       budgetSummary = {
-        budgetMonthly: parseFloat(budgetStats.budget.monthlyBudget || budgetStats.budget.monthly_budget || 0),
+        budgetMonthly: parseFloat(
+          budgetStats.budget.monthlyBudget || budgetStats.budget.monthly_budget || 0
+        ),
         budgetSpentThisMonth: parseFloat(budgetStats.currentMonth.spent || 0),
-        budgetPercentageUsed: parseFloat(budgetStats.currentMonth.percentageUsed || 0)
+        budgetPercentageUsed: parseFloat(budgetStats.currentMonth.percentageUsed || 0),
       };
     }
   } catch (err) {
     console.log('Budget stats not available for dashboard:', err.message || err);
   }
-  
+
   return {
     totalStaff: parseInt(totalStaffResult.rows[0].count),
     hoursThisMonth: parseFloat(hoursResult.rows[0].total_hours || 0),
     monthlyPayroll: parseFloat(payrollResult.rows[0].total_cost || 0),
     attendanceHoursByStaff,
-    ...budgetSummary
+    ...budgetSummary,
   };
 }
 
-
 export async function createTimeEntry(userId, data) {
   const { staffId, date, hoursWorked, overtimeHours, notes } = data;
-  
+
   const result = await pool.query(
     `INSERT INTO time_entries (user_id, staff_id, date, hours_worked, overtime_hours, notes) 
      VALUES ($1, $2, $3, $4, $5, $6) 
      RETURNING *`,
     [userId, staffId, date, hoursWorked, overtimeHours || 0, notes]
   );
-  
+
   return result.rows[0];
 }
 
@@ -511,13 +529,25 @@ export async function getPendingTimeEntries(userId, filters = {}) {
   `;
   const params = [userId];
   let paramCount = 1;
-  if (filters.staffId) { paramCount++; query += ` AND te.staff_id = $${paramCount}`; params.push(filters.staffId); }
-  if (filters.startDate) { paramCount++; query += ` AND te.date >= $${paramCount}`; params.push(filters.startDate); }
-  if (filters.endDate) { paramCount++; query += ` AND te.date <= $${paramCount}`; params.push(filters.endDate); }
+  if (filters.staffId) {
+    paramCount++;
+    query += ` AND te.staff_id = $${paramCount}`;
+    params.push(filters.staffId);
+  }
+  if (filters.startDate) {
+    paramCount++;
+    query += ` AND te.date >= $${paramCount}`;
+    params.push(filters.startDate);
+  }
+  if (filters.endDate) {
+    paramCount++;
+    query += ` AND te.date <= $${paramCount}`;
+    params.push(filters.endDate);
+  }
   query += ' ORDER BY te.date DESC, te.clock_in_time ASC';
 
   const result = await pool.query(query, params);
-  return result.rows.map(r => ({
+  return result.rows.map((r) => ({
     ...r,
     period_hours: parseFloat(Number(r.period_hours || r.hours_worked).toFixed(2)),
   }));
@@ -563,30 +593,30 @@ export async function getTimeEntries(userId, filters = {}) {
     JOIN staff s ON te.staff_id = s.id
     WHERE te.user_id = $1
   `;
-  
+
   const params = [userId];
   let paramCount = 1;
-  
+
   if (filters.staffId) {
     paramCount++;
     query += ` AND te.staff_id = $${paramCount}`;
     params.push(filters.staffId);
   }
-  
+
   if (filters.startDate) {
     paramCount++;
     query += ` AND te.date >= $${paramCount}`;
     params.push(filters.startDate);
   }
-  
+
   if (filters.endDate) {
     paramCount++;
     query += ` AND te.date <= $${paramCount}`;
     params.push(filters.endDate);
   }
-  
+
   query += ' ORDER BY te.date DESC, te.created_at DESC';
-  
+
   const result = await pool.query(query, params);
   return result.rows;
 }
@@ -656,10 +686,13 @@ export async function getPayrollForPeriod(userId, startDate, endDate) {
     role: r.role,
     hourlyRate: parseFloat(r.hourly_rate),
     hoursWorked: parseFloat(r.hours_worked || 0),
-    totalPay: parseFloat(r.total_pay || 0)
+    totalPay: parseFloat(r.total_pay || 0),
   }));
   const totals = staff.reduce(
-    (acc, s) => ({ totalHours: acc.totalHours + s.hoursWorked, totalPay: acc.totalPay + s.totalPay }),
+    (acc, s) => ({
+      totalHours: acc.totalHours + s.hoursWorked,
+      totalPay: acc.totalPay + s.totalPay,
+    }),
     { totalHours: 0, totalPay: 0 }
   );
   return { staff, totals };
@@ -671,12 +704,12 @@ export async function getMonthlyEarningsChart(userId, year, month) {
   const now = new Date();
   const targetYear = year || now.getFullYear();
   const targetMonth = month !== undefined ? month : now.getMonth();
-  
+
   // Get first and last day of the month (local YYYY-MM-DD, avoid toISOString timezone shift)
   const startStr = `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-01`;
   const daysInMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
   const endStr = `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
-  
+
   const entries = await pool.query(
     `WITH from_clocked AS (
        SELECT te.staff_id, te.date, te.shift_id, COALESCE(sh.hours, 24)::numeric as shift_hours,
@@ -721,11 +754,11 @@ export async function getMonthlyEarningsChart(userId, year, month) {
      ORDER BY c.date ASC`,
     [userId, startStr, endStr]
   );
-  
+
   const dailyTotals = {};
   let totalThisMonth = 0;
-  
-  entries.rows.forEach(entry => {
+
+  entries.rows.forEach((entry) => {
     let dateStr;
     if (entry.date instanceof Date) {
       dateStr = entry.date.toISOString().split('T')[0];
@@ -737,61 +770,57 @@ export async function getMonthlyEarningsChart(userId, year, month) {
     const durationHours = parseFloat(entry.duration_hours || 0);
     const hourlyRate = parseFloat(entry.hourly_rate || 0);
     const cost = durationHours * hourlyRate;
-    
+
     if (!dailyTotals[dateStr]) {
       dailyTotals[dateStr] = 0;
     }
     dailyTotals[dateStr] += cost;
     totalThisMonth += cost;
   });
-  
+
   // Build array with all days of the month
   const chartData = [];
   for (let day = 1; day <= daysInMonth; day++) {
     const dateStr = `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     const date = new Date(targetYear, targetMonth, day);
     const dayName = date.toLocaleDateString('en-GB', { weekday: 'short' });
-    
+
     chartData.push({
       date: dateStr,
       day: day,
       dayName: dayName,
-      amount: dailyTotals[dateStr] || 0
+      amount: dailyTotals[dateStr] || 0,
     });
   }
-  
+
   return {
     chartData,
     totalThisMonth,
     month: targetMonth + 1, // 1-indexed month
     year: targetYear,
-    daysInMonth
+    daysInMonth,
   };
 }
 
 export async function deleteTimeEntry(entryId, userId) {
-  await pool.query(
-    'DELETE FROM time_entries WHERE id = $1 AND user_id = $2',
-    [entryId, userId]
-  );
+  await pool.query('DELETE FROM time_entries WHERE id = $1 AND user_id = $2', [entryId, userId]);
 }
-
 
 export async function createBudget(userId, data) {
   const { name, monthlyBudget, startDate, endDate } = data;
-  
+
   // Validate required fields
   if (!name || monthlyBudget === undefined || monthlyBudget === null || !startDate) {
     throw new Error('Name, monthly budget, and start date are required');
   }
-  
+
   // Validate and format startDate
   const startDateObj = new Date(startDate);
   if (isNaN(startDateObj.getTime())) {
     throw new Error('Invalid start date format. Expected YYYY-MM-DD format.');
   }
   const formattedStartDate = startDateObj.toISOString().split('T')[0];
-  
+
   // Set endDate to end of month if not provided or empty
   let finalEndDate = endDate;
   if (!finalEndDate || finalEndDate === '' || finalEndDate === null || finalEndDate === undefined) {
@@ -805,51 +834,53 @@ export async function createBudget(userId, data) {
       throw new Error('Invalid end date format. Expected YYYY-MM-DD format.');
     }
     finalEndDate = endDateObj.toISOString().split('T')[0];
-    
+
     // Ensure endDate is after startDate
     if (endDateObj < startDateObj) {
       throw new Error('End date must be after start date');
     }
   }
-  
+
   // Ensure monthlyBudget is a number
   const budgetAmount = parseFloat(monthlyBudget);
   if (isNaN(budgetAmount) || budgetAmount < 0) {
     throw new Error('Monthly budget must be a positive number');
   }
-  
+
   try {
     // Validate userId is a valid number
     const userIdNum = parseInt(userId);
     if (isNaN(userIdNum) || userIdNum <= 0) {
       throw new Error('Invalid user ID');
     }
-    
+
     console.log('Creating budget with data:', {
       userId: userIdNum,
       name,
       monthly_budget: budgetAmount,
       start_date: formattedStartDate,
-      end_date: finalEndDate
+      end_date: finalEndDate,
     });
-    
+
     const result = await pool.query(
       `INSERT INTO budgets (user_id, name, monthly_budget, start_date, end_date, status) 
        VALUES ($1, $2, $3, $4, $5, 'active') 
        RETURNING *`,
       [userIdNum, name, budgetAmount, formattedStartDate, finalEndDate]
     );
-    
+
     if (!result.rows || result.rows.length === 0) {
       throw new Error('Failed to create budget - no data returned');
     }
-    
+
     return result.rows[0];
   } catch (dbError) {
     console.error('Database error in createBudget:', dbError);
     // Re-throw with more context if it's a database error
     if (dbError.code) {
-      throw new Error(`Database error: ${dbError.message || dbError.detail || 'Failed to create budget'}`);
+      throw new Error(
+        `Database error: ${dbError.message || dbError.detail || 'Failed to create budget'}`
+      );
     }
     throw dbError;
   }
@@ -863,7 +894,7 @@ export async function getActiveBudget(userId) {
      LIMIT 1`,
     [userId]
   );
-  
+
   return result.rows[0];
 }
 
@@ -872,26 +903,26 @@ export async function getBudgets(userId) {
     'SELECT * FROM budgets WHERE user_id = $1 ORDER BY created_at DESC',
     [userId]
   );
-  
+
   return result.rows;
 }
 
 // Update budget
 export async function updateBudget(userId, budgetId, data) {
   const { name, monthlyBudget, startDate, endDate, status } = data;
-  
+
   // Validate required fields
   if (!name || monthlyBudget === undefined || monthlyBudget === null || !startDate) {
     throw new Error('Name, monthly budget, and start date are required');
   }
-  
+
   // Validate and format startDate
   const startDateObj = new Date(startDate);
   if (isNaN(startDateObj.getTime())) {
     throw new Error('Invalid start date format. Expected YYYY-MM-DD format.');
   }
   const formattedStartDate = startDateObj.toISOString().split('T')[0];
-  
+
   // Set endDate to end of month if not provided or empty
   let finalEndDate = endDate;
   if (!finalEndDate || finalEndDate === '' || finalEndDate === null || finalEndDate === undefined) {
@@ -905,26 +936,26 @@ export async function updateBudget(userId, budgetId, data) {
       throw new Error('Invalid end date format. Expected YYYY-MM-DD format.');
     }
     finalEndDate = endDateObj.toISOString().split('T')[0];
-    
+
     // Ensure endDate is after startDate
     if (endDateObj < startDateObj) {
       throw new Error('End date must be after start date');
     }
   }
-  
+
   // Ensure monthlyBudget is a number
   const budgetAmount = parseFloat(monthlyBudget);
   if (isNaN(budgetAmount) || budgetAmount < 0) {
     throw new Error('Monthly budget must be a positive number');
   }
-  
+
   // Validate userId and budgetId
   const userIdNum = parseInt(userId);
   const budgetIdNum = parseInt(budgetId);
   if (isNaN(userIdNum) || userIdNum <= 0 || isNaN(budgetIdNum) || budgetIdNum <= 0) {
     throw new Error('Invalid user ID or budget ID');
   }
-  
+
   try {
     // Update the budget
     const result = await pool.query(
@@ -933,18 +964,28 @@ export async function updateBudget(userId, budgetId, data) {
            status = COALESCE($5, status), updated_at = NOW()
        WHERE id = $6 AND user_id = $7
        RETURNING *`,
-      [name, budgetAmount, formattedStartDate, finalEndDate, status || 'active', budgetIdNum, userIdNum]
+      [
+        name,
+        budgetAmount,
+        formattedStartDate,
+        finalEndDate,
+        status || 'active',
+        budgetIdNum,
+        userIdNum,
+      ]
     );
-    
+
     if (!result.rows || result.rows.length === 0) {
       throw new Error('Budget not found or you do not have permission to update it');
     }
-    
+
     return result.rows[0];
   } catch (dbError) {
     console.error('Database error in updateBudget:', dbError);
     if (dbError.code) {
-      throw new Error(`Database error: ${dbError.message || dbError.detail || 'Failed to update budget'}`);
+      throw new Error(
+        `Database error: ${dbError.message || dbError.detail || 'Failed to update budget'}`
+      );
     }
     throw dbError;
   }
@@ -972,7 +1013,7 @@ export async function getBudgetStats(userId, clientDate = null) {
       startDateStr = `${y}-${String(m + 1).padStart(2, '0')}-01`;
       endDateStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(new Date(y, m + 1, 0).getDate()).padStart(2, '0')}`;
     }
-    
+
     // Same as monthlyPayroll: clock_in_out + approved_shift + manual
     const spentResult = await pool.query(
       `WITH from_clocked AS (
@@ -1023,25 +1064,25 @@ export async function getBudgetStats(userId, clientDate = null) {
       [userId, startDateStr, endDateStr]
     );
     const totalSpent = parseFloat(spentResult.rows[0]?.total_spent || 0);
-    
+
     const monthlyBudget = parseFloat(budget.monthly_budget || 0);
     const remaining = monthlyBudget - totalSpent;
     const percentageUsed = monthlyBudget > 0 ? (totalSpent / monthlyBudget) * 100 : 0;
-    
+
     return {
       budget: {
         id: budget.id,
         name: budget.name,
         monthlyBudget: monthlyBudget,
         startDate: budget.start_date,
-        endDate: budget.end_date
+        endDate: budget.end_date,
       },
       currentMonth: {
         spent: totalSpent,
         remaining: remaining,
         percentageUsed: Math.min(100, Math.max(0, percentageUsed)),
-        isOverBudget: totalSpent > monthlyBudget
-      }
+        isOverBudget: totalSpent > monthlyBudget,
+      },
     };
   } catch (error) {
     console.error('Error in getBudgetStats:', error);

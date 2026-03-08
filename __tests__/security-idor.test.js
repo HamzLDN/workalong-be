@@ -31,20 +31,11 @@ const {
   updateBudget,
 } = await import('../services/staff.js');
 
-const {
-  getShifts,
-  getShiftById,
-  updateShift,
-  deleteShift,
-  approveShift,
-} = await import('../services/shifts.js');
+const { getShifts, getShiftById, updateShift, deleteShift, approveShift } =
+  await import('../services/shifts.js');
 
-const {
-  getUserApiKeys,
-  revokeApiKey,
-  deleteApiKey,
-  getSecurityAuditLogs,
-} = await import('../lib/api-security.js');
+const { getUserApiKeys, revokeApiKey, deleteApiKey, getSecurityAuditLogs } =
+  await import('../lib/api-security.js');
 
 const { createMockDbResult, createMockStaff, createMockShift } = await import('./setup.js');
 
@@ -56,7 +47,7 @@ describe('IDOR (Insecure Direct Object Reference) Security Tests', () => {
   });
 
   describe('Staff Access Control', () => {
-    it('should prevent user from accessing another user\'s staff member', async () => {
+    it("should prevent user from accessing another user's staff member", async () => {
       const attackerUserId = 1;
       const victimUserId = 2;
       const staffId = 10;
@@ -82,15 +73,14 @@ describe('IDOR (Insecure Direct Object Reference) Security Tests', () => {
 
       const result = await getStaff(userId);
 
-      expect(mockQueryFn).toHaveBeenCalledWith(
-        expect.stringContaining('WHERE user_id = $1'),
-        [userId]
-      );
+      expect(mockQueryFn).toHaveBeenCalledWith(expect.stringContaining('WHERE user_id = $1'), [
+        userId,
+      ]);
       expect(result).toHaveLength(1);
       expect(result[0].user_id).toBe(userId);
     });
 
-    it('should prevent user from updating another user\'s staff', async () => {
+    it("should prevent user from updating another user's staff", async () => {
       const attackerUserId = 1;
       const victimUserId = 2;
       const staffId = 10;
@@ -108,7 +98,7 @@ describe('IDOR (Insecure Direct Object Reference) Security Tests', () => {
       expect(result).toBeUndefined();
     });
 
-    it('should prevent user from deleting another user\'s staff', async () => {
+    it("should prevent user from deleting another user's staff", async () => {
       const attackerUserId = 1;
       const victimUserId = 2;
       const staffId = 10;
@@ -120,16 +110,16 @@ describe('IDOR (Insecure Direct Object Reference) Security Tests', () => {
       // deleteStaff doesn't throw, but deletes 0 rows (secure behavior)
       await deleteStaff(staffId, attackerUserId);
 
-      expect(mockQueryFn).toHaveBeenCalledWith(
-        'DELETE FROM staff WHERE id = $1 AND user_id = $2',
-        [staffId, attackerUserId]
-      );
+      expect(mockQueryFn).toHaveBeenCalledWith('DELETE FROM staff WHERE id = $1 AND user_id = $2', [
+        staffId,
+        attackerUserId,
+      ]);
       // Security: No rows deleted = user cannot delete resource that doesn't belong to them
     });
   });
 
   describe('Shift Access Control', () => {
-    it('should prevent user from accessing another user\'s shift', async () => {
+    it("should prevent user from accessing another user's shift", async () => {
       const attackerUserId = 1;
       const victimUserId = 2;
       const shiftId = 100;
@@ -155,18 +145,17 @@ describe('IDOR (Insecure Direct Object Reference) Security Tests', () => {
 
       const result = await getShifts(userId);
 
-      expect(mockQueryFn).toHaveBeenCalledWith(
-        expect.stringContaining('WHERE s.user_id = $1'),
-        [userId]
-      );
+      expect(mockQueryFn).toHaveBeenCalledWith(expect.stringContaining('WHERE s.user_id = $1'), [
+        userId,
+      ]);
       expect(result.length).toBeGreaterThanOrEqual(0);
       // Verify all returned shifts belong to user
-      result.forEach(shift => {
+      result.forEach((shift) => {
         expect(shift.user_id).toBe(userId);
       });
     });
 
-    it('should prevent user from updating another user\'s shift', async () => {
+    it("should prevent user from updating another user's shift", async () => {
       const attackerUserId = 1;
       const victimUserId = 2;
       const shiftId = 100;
@@ -183,7 +172,7 @@ describe('IDOR (Insecure Direct Object Reference) Security Tests', () => {
       expect(result).toBeNull();
     });
 
-    it('should prevent user from deleting another user\'s shift', async () => {
+    it("should prevent user from deleting another user's shift", async () => {
       const attackerUserId = 1;
       const victimUserId = 2;
       const shiftId = 100;
@@ -199,7 +188,7 @@ describe('IDOR (Insecure Direct Object Reference) Security Tests', () => {
       );
     });
 
-    it('should prevent user from approving another user\'s shift', async () => {
+    it("should prevent user from approving another user's shift", async () => {
       const attackerUserId = 1;
       const victimUserId = 2;
       const shiftId = 100;
@@ -240,7 +229,7 @@ describe('IDOR (Insecure Direct Object Reference) Security Tests', () => {
       );
       expect(result.length).toBeGreaterThanOrEqual(0);
       // Verify all returned entries belong to user
-      result.forEach(entry => {
+      result.forEach((entry) => {
         expect(entry.user_id).toBe(userId);
       });
     });
@@ -271,7 +260,7 @@ describe('IDOR (Insecure Direct Object Reference) Security Tests', () => {
       // Security: Even though staff_id is from another user, user_id prevents cross-user access
     });
 
-    it('should prevent user from deleting another user\'s time entry', async () => {
+    it("should prevent user from deleting another user's time entry", async () => {
       const attackerUserId = 1;
       const victimUserId = 2;
       const timeEntryId = 50;
@@ -301,18 +290,17 @@ describe('IDOR (Insecure Direct Object Reference) Security Tests', () => {
 
       const result = await getBudgets(userId);
 
-      expect(mockQueryFn).toHaveBeenCalledWith(
-        expect.stringContaining('WHERE user_id = $1'),
-        [userId]
-      );
+      expect(mockQueryFn).toHaveBeenCalledWith(expect.stringContaining('WHERE user_id = $1'), [
+        userId,
+      ]);
       expect(result.length).toBeGreaterThanOrEqual(0);
       // Verify all returned budgets belong to user
-      result.forEach(budget => {
+      result.forEach((budget) => {
         expect(budget.user_id).toBe(userId);
       });
     });
 
-    it('should prevent user from updating another user\'s budget', async () => {
+    it("should prevent user from updating another user's budget", async () => {
       const attackerUserId = 1;
       const victimUserId = 2;
       const budgetId = 20;
@@ -346,18 +334,17 @@ describe('IDOR (Insecure Direct Object Reference) Security Tests', () => {
 
       const result = await getUserApiKeys(userId);
 
-      expect(mockQueryFn).toHaveBeenCalledWith(
-        expect.stringContaining('WHERE user_id = $1'),
-        [userId]
-      );
+      expect(mockQueryFn).toHaveBeenCalledWith(expect.stringContaining('WHERE user_id = $1'), [
+        userId,
+      ]);
       expect(result.length).toBeGreaterThanOrEqual(0);
       // Verify all returned keys belong to user
-      result.forEach(key => {
+      result.forEach((key) => {
         expect(key.user_id).toBe(userId);
       });
     });
 
-    it('should prevent user from revoking another user\'s API key', async () => {
+    it("should prevent user from revoking another user's API key", async () => {
       const attackerUserId = 1;
       const victimUserId = 2;
       const apiKeyId = 30;
@@ -374,7 +361,7 @@ describe('IDOR (Insecure Direct Object Reference) Security Tests', () => {
       expect(result).toBe(false);
     });
 
-    it('should prevent user from deleting another user\'s API key', async () => {
+    it("should prevent user from deleting another user's API key", async () => {
       const attackerUserId = 1;
       const victimUserId = 2;
       const apiKeyId = 30;
@@ -408,7 +395,7 @@ describe('IDOR (Insecure Direct Object Reference) Security Tests', () => {
       );
       expect(result.length).toBeGreaterThanOrEqual(0);
       // Verify all returned logs belong to user
-      result.forEach(log => {
+      result.forEach((log) => {
         expect(log.user_id).toBe(userId);
       });
     });
@@ -446,4 +433,3 @@ describe('IDOR (Insecure Direct Object Reference) Security Tests', () => {
     });
   });
 });
-
