@@ -53,9 +53,23 @@ jobs:
       - run: npm audit --audit-level=high
         continue-on-error: true
 
-  test:
-    name: Test Backend API
-    runs-on: self-hosted  # Runs on your server, can access localhost:8081 directly
+  unit-test:
+    name: Unit Tests (Jest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      - run: npm ci
+      - name: Run unit tests
+        run: npm test
+
+  integration-test:
+    name: Integration Tests (API + Security)
+    runs-on: self-hosted  # Needs DB and server access
+    needs: [unit-test]
 
     steps:
       - name: Checkout code
@@ -69,18 +83,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Run Jest unit tests
-        run: |
-          echo "=========================================="
-          echo "Running Jest unit tests"
-          echo "=========================================="
-          npm test
-          if [ $? -ne 0 ]; then
-            echo "❌ Jest unit tests FAILED"
-            exit 1
-          fi
-          echo "✅ Jest unit tests PASSED"
 
       - name: Setup environment file for server
         run: |
@@ -333,9 +335,9 @@ jobs:
 
   deploy:
     name: Deploy Backend to Server
-    needs: [test, lint, format]
+    needs: [integration-test, lint, format]
     runs-on: self-hosted
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.test.result == 'success'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.integration-test.result == 'success'
     
     steps:
       - name: Checkout code

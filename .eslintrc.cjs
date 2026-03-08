@@ -9,5 +9,5 @@ module.exports = {
     'no-prototype-builtins': 'warn',
     'no-case-declarations': 'warn',
   },
-  ignorePatterns: ['node_modules', 'coverage', 'scripts'],
+  ignorePatterns: ['node_modules', 'coverage', 'scripts/**', '__tests__/**'],
 };
