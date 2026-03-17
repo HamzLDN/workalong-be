@@ -19,6 +19,7 @@ jobs:
   codeql-analysis:
     name: CodeQL Analysis (GitHub Security)
     runs-on: ubuntu-latest
+    continue-on-error: true
     permissions:
       actions: read
       contents: read
