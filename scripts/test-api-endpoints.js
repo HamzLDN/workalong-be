@@ -37,13 +37,23 @@ function assertStatusResponse(testName, result, expectedStatus = 200) {
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8081/api';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-this-secret-key-in-production';
 
-// Generate CSRF token from session ID
+// Generate CSRF token from session ID (used for BOTH plain and obfuscated flows)
 function generateCsrfToken(sessionId) {
   return crypto
     .createHash('sha256')
     .update(sessionId + SESSION_SECRET)
     .digest('hex');
 }
+
+// ============================================
+// OBFUSCATION CORE (shared with frontend)
+// ============================================
+// These helpers are used ONLY by obfuscated flows:
+// - makeObfuscatedRequest(...)
+// - makeClockLinkRequest(...)
+// Any tests that call those helpers are exercising the obfuscated protocol.
+//
+// Tests that call makeRequest(...) instead are plain JSON, non‑obfuscated calls.
 
 // Obfuscation utilities (same as in frontend obfuscation.js)
 function obfuscateData(data, key) {
@@ -104,6 +114,7 @@ function generateDeviceFingerprint() {
 
 // Make obfuscated request using clock-link auth (X-Link-Token + X-Device-Fingerprint)
 // Matches frontend: uses clocklink:token:fp as obfuscation key, same body/headers as clockin API
+// OBFUSCATED clock-link request (X-Obfuscation-Enabled + signed body)
 async function makeClockLinkRequest(endpoint, body, method, linkToken, deviceFingerprint) {
   const clocklinkSessionId = `clocklink:${linkToken}:${deviceFingerprint}`;
   const timestamp = Date.now();
@@ -218,6 +229,8 @@ async function makeClockLinkRequest(endpoint, body, method, linkToken, deviceFin
   }
 }
 
+// PLAIN JSON request helper (no obfuscation headers, no XOR body)
+// Used for public/legacy endpoints such as /health, /auth/signup, /auth/signin, /payment/config.
 async function makeRequest(endpoint, options = {}) {
   const url = `${API_BASE_URL}${endpoint}`;
   const headers = {
@@ -359,6 +372,8 @@ function generateRequestSignature(method, url, body, sessionId, timestamp, nonce
   return Math.abs(finalHash).toString(36);
 }
 
+// OBFUSCATED request helper (X-Obfuscation-Enabled, signed, XOR-encoded body)
+// Used for all authenticated, obfuscated endpoints (staff, shifts, budgets, fraud, etc.).
 async function makeObfuscatedRequest(endpoint, body, method = 'POST') {
   if (!sessionId) {
     throw new Error('Session required for obfuscated requests');
@@ -540,8 +555,17 @@ async function testSignup() {
   const email = `test-${Date.now()}@example.com`;
   const password = 'TestPassword123!';
 
+  const csrfResp = await makeRequest('/auth/public-csrf-token');
+  const publicToken = csrfResp?.data?.csrfToken;
+
   const result = await makeRequest('/auth/signup', {
     method: 'POST',
+    headers: publicToken
+      ? {
+          'X-Public-CSRF-Token': publicToken,
+          Cookie: `publicCsrfToken=${publicToken}`,
+        }
+      : undefined,
     body: JSON.stringify({
       email,
       password,
@@ -2153,6 +2177,17 @@ async function runAllTests() {
     }
   }
 
+  // Public, non-authenticated endpoints that should run even if signup/signin fail
+  const forgotPwdOk = await testForgotPassword();
+  results.tests.push({ name: 'Forgot Password', passed: forgotPwdOk });
+  if (forgotPwdOk) results.passed++;
+  else results.failed++;
+
+  const paymentConfigOk = await testGetPaymentConfig();
+  results.tests.push({ name: 'Get Payment Config', passed: paymentConfigOk });
+  if (paymentConfigOk) results.passed++;
+  else results.failed++;
+
   if (!sessionId) {
     console.log(
       `\n${YELLOW}WARNING:${RESET} No session available, skipping authenticated endpoint tests`
@@ -2192,10 +2227,7 @@ async function runAllTests() {
     if (twoFAOk) results.passed++;
     else results.failed++;
 
-    const forgotPwdOk = await testForgotPassword();
-    results.tests.push({ name: 'Forgot Password', passed: forgotPwdOk });
-    if (forgotPwdOk) results.passed++;
-    else results.failed++;
+    // Forgot Password already tested in public section above
 
     // Staff endpoints
     const staffResult = await makeObfuscatedRequest('/staff', {}, 'GET');
@@ -2500,10 +2532,7 @@ async function runAllTests() {
     else results.failed++;
 
     // Payment Endpoints (Stripe)
-    const paymentConfigOk = await testGetPaymentConfig();
-    results.tests.push({ name: 'Get Payment Config', passed: paymentConfigOk });
-    if (paymentConfigOk) results.passed++;
-    else results.failed++;
+    // Get Payment Config already tested in public section above
 
     // const subscriptionOk = await testGetSubscriptionDetails();
     // results.tests.push({ name: 'Get Subscription Details', passed: subscriptionOk });
@@ -2523,9 +2552,16 @@ async function runAllTests() {
   console.log('Test Summary');
   console.log('========================================');
   const failedTests = [];
+  const plainTests = new Set([
+    'Health Check',
+    'Signup (Non-Obfuscated)',
+    'Forgot Password',
+    'Get Payment Config',
+  ]);
   results.tests.forEach((test) => {
     const status = test.passed ? `${GREEN}PASS${RESET}` : `${RED}FAIL${RESET}`;
-    console.log(`${status} ${test.name}`);
+    const modeLabel = plainTests.has(test.name) ? '[PLAIN]' : '[OBF]';
+    console.log(`${status} ${modeLabel} ${test.name}`);
     if (!test.passed) {
       failedTests.push(test.name);
     }

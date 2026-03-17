@@ -23,6 +23,27 @@ import { requireAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
+// Public (pre-session) CSRF token for signup/signin flows.
+// Double-submit pattern: token is set in a non-HttpOnly cookie and must be echoed in a header.
+const PUBLIC_CSRF_COOKIE = 'publicCsrfToken';
+const PUBLIC_CSRF_HEADER = 'x-public-csrf-token';
+
+router.get('/public-csrf-token', (req, res) => {
+  try {
+    const token = crypto.randomBytes(32).toString('hex');
+    res.cookie(PUBLIC_CSRF_COOKIE, token, {
+      httpOnly: false,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 10 * 60 * 1000,
+    });
+    res.json({ csrfToken: token });
+  } catch (error) {
+    console.error('Public CSRF token error:', error);
+    res.status(500).json({ error: 'Failed to generate CSRF token' });
+  }
+});
+
 async function getUserWithSubscription(userId) {
   try {
     const r = await pool.query(
@@ -109,6 +130,11 @@ router.post(
   '/signup',
   /* createRateLimiter({ limitPerMinute: 5, limitPerHour: 20 }), */ async (req, res) => {
     try {
+      const cookieToken = req.cookies[PUBLIC_CSRF_COOKIE];
+      const headerToken = req.headers[PUBLIC_CSRF_HEADER];
+      if (!cookieToken || !headerToken || cookieToken !== headerToken) {
+        return res.status(403).json({ error: 'Invalid or missing CSRF token for signup' });
+      }
       const { email, password, name, company } = req.body;
       if (!email || !password || !name) {
         return res.status(400).json({ error: 'Email, password, and name are required' });

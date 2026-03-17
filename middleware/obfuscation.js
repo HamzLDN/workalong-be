@@ -101,6 +101,8 @@ const PUBLIC_ENDPOINTS = [
   '/api/health',
   '/contact',
   '/api/contact',
+  '/auth/public-csrf-token',
+  '/api/auth/public-csrf-token',
   '/auth/signup',
   '/api/auth/signup',
   '/auth/signin',

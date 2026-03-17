@@ -218,7 +218,7 @@ export async function getShifts(userId, filters = {}) {
         updatePromises.push(
           pool
             .query(
-              `UPDATE shifts SET status = 'late', updated_at = NOW() WHERE id = $1 AND status = 'scheduled'`,
+              `UPDATE shifts SET status = 'late', updated_at = NOW() WHERE id = $1 AND status IN ('scheduled', 'unattended')`,
               [row.id]
             )
             .then((result) => {
