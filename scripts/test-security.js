@@ -144,6 +144,19 @@ async function makeRequest(endpoint, options = {}) {
   }
 }
 
+// Public (pre-session) CSRF helper for signup tests
+async function getPublicSignupCsrfHeaders() {
+  const resp = await makeRequest('/auth/public-csrf-token', { method: 'GET' });
+  const token = resp?.data?.csrfToken;
+  if (!token) {
+    throw new Error('Failed to get public signup CSRF token');
+  }
+  return {
+    'X-Public-CSRF-Token': token,
+    Cookie: `publicCsrfToken=${token}`,
+  };
+}
+
 async function makeAuthenticatedRequest(endpoint, options = {}, user) {
   const headers = {
     'Content-Type': 'application/json',
@@ -326,8 +339,10 @@ async function setupTestUsers() {
   console.log('========================================\n');
 
   // Create User A
+  const publicCsrfHeadersA = await getPublicSignupCsrfHeaders();
   const signupA = await makeRequest('/auth/signup', {
     method: 'POST',
+    headers: publicCsrfHeadersA,
     body: JSON.stringify({
       email: userA.email,
       password: userA.password,
@@ -356,8 +371,10 @@ async function setupTestUsers() {
   }
 
   // Create User B
+  const publicCsrfHeadersB = await getPublicSignupCsrfHeaders();
   const signupB = await makeRequest('/auth/signup', {
     method: 'POST',
+    headers: publicCsrfHeadersB,
     body: JSON.stringify({
       email: userB.email,
       password: userB.password,
@@ -1221,8 +1238,10 @@ async function testEnumerationAttacks() {
   console.log('========================================\n');
 
   // Test: User enumeration via signup
+  const enumSignupHeaders = await getPublicSignupCsrfHeaders();
   const existingUser = await makeRequest('/auth/signup', {
     method: 'POST',
+    headers: enumSignupHeaders,
     body: JSON.stringify({
       email: userA.email, // Already exists
       password: 'Password123!',
@@ -1388,10 +1407,12 @@ async function testCookieSecurity() {
   // Test: Cookie should have HttpOnly flag
   // Create a new user to test cookie settings (signup always sets cookies)
   const testEmail = `cookie-test-${Date.now()}@example.com`;
+  const cookieCsrfHeaders = await getPublicSignupCsrfHeaders();
   const signupResponse = await fetch(`${API_BASE_URL}/auth/signup`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...cookieCsrfHeaders,
     },
     body: JSON.stringify({
       email: testEmail,
@@ -1892,8 +1913,10 @@ async function testExtendedInputValidation() {
   ];
 
   for (const payload of commandPayloads) {
+    const cmdHeaders = await getPublicSignupCsrfHeaders();
     const cmdTest = await makeRequest('/auth/signup', {
       method: 'POST',
+      headers: cmdHeaders,
       body: JSON.stringify({
         email: payload,
         password: 'Test123!',
