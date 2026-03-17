@@ -19,7 +19,9 @@ jobs:
   codeql-analysis:
     name: CodeQL Analysis (GitHub Security)
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # Only run if explicitly enabled via repository variable ENABLE_CODEQL=true.
+    # This avoids noisy errors on repos without GitHub Advanced Security / code scanning.
+    if: ${{ vars.ENABLE_CODEQL == 'true' }}
     permissions:
       actions: read
       contents: read
