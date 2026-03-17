@@ -105,17 +105,15 @@ registerRoutes(app);
 const HTTP_PORT = config.port || 3001;
 const HTTPS_PORT = 443;
 
-
-
 const httpServer = http.createServer(app);
 try {
-    httpServer.listen(HTTP_PORT, () => {
-      console.log(`?? HTTP Server running on http://localhost:${HTTP_PORT}`);
-      console.log(`?? API available at http://localhost:${HTTP_PORT}/api`);
-    });
-  } catch (err) {
-    console.error('Startup migration failed:', err);
-  }
+  httpServer.listen(HTTP_PORT, () => {
+    console.log(`?? HTTP Server running on http://localhost:${HTTP_PORT}`);
+    console.log(`?? API available at http://localhost:${HTTP_PORT}/api`);
+  });
+} catch (err) {
+  console.error('Startup migration failed:', err);
+}
 
 let httpsOptions = null;
 const LETSENCRYPT_KEY = '/etc/letsencrypt/live/workalong.co.uk/privkey.pem';
