@@ -1,4 +1,6 @@
 node_modules/
+backups/
+*.dump
 .env
 .env.local
 .env.*.local

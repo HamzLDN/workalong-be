@@ -14,6 +14,5 @@ export default {
   ],
   coverageDirectory: 'coverage',
   verbose: true,
-  setupFilesAfterEnv: ['<rootDir>/__tests__/jest.setup.js'],
   testTimeout: 10000,
 };
