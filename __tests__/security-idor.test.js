@@ -262,21 +262,20 @@ describe('IDOR (Insecure Direct Object Reference) Security Tests', () => {
 
     it("should prevent user from deleting another user's time entry", async () => {
       const attackerUserId = 1;
-      const victimUserId = 2;
       const timeEntryId = 50;
 
-      // Mock: time entry belongs to victim, delete should delete 0 rows
-      const mockResult = { rows: [], rowCount: 0 };
-      mockQueryFn.mockResolvedValue(mockResult);
+      // Mock: time entry belongs to victim, delete matches 0 rows
+      mockQueryFn.mockResolvedValue({ rows: [], rowCount: 0 });
 
-      // deleteTimeEntry doesn't throw, but deletes 0 rows (secure behavior)
-      await deleteTimeEntry(timeEntryId, attackerUserId);
+      await expect(deleteTimeEntry(timeEntryId, attackerUserId)).rejects.toThrow(
+        /not found|cannot be deleted/i
+      );
 
       expect(mockQueryFn).toHaveBeenCalledWith(
-        'DELETE FROM time_entries WHERE id = $1 AND user_id = $2',
+        expect.stringContaining("DELETE FROM time_entries"),
         [timeEntryId, attackerUserId]
       );
-      // Security: No rows deleted = user cannot delete resource that doesn't belong to them
+      expect(mockQueryFn.mock.calls[0][0]).toContain("entry_type = 'manual'");
     });
   });
 

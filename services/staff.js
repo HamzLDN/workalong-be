@@ -422,7 +422,11 @@ export async function getStaffStats(userId, clientDate = null) {
   const payrollResult = await pool.query(
     `WITH from_clocked AS (
        SELECT te.staff_id, te.date, te.shift_id, COALESCE(s.hours, 24)::numeric as shift_hours,
-              SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric as raw_hours
+              SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric as raw_hours,
+              LEAST(
+                SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric,
+                COALESCE(s.hours, 24)::numeric
+              ) as pay_hours
        FROM time_entries te
        LEFT JOIN shifts s ON s.id = te.shift_id
        WHERE te.user_id = $1 AND te.date >= $2 AND te.date <= $3
@@ -432,7 +436,14 @@ export async function getStaffStats(userId, clientDate = null) {
      ),
      from_approved_shift AS (
        SELECT te.staff_id, te.date, te.shift_id, COALESCE(s.hours, 24)::numeric as shift_hours,
-              (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric) as raw_hours
+              (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric) as raw_hours,
+              CASE
+                WHEN COALESCE(te.leave_category, 'none') = 'unpaid_leave' THEN 0::numeric
+                ELSE LEAST(
+                  (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric),
+                  COALESCE(s.hours, 24)::numeric
+                )
+              END as pay_hours
        FROM time_entries te
        LEFT JOIN shifts s ON s.id = te.shift_id
        WHERE te.user_id = $1 AND te.date >= $2 AND te.date <= $3
@@ -451,17 +462,24 @@ export async function getStaffStats(userId, clientDate = null) {
      ),
      from_manual AS (
        SELECT te.staff_id, te.date, te.shift_id, 24::numeric as shift_hours,
-              (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric) as raw_hours
+              (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric) as raw_hours,
+              CASE
+                WHEN COALESCE(te.leave_category, 'none') = 'unpaid_leave' THEN 0::numeric
+                ELSE LEAST(
+                  (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric),
+                  24::numeric
+                )
+              END as pay_hours
        FROM time_entries te
        WHERE te.user_id = $1 AND te.date >= $2 AND te.date <= $3
          AND te.entry_type = 'manual'
      ),
      combined AS (
-       SELECT staff_id, shift_hours, raw_hours FROM from_clocked
-       UNION ALL SELECT staff_id, shift_hours, raw_hours FROM from_approved_shift
-       UNION ALL SELECT staff_id, shift_hours, raw_hours FROM from_manual
+       SELECT staff_id, shift_hours, raw_hours, pay_hours FROM from_clocked
+       UNION ALL SELECT staff_id, shift_hours, raw_hours, pay_hours FROM from_approved_shift
+       UNION ALL SELECT staff_id, shift_hours, raw_hours, pay_hours FROM from_manual
      )
-     SELECT COALESCE(SUM(LEAST(raw_hours, shift_hours) * st.hourly_rate), 0)::numeric(12,2) as total_cost
+     SELECT COALESCE(SUM(c.pay_hours * st.hourly_rate), 0)::numeric(12,2) as total_cost
      FROM combined c
      JOIN staff st ON st.id = c.staff_id
      WHERE st.user_id = $1`,
@@ -498,14 +516,17 @@ export async function getStaffStats(userId, clientDate = null) {
   };
 }
 
+const LEAVE_CATEGORIES = new Set(['none', 'paid_leave', 'unpaid_leave']);
+
 export async function createTimeEntry(userId, data) {
-  const { staffId, date, hoursWorked, overtimeHours, notes } = data;
+  const { staffId, date, hoursWorked, overtimeHours, notes, leaveCategory } = data;
+  const lc = LEAVE_CATEGORIES.has(leaveCategory) ? leaveCategory : 'none';
 
   const result = await pool.query(
-    `INSERT INTO time_entries (user_id, staff_id, date, hours_worked, overtime_hours, notes) 
-     VALUES ($1, $2, $3, $4, $5, $6) 
+    `INSERT INTO time_entries (user_id, staff_id, date, hours_worked, overtime_hours, notes, entry_type, leave_category)
+     VALUES ($1, $2, $3, $4, $5, $6, 'manual', $7)
      RETURNING *`,
-    [userId, staffId, date, hoursWorked, overtimeHours || 0, notes]
+    [userId, staffId, date, hoursWorked, overtimeHours || 0, notes, lc]
   );
 
   return result.rows[0];
@@ -626,7 +647,11 @@ export async function getPayrollForPeriod(userId, startDate, endDate) {
   const result = await pool.query(
     `WITH from_clocked AS (
        SELECT te.staff_id, te.date, te.shift_id, COALESCE(sh.hours, 24)::numeric as shift_hours,
-              SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric as raw_hours
+              SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric as raw_hours,
+              LEAST(
+                SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric,
+                COALESCE(sh.hours, 24)::numeric
+              ) as pay_hours
        FROM time_entries te
        LEFT JOIN shifts sh ON sh.id = te.shift_id
        WHERE te.user_id = $1 AND te.date BETWEEN $2 AND $3
@@ -636,7 +661,14 @@ export async function getPayrollForPeriod(userId, startDate, endDate) {
      ),
      from_approved_shift AS (
        SELECT te.staff_id, te.date, te.shift_id, COALESCE(sh.hours, 24)::numeric as shift_hours,
-              (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric) as raw_hours
+              (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric) as raw_hours,
+              CASE
+                WHEN COALESCE(te.leave_category, 'none') = 'unpaid_leave' THEN 0::numeric
+                ELSE LEAST(
+                  (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric),
+                  COALESCE(sh.hours, 24)::numeric
+                )
+              END as pay_hours
        FROM time_entries te
        LEFT JOIN shifts sh ON sh.id = te.shift_id
        WHERE te.user_id = $1 AND te.date BETWEEN $2 AND $3
@@ -655,18 +687,25 @@ export async function getPayrollForPeriod(userId, startDate, endDate) {
      ),
      from_manual AS (
        SELECT te.staff_id, te.date, te.shift_id, 24::numeric as shift_hours,
-              (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric) as raw_hours
+              (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric) as raw_hours,
+              CASE
+                WHEN COALESCE(te.leave_category, 'none') = 'unpaid_leave' THEN 0::numeric
+                ELSE LEAST(
+                  (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric),
+                  24::numeric
+                )
+              END as pay_hours
        FROM time_entries te
        WHERE te.user_id = $1 AND te.date BETWEEN $2 AND $3
          AND te.entry_type = 'manual'
      ),
      combined AS (
-       SELECT staff_id, shift_hours, raw_hours FROM from_clocked
-       UNION ALL SELECT staff_id, shift_hours, raw_hours FROM from_approved_shift
-       UNION ALL SELECT staff_id, shift_hours, raw_hours FROM from_manual
+       SELECT staff_id, shift_hours, raw_hours, pay_hours FROM from_clocked
+       UNION ALL SELECT staff_id, shift_hours, raw_hours, pay_hours FROM from_approved_shift
+       UNION ALL SELECT staff_id, shift_hours, raw_hours, pay_hours FROM from_manual
      ),
      hours_val AS (
-       SELECT staff_id, LEAST(raw_hours, shift_hours)::numeric as hours_val
+       SELECT staff_id, pay_hours::numeric as hours_val
        FROM combined
      )
      SELECT s.id as staff_id, s.name as staff_name, s.role, s.hourly_rate,
@@ -713,7 +752,11 @@ export async function getMonthlyEarningsChart(userId, year, month) {
   const entries = await pool.query(
     `WITH from_clocked AS (
        SELECT te.staff_id, te.date, te.shift_id, COALESCE(sh.hours, 24)::numeric as shift_hours,
-              SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric as raw_hours
+              SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric as raw_hours,
+              LEAST(
+                SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric,
+                COALESCE(sh.hours, 24)::numeric
+              ) as pay_hours
        FROM time_entries te
        LEFT JOIN shifts sh ON sh.id = te.shift_id
        WHERE te.user_id = $1 AND te.date >= $2 AND te.date <= $3
@@ -723,7 +766,14 @@ export async function getMonthlyEarningsChart(userId, year, month) {
      ),
      from_approved_shift AS (
        SELECT te.staff_id, te.date, te.shift_id, COALESCE(sh.hours, 24)::numeric as shift_hours,
-              (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric) as raw_hours
+              (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric) as raw_hours,
+              CASE
+                WHEN COALESCE(te.leave_category, 'none') = 'unpaid_leave' THEN 0::numeric
+                ELSE LEAST(
+                  (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric),
+                  COALESCE(sh.hours, 24)::numeric
+                )
+              END as pay_hours
        FROM time_entries te
        LEFT JOIN shifts sh ON sh.id = te.shift_id
        WHERE te.user_id = $1 AND te.date >= $2 AND te.date <= $3
@@ -737,18 +787,25 @@ export async function getMonthlyEarningsChart(userId, year, month) {
      ),
      from_manual AS (
        SELECT te.staff_id, te.date, te.shift_id, 24::numeric as shift_hours,
-              (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric) as raw_hours
+              (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric) as raw_hours,
+              CASE
+                WHEN COALESCE(te.leave_category, 'none') = 'unpaid_leave' THEN 0::numeric
+                ELSE LEAST(
+                  (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric),
+                  24::numeric
+                )
+              END as pay_hours
        FROM time_entries te
        WHERE te.user_id = $1 AND te.date >= $2 AND te.date <= $3
          AND te.entry_type = 'manual'
      ),
      combined AS (
-       SELECT staff_id, date, shift_id, shift_hours, raw_hours FROM from_clocked
-       UNION ALL SELECT staff_id, date, shift_id, shift_hours, raw_hours FROM from_approved_shift
-       UNION ALL SELECT staff_id, date, shift_id, shift_hours, raw_hours FROM from_manual
+       SELECT staff_id, date, shift_id, shift_hours, raw_hours, pay_hours FROM from_clocked
+       UNION ALL SELECT staff_id, date, shift_id, shift_hours, raw_hours, pay_hours FROM from_approved_shift
+       UNION ALL SELECT staff_id, date, shift_id, shift_hours, raw_hours, pay_hours FROM from_manual
      )
      SELECT c.date, s.hourly_rate,
-            LEAST(c.raw_hours, c.shift_hours)::numeric as duration_hours
+            c.pay_hours::numeric as duration_hours
      FROM combined c
      JOIN staff s ON s.id = c.staff_id
      ORDER BY c.date ASC`,
@@ -802,8 +859,36 @@ export async function getMonthlyEarningsChart(userId, year, month) {
   };
 }
 
+export async function updateTimeEntry(userId, timeEntryId, data) {
+  const { staffId, date, hoursWorked, overtimeHours, notes, leaveCategory } = data;
+  const lc = LEAVE_CATEGORIES.has(leaveCategory) ? leaveCategory : 'none';
+  const ot =
+    lc === 'paid_leave' || lc === 'unpaid_leave' ? 0 : parseFloat(overtimeHours || 0) || 0;
+
+  const r = await pool.query(
+    `UPDATE time_entries
+     SET staff_id = $1, date = $2, hours_worked = $3, overtime_hours = $4,
+         notes = $5, leave_category = $6, updated_at = NOW()
+     WHERE id = $7 AND user_id = $8 AND entry_type = 'manual'
+     RETURNING *`,
+    [staffId, date, hoursWorked, ot, notes ?? null, lc, timeEntryId, userId]
+  );
+  if (r.rows.length === 0) {
+    throw new Error('Time entry not found or cannot be edited (only manually logged entries can be changed here)');
+  }
+  return r.rows[0];
+}
+
 export async function deleteTimeEntry(entryId, userId) {
-  await pool.query('DELETE FROM time_entries WHERE id = $1 AND user_id = $2', [entryId, userId]);
+  const r = await pool.query(
+    `DELETE FROM time_entries
+     WHERE id = $1 AND user_id = $2 AND entry_type = 'manual'
+     RETURNING id`,
+    [entryId, userId]
+  );
+  if (r.rows.length === 0) {
+    throw new Error('Time entry not found or cannot be deleted (clock-in entries are managed from the schedule)');
+  }
 }
 
 export async function createBudget(userId, data) {
@@ -1018,7 +1103,11 @@ export async function getBudgetStats(userId, clientDate = null) {
     const spentResult = await pool.query(
       `WITH from_clocked AS (
          SELECT te.staff_id, te.date, te.shift_id, COALESCE(s.hours, 24)::numeric as shift_hours,
-                SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric as raw_hours
+                SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric as raw_hours,
+                LEAST(
+                  SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric,
+                  COALESCE(s.hours, 24)::numeric
+                ) as pay_hours
          FROM time_entries te
          LEFT JOIN shifts s ON s.id = te.shift_id
          WHERE te.user_id = $1 AND te.date >= $2 AND te.date <= $3
@@ -1028,7 +1117,14 @@ export async function getBudgetStats(userId, clientDate = null) {
        ),
        from_approved_shift AS (
          SELECT te.staff_id, te.date, te.shift_id, COALESCE(s.hours, 24)::numeric as shift_hours,
-                (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric) as raw_hours
+                (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric) as raw_hours,
+                CASE
+                  WHEN COALESCE(te.leave_category, 'none') = 'unpaid_leave' THEN 0::numeric
+                  ELSE LEAST(
+                    (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric),
+                    COALESCE(s.hours, 24)::numeric
+                  )
+                END as pay_hours
          FROM time_entries te
          LEFT JOIN shifts s ON s.id = te.shift_id
          WHERE te.user_id = $1 AND te.date >= $2 AND te.date <= $3
@@ -1047,17 +1143,24 @@ export async function getBudgetStats(userId, clientDate = null) {
        ),
        from_manual AS (
          SELECT te.staff_id, te.date, te.shift_id, 24::numeric as shift_hours,
-                (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric) as raw_hours
+                (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric) as raw_hours,
+                CASE
+                  WHEN COALESCE(te.leave_category, 'none') = 'unpaid_leave' THEN 0::numeric
+                  ELSE LEAST(
+                    (COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric),
+                    24::numeric
+                  )
+                END as pay_hours
          FROM time_entries te
          WHERE te.user_id = $1 AND te.date >= $2 AND te.date <= $3
            AND te.entry_type = 'manual'
        ),
        combined AS (
-         SELECT staff_id, date, shift_id, shift_hours, raw_hours FROM from_clocked
-         UNION ALL SELECT staff_id, date, shift_id, shift_hours, raw_hours FROM from_approved_shift
-         UNION ALL SELECT staff_id, date, shift_id, shift_hours, raw_hours FROM from_manual
+         SELECT staff_id, date, shift_id, shift_hours, raw_hours, pay_hours FROM from_clocked
+         UNION ALL SELECT staff_id, date, shift_id, shift_hours, raw_hours, pay_hours FROM from_approved_shift
+         UNION ALL SELECT staff_id, date, shift_id, shift_hours, raw_hours, pay_hours FROM from_manual
        )
-       SELECT COALESCE(SUM(LEAST(raw_hours, shift_hours) * st.hourly_rate), 0)::numeric(12,2) as total_spent
+       SELECT COALESCE(SUM(c.pay_hours * st.hourly_rate), 0)::numeric(12,2) as total_spent
        FROM combined c
        JOIN staff st ON st.id = c.staff_id
        WHERE st.user_id = $1`,

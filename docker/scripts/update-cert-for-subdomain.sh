@@ -3,6 +3,8 @@
 
 set -e
 
+BACKEND_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
 echo "🔐 Updating SSL certificate to include api.workalong.co.uk subdomain"
 echo ""
 
@@ -34,7 +36,7 @@ certbot certonly --standalone \
 
 # Copy certificates to Docker SSL directory
 echo "📋 Copying certificates to Docker SSL directory..."
-SSL_DIR="/root/workalong-frontend/docker/ssl"
+SSL_DIR="$BACKEND_ROOT/../workalong-frontend/docker/ssl"
 mkdir -p "$SSL_DIR"
 
 CERT_DIR="/etc/letsencrypt/live/workalong.co.uk"
@@ -55,5 +57,5 @@ if [ "$RESTART_NGINX" = true ]; then
     systemctl start nginx
 fi
 echo "🔄 Restarting server..."
-cd /root/workalong-backend
+cd "$BACKEND_ROOT"
 docker-compose -p workalong -f docker-compose.full.yml restart frontend backend

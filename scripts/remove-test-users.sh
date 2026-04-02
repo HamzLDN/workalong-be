@@ -29,7 +29,7 @@ esac
 
 if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
   echo "❌ Container '$CONTAINER' is not running"
-  echo "   Start mock: ./manage-mock-db.sh start"
+  echo "   Start mock: ./docker/scripts/manage-mock-db.sh start"
   echo "   Start main: docker-compose -f docker-compose.full.yml up -d postgres"
   exit 1
 fi

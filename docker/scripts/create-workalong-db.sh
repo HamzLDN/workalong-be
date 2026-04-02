@@ -3,6 +3,9 @@
 
 set -e
 
+BACKEND_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$BACKEND_ROOT"
+
 echo "=== Creating 'workalong' database ==="
 
 # Check if postgres container is running

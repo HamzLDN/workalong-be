@@ -127,6 +127,22 @@ const PUBLIC_ENDPOINTS = [
   '/api/payment/config',
   '/payment/verify-session',
   '/api/payment/verify-session',
+  // Kiosk clocking flow (link-token + device-fingerprint based)
+  '/clockin/clock-action',
+  '/api/clockin/clock-action',
+  '/clockin/face/enroll',
+  '/api/clockin/face/enroll',
+  '/clockin/face/verify',
+  '/api/clockin/face/verify',
+  '/clockin/face/identify',
+  '/api/clockin/face/identify',
+];
+
+const PUBLIC_ENDPOINT_PREFIXES = [
+  '/clockin/verify-link/',
+  '/api/clockin/verify-link/',
+  '/clockin/status/',
+  '/api/clockin/status/',
 ];
 
 function isPublicEndpoint(path) {
@@ -145,7 +161,10 @@ function isPublicEndpoint(path) {
   const isPublic =
     PUBLIC_ENDPOINTS.includes(normalized) ||
     PUBLIC_ENDPOINTS.includes(cleanPath) ||
-    PUBLIC_ENDPOINTS.includes('/api' + normalized);
+    PUBLIC_ENDPOINTS.includes('/api' + normalized) ||
+    PUBLIC_ENDPOINT_PREFIXES.some(
+      (prefix) => cleanPath.startsWith(prefix) || normalized.startsWith(prefix)
+    );
   return isPublic;
 }
 

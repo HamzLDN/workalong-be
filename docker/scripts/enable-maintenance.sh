@@ -32,5 +32,5 @@ echo "✅ Maintenance mode enabled!"
 echo "   Your website is now showing the maintenance page."
 echo ""
 echo "   To disable maintenance mode, run:"
-echo "   ./disable-maintenance.sh"
+echo "   ./docker/scripts/disable-maintenance.sh"
 

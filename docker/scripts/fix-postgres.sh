@@ -3,7 +3,8 @@
 
 set -e
 
-cd "$(dirname "$0")"
+BACKEND_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$BACKEND_ROOT"
 
 echo "=== Checking PostgreSQL container status ==="
 docker ps -a --filter "name=workalong-postgres" --format "table {{.Names}}\t{{.Status}}"

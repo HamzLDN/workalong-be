@@ -2,8 +2,8 @@
 # Clone mock database to main (prod) database.
 # WARNING: This OVERWRITES the main database with mock data. Use with caution.
 #
-# Usage: ./clone-mock-to-main.sh
-# Or with confirmation skipped: ./clone-mock-to-main.sh --yes
+# Usage: ./docker/scripts/clone-mock-to-main.sh
+# Or with confirmation skipped: ./docker/scripts/clone-mock-to-main.sh --yes
 
 set -e
 
@@ -40,7 +40,7 @@ for c in "$MOCK_CONTAINER" "$MAIN_CONTAINER"; do
   if ! docker ps --format '{{.Names}}' | grep -q "^${c}$"; then
     echo "❌ Error: Container '$c' is not running"
     echo "   Start main: docker-compose -f docker-compose.full.yml up -d postgres"
-    echo "   Start mock: ./manage-mock-db.sh start"
+    echo "   Start mock: ./docker/scripts/manage-mock-db.sh start"
     exit 1
   fi
 done

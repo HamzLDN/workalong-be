@@ -28,8 +28,8 @@ for c in "$MAIN_CONTAINER" "$MOCK_CONTAINER"; do
   if ! docker ps --format '{{.Names}}' | grep -q "^${c}$"; then
     echo "❌ Error: Container '$c' is not running"
     echo "   Start main: docker-compose -f docker-compose.full.yml up -d postgres"
-    echo "   Start mock: ./manage-mock-db.sh start"
-    echo "   Sync them:  ./clone-db-to-mock.sh"
+    echo "   Start mock: ./docker/scripts/manage-mock-db.sh start"
+    echo "   Sync them:  ./docker/scripts/clone-db-to-mock.sh"
     exit 1
   fi
 done
@@ -59,7 +59,7 @@ else
   echo "Differences (main vs mock):"
   diff -u "$MAIN_DUMP" "$MOCK_DUMP" || true
   echo ""
-  echo "To sync: ./clone-db-to-mock.sh"
+  echo "To sync: ./docker/scripts/clone-db-to-mock.sh"
   echo "To apply migrations: npm run migrate:time-entry-approval (with DB pointing to main)"
   exit 1
 fi

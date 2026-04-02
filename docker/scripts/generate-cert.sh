@@ -3,8 +3,8 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SSL_DIR="$SCRIPT_DIR/../workalong-frontend/docker/ssl"
+BACKEND_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+SSL_DIR="$BACKEND_ROOT/../workalong-frontend/docker/ssl"
 
 echo "🔐 Generating self-signed SSL certificates for local development..."
 echo "📁 Certificate directory: $SSL_DIR"

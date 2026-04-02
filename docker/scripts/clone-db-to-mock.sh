@@ -1,12 +1,15 @@
 #!/bin/bash
 set -e
 
+BACKEND_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+INIT_SCRIPT="$BACKEND_ROOT/docker/scripts/init-workalong-db.sh"
+
 echo "🔄 Cloning main database to mock database (complete copy with schema and data)..."
 
 # Check if main database container is running
 if ! docker ps | grep -q "workalong-postgres"; then
     echo "❌ Error: Main database container 'workalong-postgres' is not running"
-    echo "   Please start it first with: docker-compose -f docker-compose.full.yml up -d postgres"
+    echo "   Please start it first with: (cd workalong-backend && docker-compose -f docker-compose.full.yml up -d postgres)"
     exit 1
 fi
 
@@ -15,7 +18,6 @@ if ! docker ps | grep -q "workalong-postgres-mock"; then
     echo "⚠️  Mock database container is not running. Starting it..."
     docker start workalong-postgres-mock 2>/dev/null || {
         echo "Creating mock database container..."
-        cd "$(dirname "$0")"
         docker network create workalong-network-mock 2>/dev/null || true
         docker volume create workalong-backend_postgres_data_mock 2>/dev/null || true
         docker run -d --name workalong-postgres-mock --restart unless-stopped \
@@ -24,7 +26,7 @@ if ! docker ps | grep -q "workalong-postgres-mock"; then
             -e POSTGRES_DB=users \
             -p 5433:5432 \
             -v workalong-backend_postgres_data_mock:/var/lib/postgresql/data \
-            -v "$(pwd)/init-workalong-db.sh:/docker-entrypoint-initdb.d/init-workalong-db.sh:ro" \
+            -v "$INIT_SCRIPT:/docker-entrypoint-initdb.d/init-workalong-db.sh:ro" \
             --network workalong-network-mock \
             --health-cmd="pg_isready -U workalong -d users || exit 1" \
             --health-interval=10s \

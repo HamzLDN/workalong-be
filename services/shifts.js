@@ -932,6 +932,57 @@ export async function approveShift(shiftId, userId, approvedBy) {
     let timeEntryId = null;
     let actualHoursWorked = null;
 
+    const isLeaveShift =
+      shift.shift_type === 'paid_leave' || shift.shift_type === 'unpaid_leave';
+
+    if (isLeaveShift) {
+      const leaveCat = shift.shift_type === 'paid_leave' ? 'paid_leave' : 'unpaid_leave';
+      const dateStr =
+        shift.shift_date instanceof Date
+          ? shift.shift_date.toISOString().split('T')[0]
+          : String(shift.shift_date).split('T')[0];
+      const scheduledLeaveHrs = Math.min(24, Math.max(0, parseFloat(shift.hours) || 0));
+
+      await client.query(`DELETE FROM time_entries WHERE shift_id = $1`, [shiftId]);
+
+      const ins = await client.query(
+        `INSERT INTO time_entries (staff_id, user_id, date, hours_worked, overtime_hours, notes, entry_type, shift_id, leave_category)
+         VALUES ($1, $2, $3::date, $4, 0, $5, 'approved_shift', $6, $7)
+         RETURNING id`,
+        [
+          shift.staff_id,
+          userId,
+          dateStr,
+          scheduledLeaveHrs,
+          shift.notes ? `Leave (schedule): ${shift.notes}` : 'Leave (schedule)',
+          shiftId,
+          leaveCat,
+        ]
+      );
+      const newTeId = ins.rows[0].id;
+
+      await client.query(
+        `UPDATE shifts 
+         SET status = 'approved', 
+             approved_at = NOW(), 
+             approved_by = $1,
+             time_entry_id = $2
+         WHERE id = $3`,
+        [approvedBy, newTeId, shiftId]
+      );
+
+      await client.query('COMMIT');
+      return {
+        success: true,
+        timeEntryId: newTeId,
+        regularHours: scheduledLeaveHrs,
+        overtimeHours: 0,
+        scheduledHours: scheduledLeaveHrs,
+        actualHoursWorked: scheduledLeaveHrs,
+        shift: { ...shift, status: 'approved', time_entry_id: newTeId },
+      };
+    }
+
     const teResult = await client.query(
       `SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (clock_out_time - clock_in_time)) / 3600.0), 0)::numeric(10,2) as total
        FROM time_entries WHERE shift_id = $1 AND clock_in_time IS NOT NULL AND clock_out_time IS NOT NULL`,

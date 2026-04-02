@@ -277,7 +277,7 @@ describe('Staff Functions', () => {
 
       expect(mockQueryFn).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO time_entries'),
-        [1, 1, '2026-02-05', 10, 2, 'Extra shift']
+        [1, 1, '2026-02-05', 10, 2, 'Extra shift', 'none']
       );
       expect(result.overtime_hours).toBe(2);
     });
@@ -333,15 +333,16 @@ describe('Staff Functions', () => {
   });
 
   describe('deleteTimeEntry', () => {
-    it('should delete time entry', async () => {
-      mockQueryFn.mockResolvedValue(createMockDbResult([]));
+    it('should delete manual time entry', async () => {
+      mockQueryFn.mockResolvedValue(createMockDbResult([{ id: 1 }]));
 
       await deleteTimeEntry(1, 1);
 
       expect(mockQueryFn).toHaveBeenCalledWith(
-        'DELETE FROM time_entries WHERE id = $1 AND user_id = $2',
+        expect.stringContaining("DELETE FROM time_entries"),
         [1, 1]
       );
+      expect(mockQueryFn.mock.calls[0][0]).toContain("entry_type = 'manual'");
     });
   });
 

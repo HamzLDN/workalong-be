@@ -13,7 +13,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init-workalong-db.sh:/docker-entrypoint-initdb.d/init-workalong-db.sh:ro
+      - ./docker/scripts/init-workalong-db.sh:/docker-entrypoint-initdb.d/init-workalong-db.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U workalong -d users || exit 1"]
       interval: 10s

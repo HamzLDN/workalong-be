@@ -4,9 +4,79 @@ import { pool } from '../lib/db.js';
 import { config } from '../lib/config.js';
 import { requireAuth } from '../middleware/auth.js';
 import { checkGeofence } from '../lib/geofence.js';
+import {
+  findBestFaceMatchAmongStaff,
+  verifyFaceHashAgainstHashes,
+} from '../lib/faceHashMatch.js';
 
 const router = express.Router();
 const isDev = process.env.NODE_ENV !== 'production';
+
+async function resolveStaffByClockCode(userId, rawInput) {
+  const raw = String(rawInput || '').trim();
+  const digits = raw.replace(/\D/g, '');
+  const code = digits.slice(-6);
+  if (code.length !== 6) return null;
+
+  let staffResult = await pool.query(
+    `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
+     WHERE s.user_id = $1 AND s.clockin_id = $2`,
+    [String(userId), code]
+  );
+  if (staffResult.rows.length === 0) {
+    staffResult = await pool.query(
+      `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
+       WHERE s.user_id = $1 AND s.username IS NOT NULL AND RIGHT(TRIM(s.username), 6) = $2`,
+      [String(userId), code]
+    );
+  }
+  if (staffResult.rows.length === 0) {
+    staffResult = await pool.query(
+      `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
+       WHERE s.user_id = $1 AND s.username IS NOT NULL
+       AND RIGHT(REGEXP_REPLACE(TRIM(s.username), '[^0-9]', '', 'g'), 6) = $2`,
+      [String(userId), code]
+    );
+  }
+  if (staffResult.rows.length === 0 && raw !== code) {
+    staffResult = await pool.query(
+      `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
+       WHERE s.username = $1 AND s.user_id = $2`,
+      [raw, userId]
+    );
+  }
+  if (staffResult.rows.length === 0 && raw.length >= 6) {
+    staffResult = await pool.query(
+      `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
+       WHERE s.user_id = $1 AND s.clockin_id = $2`,
+      [String(userId), raw]
+    );
+  }
+  return staffResult.rows[0] || null;
+}
+
+async function verifyFaceHashForStaff(staffId, userId, faceHash) {
+  const profile = await pool.query(
+    `SELECT face_hashes FROM staff_face_profiles
+     WHERE staff_id = $1 AND user_id = $2 AND is_enabled = TRUE`,
+    [staffId, userId]
+  );
+  if (profile.rows.length === 0) {
+    return { ok: false, reason: 'FACE_NOT_ENROLLED' };
+  }
+  return verifyFaceHashAgainstHashes(faceHash, profile.rows[0].face_hashes);
+}
+
+async function findBestFaceMatchForUser(userId, faceHash) {
+  const rows = await pool.query(
+    `SELECT sf.staff_id, sf.face_hashes, s.name as staff_name, s.clockin_id
+     FROM staff_face_profiles sf
+     JOIN staff s ON s.id = sf.staff_id AND s.user_id = sf.user_id
+     WHERE sf.user_id = $1 AND sf.is_enabled = TRUE AND s.status = 'active'`,
+    [userId]
+  );
+  return findBestFaceMatchAmongStaff(faceHash, rows.rows);
+}
 
 router.post('/generate-link', requireAuth, async (req, res) => {
   try {
@@ -119,9 +189,153 @@ router.get('/verify-link/:token', async (req, res) => {
   }
 });
 
+router.post('/face/enroll', async (req, res) => {
+  try {
+    const { clockinId, linkToken, faceHash } = req.body;
+    const deviceFingerprint = req.headers['x-device-fingerprint'] || req.body.deviceFingerprint;
+    if (!clockinId || !linkToken || !deviceFingerprint || !faceHash) {
+      return res.status(400).json({ error: 'clockinId, linkToken, device fingerprint and face hash are required' });
+    }
+
+    const linkResult = await pool.query(
+      `SELECT dl.* FROM device_links dl WHERE dl.link_token = $1 AND dl.is_active = TRUE`,
+      [linkToken]
+    );
+    if (linkResult.rows.length === 0) return res.status(404).json({ error: 'Invalid or inactive link' });
+    const link = linkResult.rows[0];
+    if (link.device_fingerprint && link.device_fingerprint !== deviceFingerprint) {
+      return res.status(403).json({ error: 'Device fingerprint mismatch', code: 'DEVICE_MISMATCH' });
+    }
+    const staff = await resolveStaffByClockCode(link.user_id, clockinId);
+    if (!staff) {
+      return res.status(403).json({ error: 'Invalid clock-in ID or staff member not found', code: 'STAFF_NOT_FOUND' });
+    }
+
+    const existing = await pool.query(
+      `SELECT face_hashes FROM staff_face_profiles WHERE staff_id = $1 AND user_id = $2`,
+      [staff.staff_id, link.user_id]
+    );
+    const hashes = existing.rows.length > 0 && Array.isArray(existing.rows[0].face_hashes)
+      ? existing.rows[0].face_hashes.map((x) => String(x))
+      : [];
+    const next = [String(faceHash), ...hashes.filter((h) => h !== faceHash)].slice(0, 5);
+
+    await pool.query(
+      `INSERT INTO staff_face_profiles (staff_id, user_id, face_hashes, is_enabled, enrolled_at, updated_at)
+       VALUES ($1, $2, $3::jsonb, TRUE, NOW(), NOW())
+       ON CONFLICT (staff_id)
+       DO UPDATE SET face_hashes = EXCLUDED.face_hashes, is_enabled = TRUE, updated_at = NOW()`,
+      [staff.staff_id, link.user_id, JSON.stringify(next)]
+    );
+    await pool.query('UPDATE device_links SET last_used_at = NOW() WHERE id = $1', [link.id]);
+    res.json({ success: true, message: 'Face enrolled successfully' });
+  } catch (error) {
+    console.error('Face enroll error:', error);
+    res.status(500).json({ error: 'Failed to enroll face' });
+  }
+});
+
+router.post('/face/verify', async (req, res) => {
+  try {
+    const { clockinId, linkToken, faceHash } = req.body;
+    const deviceFingerprint = req.headers['x-device-fingerprint'] || req.body.deviceFingerprint;
+    if (!clockinId || !linkToken || !deviceFingerprint || !faceHash) {
+      return res
+        .status(400)
+        .json({ error: 'clockinId, linkToken, device fingerprint and face hash are required' });
+    }
+
+    const linkResult = await pool.query(
+      `SELECT dl.* FROM device_links dl WHERE dl.link_token = $1 AND dl.is_active = TRUE`,
+      [linkToken]
+    );
+    if (linkResult.rows.length === 0)
+      return res.status(404).json({ error: 'Invalid or inactive link' });
+    const link = linkResult.rows[0];
+    if (link.device_fingerprint && link.device_fingerprint !== deviceFingerprint) {
+      return res.status(403).json({ error: 'Device fingerprint mismatch', code: 'DEVICE_MISMATCH' });
+    }
+
+    const staff = await resolveStaffByClockCode(link.user_id, clockinId);
+    if (!staff) {
+      return res
+        .status(403)
+        .json({ error: 'Invalid clock-in ID or staff member not found', code: 'STAFF_NOT_FOUND' });
+    }
+
+    const faceVerification = await verifyFaceHashForStaff(staff.staff_id, link.user_id, faceHash);
+    if (!faceVerification.ok) {
+      const msg =
+        faceVerification.reason === 'FACE_NOT_ENROLLED'
+          ? 'Face enrollment required. Please tap Enroll Face first.'
+          : faceVerification.reason === 'FACE_REENROLL_REQUIRED'
+            ? 'Face profile needs re-enrollment after an update. Please enroll face again.'
+            : faceVerification.reason === 'FACE_REQUIRED'
+              ? 'Face verification required. Please allow camera and try again.'
+              : 'Face verification failed. Please align your face and retry.';
+      return res
+        .status(403)
+        .json({ error: msg, code: faceVerification.reason || 'FACE_REQUIRED' });
+    }
+
+    await pool.query('UPDATE device_links SET last_used_at = NOW() WHERE id = $1', [link.id]);
+    return res.json({
+      success: true,
+      verified: true,
+      staffId: staff.staff_id,
+      staffName: staff.staff_name,
+      message: 'Face verified',
+    });
+  } catch (error) {
+    console.error('Face verify error:', error);
+    res.status(500).json({ error: 'Failed to verify face' });
+  }
+});
+
+router.post('/face/identify', async (req, res) => {
+  try {
+    const { linkToken, faceHash } = req.body;
+    const deviceFingerprint = req.headers['x-device-fingerprint'] || req.body.deviceFingerprint;
+    if (!linkToken || !deviceFingerprint || !faceHash) {
+      return res
+        .status(400)
+        .json({ error: 'linkToken, device fingerprint and face hash are required' });
+    }
+
+    const linkResult = await pool.query(
+      `SELECT dl.* FROM device_links dl WHERE dl.link_token = $1 AND dl.is_active = TRUE`,
+      [linkToken]
+    );
+    if (linkResult.rows.length === 0)
+      return res.status(404).json({ error: 'Invalid or inactive link' });
+    const link = linkResult.rows[0];
+    if (link.device_fingerprint && link.device_fingerprint !== deviceFingerprint) {
+      return res.status(403).json({ error: 'Device fingerprint mismatch', code: 'DEVICE_MISMATCH' });
+    }
+
+    const match = await findBestFaceMatchForUser(link.user_id, faceHash);
+    await pool.query('UPDATE device_links SET last_used_at = NOW() WHERE id = $1', [link.id]);
+
+    if (!match) {
+      return res.json({ identified: false });
+    }
+
+    return res.json({
+      identified: true,
+      staffId: match.staffId,
+      staffName: match.staffName,
+      clockinId: match.clockinId || null,
+      message: 'Face identified',
+    });
+  } catch (error) {
+    console.error('Face identify error:', error);
+    res.status(500).json({ error: 'Failed to identify face' });
+  }
+});
+
 router.post('/clock-action', async (req, res) => {
   try {
-    const { clockinId, action, linkToken, latitude, longitude } = req.body;
+    const { clockinId, action, linkToken, latitude, longitude, faceHash } = req.body;
     const deviceFingerprint = req.headers['x-device-fingerprint'] || req.body.deviceFingerprint;
     if (!clockinId || !action || !linkToken) {
       return res
@@ -157,47 +371,27 @@ router.post('/clock-action', async (req, res) => {
       return res.status(410).json({ error: 'Link has expired' });
     }
 
-    let staffResult = await pool.query(
-      `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
-       WHERE s.user_id = $1 AND s.clockin_id = $2`,
-      [String(link.user_id), code]
-    );
-    if (staffResult.rows.length === 0) {
-      staffResult = await pool.query(
-        `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
-         WHERE s.user_id = $1 AND s.username IS NOT NULL AND RIGHT(TRIM(s.username), 6) = $2`,
-        [String(link.user_id), code]
-      );
-    }
-    if (staffResult.rows.length === 0) {
-      staffResult = await pool.query(
-        `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
-         WHERE s.user_id = $1 AND s.username IS NOT NULL
-         AND RIGHT(REGEXP_REPLACE(TRIM(s.username), '[^0-9]', '', 'g'), 6) = $2`,
-        [String(link.user_id), code]
-      );
-    }
-    if (staffResult.rows.length === 0 && raw !== code) {
-      staffResult = await pool.query(
-        `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
-         WHERE s.username = $1 AND s.user_id = $2`,
-        [raw, link.user_id]
-      );
-    }
-    if (staffResult.rows.length === 0 && raw.length >= 6) {
-      staffResult = await pool.query(
-        `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
-         WHERE s.user_id = $1 AND s.clockin_id = $2`,
-        [String(link.user_id), raw]
-      );
-    }
-    if (staffResult.rows.length === 0) {
+    const staff = await resolveStaffByClockCode(link.user_id, raw);
+    if (!staff) {
       return res.status(403).json({
         error: 'Invalid clock-in ID or staff member not found',
         code: 'STAFF_NOT_FOUND',
       });
     }
-    const staffId = staffResult.rows[0].staff_id;
+    const staffId = staff.staff_id;
+
+    const faceVerification = await verifyFaceHashForStaff(staffId, link.user_id, faceHash);
+    if (!faceVerification.ok) {
+      const msg =
+        faceVerification.reason === 'FACE_NOT_ENROLLED'
+          ? 'Face enrollment required. Please tap Enroll Face first.'
+          : faceVerification.reason === 'FACE_REENROLL_REQUIRED'
+            ? 'Face profile needs re-enrollment after an update. Please enroll face again.'
+          : faceVerification.reason === 'FACE_REQUIRED'
+            ? 'Face verification required. Please allow camera and try again.'
+            : 'Face verification failed. Please align your face and retry.';
+      return res.status(403).json({ error: msg, code: faceVerification.reason || 'FACE_REQUIRED' });
+    }
 
     if (action === 'clock-in') {
       const now = new Date();

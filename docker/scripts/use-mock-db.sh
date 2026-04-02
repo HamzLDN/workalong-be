@@ -14,7 +14,7 @@ echo "To use the mock database, run your command with these variables:"
 echo "   DB_HOST=localhost DB_PORT=5433 MOCK_DB=true node index.js"
 echo ""
 echo "Or source this script and run your command:"
-echo "   source ./use-mock-db.sh"
+echo "   source ./docker/scripts/use-mock-db.sh"
 echo "   node index.js"
 
 

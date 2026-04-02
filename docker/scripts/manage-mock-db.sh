@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+BACKEND_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+INIT_SCRIPT="$BACKEND_ROOT/docker/scripts/init-workalong-db.sh"
+
 # Helper script to manage the mock database using docker commands
 # (since docker-compose has connection issues)
 
@@ -9,7 +12,6 @@ case "$1" in
         echo "🚀 Starting mock database..."
         docker start workalong-postgres-mock 2>/dev/null || {
             echo "⚠️  Container doesn't exist. Creating it..."
-            cd "$(dirname "$0")"
             docker network create workalong-network-mock 2>/dev/null || true
             docker volume create workalong-backend_postgres_data_mock 2>/dev/null || true
             docker run -d --name workalong-postgres-mock --restart unless-stopped \
@@ -18,7 +20,7 @@ case "$1" in
                 -e POSTGRES_DB=users \
                 -p 5433:5432 \
                 -v workalong-backend_postgres_data_mock:/var/lib/postgresql/data \
-                -v "$(pwd)/init-workalong-db.sh:/docker-entrypoint-initdb.d/init-workalong-db.sh:ro" \
+                -v "$INIT_SCRIPT:/docker-entrypoint-initdb.d/init-workalong-db.sh:ro" \
                 --network workalong-network-mock \
                 --health-cmd="pg_isready -U workalong -d users || exit 1" \
                 --health-interval=10s \

@@ -15,7 +15,7 @@ mkdir -p "$BACKUP_DIR"
 
 if ! docker ps --format '{{.Names}}' | grep -q "^${MOCK_CONTAINER}$"; then
   echo "❌ Mock database container '$MOCK_CONTAINER' is not running"
-  echo "   Start with: ./manage-mock-db.sh start"
+  echo "   Start with: ./docker/scripts/manage-mock-db.sh start"
   exit 1
 fi
 

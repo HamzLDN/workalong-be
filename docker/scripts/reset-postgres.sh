@@ -3,7 +3,8 @@
 
 set -e
 
-cd "$(dirname "$0")"
+BACKEND_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$BACKEND_ROOT"
 
 echo "=== Stopping all containers ==="
 docker-compose -f docker-compose.full.yml stop

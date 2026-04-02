@@ -2,6 +2,7 @@ import express from 'express';
 import {
   getTimeEntries,
   createTimeEntry,
+  updateTimeEntry,
   deleteTimeEntry,
   getPendingTimeEntries,
   approveTimeEntry,
@@ -86,7 +87,7 @@ router.get('/earnings/monthly', requireAuth, async (req, res) => {
 
 router.post('/time-entries', requireAuth, async (req, res) => {
   try {
-    const { staffId, date, hoursWorked, overtimeHours, notes } = req.body;
+    const { staffId, date, hoursWorked, overtimeHours, notes, leaveCategory } = req.body;
     if (!staffId || !date || hoursWorked === undefined) {
       return res.status(400).json({ error: 'Staff ID, date, and hours worked are required' });
     }
@@ -99,11 +100,38 @@ router.post('/time-entries', requireAuth, async (req, res) => {
       hoursWorked,
       overtimeHours,
       notes,
+      leaveCategory,
     });
     res.status(201).json({ message: 'Time entry created successfully', entry });
   } catch (error) {
     console.error('Create time entry error:', error);
     res.status(500).json({ error: 'Failed to create time entry' });
+  }
+});
+
+router.put('/time-entries/:id', requireAuth, async (req, res) => {
+  try {
+    const { staffId, date, hoursWorked, overtimeHours, notes, leaveCategory } = req.body;
+    if (!staffId || !date || hoursWorked === undefined) {
+      return res.status(400).json({ error: 'Staff ID, date, and hours worked are required' });
+    }
+    if (hoursWorked < 0) {
+      return res.status(400).json({ error: 'Hours worked must be positive' });
+    }
+    const entry = await updateTimeEntry(req.userId, req.params.id, {
+      staffId,
+      date,
+      hoursWorked,
+      overtimeHours,
+      notes,
+      leaveCategory,
+    });
+    res.json({ message: 'Time entry updated', entry });
+  } catch (error) {
+    console.error('Update time entry error:', error);
+    const msg = error.message || 'Failed to update time entry';
+    const code = msg.includes('not found') || msg.includes('cannot be edited') ? 400 : 500;
+    res.status(code).json({ error: msg });
   }
 });
 
@@ -113,7 +141,9 @@ router.delete('/time-entries/:id', requireAuth, async (req, res) => {
     res.json({ message: 'Time entry deleted successfully' });
   } catch (error) {
     console.error('Delete time entry error:', error);
-    res.status(500).json({ error: 'Failed to delete time entry' });
+    const msg = error.message || 'Failed to delete time entry';
+    const code = msg.includes('not found') || msg.includes('cannot be deleted') ? 400 : 500;
+    res.status(code).json({ error: msg });
   }
 });
 

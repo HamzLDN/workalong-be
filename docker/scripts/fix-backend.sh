@@ -3,7 +3,8 @@
 
 set -e
 
-cd "$(dirname "$0")"
+BACKEND_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$BACKEND_ROOT"
 
 echo "=== Removing unhealthy backend container ==="
 docker-compose -p workalong -f docker-compose.full.yml rm -f backend 2>/dev/null || true

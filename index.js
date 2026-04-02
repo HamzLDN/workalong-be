@@ -19,6 +19,8 @@ import { verifyObfuscatedRequest, obfuscateResponse } from './middleware/obfusca
 import { registerRoutes } from './routes/index.js';
 
 const app = express();
+let httpsServer = null;
+let shuttingDown = false;
 
 const allowedOrigins = [
   'http://localhost',
@@ -47,7 +49,7 @@ const isDocker = process.env.DOCKER === 'true';
 
 app.use(
   cors({
-    origin: function (origin, callback) {
+    origin(origin, callback) {
       if (!origin) return callback(null, true);
 
       if (!isDocker && !isProduction) {
@@ -84,7 +86,6 @@ app.set('trust proxy', 1);
 app.use(securityHeaders);
 app.use(requestFingerprinting);
 app.use(detectSessionTokenMisuse);
-// Global rate limiting (only active in production)
 app.use('/api', createRateLimiter({ limitPerMinute: 100, limitPerHour: 5000 }));
 app.use(verifyObfuscatedRequest);
 app.use(obfuscateResponse);
@@ -146,7 +147,7 @@ try {
     throw new Error('No SSL certificates found');
   }
 
-  const httpsServer = https.createServer(httpsOptions, app);
+  httpsServer = https.createServer(httpsOptions, app);
 
   const HTTPS_DEV_PORT =
     process.env.NODE_ENV === 'production' || process.env.DOCKER === 'true' ? HTTPS_PORT : 3443;
@@ -178,5 +179,37 @@ try {
   console.log(
     '?? For production: sudo certbot certonly --standalone -d workalong.co.uk -d www.workalong.co.uk'
   );
-  console.log('?? For development: cd workalong-backend && ./generate-cert.sh');
+  console.log('?? For development: cd workalong-backend && ./docker/scripts/generate-cert.sh');
 }
+
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\nReceived ${signal}. Shutting down servers...`);
+
+  const closeServer = (server, name) =>
+    new Promise((resolve) => {
+      if (!server || !server.listening) return resolve();
+      server.close((err) => {
+        if (err) console.error(`${name} close error:`, err.message || err);
+        resolve();
+      });
+    });
+
+  try {
+    await Promise.all([closeServer(httpServer, 'HTTP'), closeServer(httpsServer, 'HTTPS')]);
+  } catch (err) {
+    console.error('Server shutdown error:', err.message || err);
+  }
+
+  try {
+    await pool.end();
+  } catch (err) {
+    console.error('DB pool shutdown error:', err.message || err);
+  }
+
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

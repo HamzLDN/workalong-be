@@ -6,13 +6,13 @@ Before deploying to production, ensure your main and mock databases have matchin
 
 ```bash
 # 1. Sync mock from main (if you've run migrations on main)
-./clone-db-to-mock.sh
+./docker/scripts/clone-db-to-mock.sh
 
 # 2. Compare schemas - must pass before deploy
 npm run db:compare
 ```
 
-If schemas differ, apply migrations to the main DB first (`npm run migrate:time-entry-approval` etc.), then re-run `clone-db-to-mock.sh` and `npm run db:compare`.
+If schemas differ, apply migrations to the main DB first (`npm run migrate:time-entry-approval` etc.), then re-run `docker/scripts/clone-db-to-mock.sh` and `npm run db:compare`.
 
 ### Apply migrations to production
 
