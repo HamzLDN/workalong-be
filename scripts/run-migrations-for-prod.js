@@ -172,7 +172,15 @@ async function runAdditiveMigrations() {
 
     console.log(`📦 Applying ${migration.name}...`);
     const sql = fs.readFileSync(sqlPath, 'utf8');
-    await applyStatementBatch(migration.name, sql);
+    try {
+      await pool.query(sql);
+    } catch (err) {
+      if (isIgnorableSchemaError(err)) {
+        console.log(`⏭️  ${migration.name} already applied (${err.code || 'n/a'})`);
+        continue;
+      }
+      throw new Error(`${migration.name} failed (${err.code || 'no-code'}): ${err.message}`);
+    }
     console.log(`✅ ${migration.name}`);
   }
 }
