@@ -272,7 +272,7 @@ describe('IDOR (Insecure Direct Object Reference) Security Tests', () => {
       );
 
       expect(mockQueryFn).toHaveBeenCalledWith(
-        expect.stringContaining("DELETE FROM time_entries"),
+        expect.stringContaining('DELETE FROM time_entries'),
         [timeEntryId, attackerUserId]
       );
       expect(mockQueryFn.mock.calls[0][0]).toContain("entry_type = 'manual'");

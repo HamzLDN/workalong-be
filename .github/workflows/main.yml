@@ -376,16 +376,29 @@ jobs:
           cd /root/workalong-backend
           git pull origin main
 
-      - name: Stop existing container
-        run: |
-          docker stop workalong-backend || echo "Container not running"
-          docker rm workalong-backend || echo "Container does not exist"
-
       - name: Build Docker image
         run: |
           cd /root/workalong-backend
           echo "Building Docker image..."
           docker build -f Dockerfile.backend.ubuntu -t workalong-backend:latest .
+
+      - name: Sync production database schema
+        run: |
+          cd /root/workalong-backend
+          echo "Syncing production schema before container replacement..."
+          docker run --rm \
+            --env-file .env \
+            -e NODE_ENV=production \
+            -e DOCKER=true \
+            -e DB_HOST=workalong-postgres \
+            --network workalong_workalong-network \
+            workalong-backend:latest \
+            npm run migrate:prod
+
+      - name: Stop existing container
+        run: |
+          docker stop workalong-backend || echo "Container not running"
+          docker rm workalong-backend || echo "Container does not exist"
 
       - name: Start container
         run: |

@@ -92,7 +92,11 @@ describe('faceHashMatch', () => {
 
     it('returns null for short or empty input', () => {
       expect(findBestFaceMatchAmongStaff('', [])).toBeNull();
-      expect(findBestFaceMatchAmongStaff('x'.repeat(31), [{ staff_id: 1, face_hashes: [h64], staff_name: 'A', clockin_id: '1' }])).toBeNull();
+      expect(
+        findBestFaceMatchAmongStaff('x'.repeat(31), [
+          { staff_id: 1, face_hashes: [h64], staff_name: 'A', clockin_id: '1' },
+        ])
+      ).toBeNull();
     });
 
     it('returns null when no rows', () => {
@@ -100,9 +104,7 @@ describe('faceHashMatch', () => {
     });
 
     it('returns null when no comparable hash lengths', () => {
-      const rows = [
-        { staff_id: 1, face_hashes: ['short'], staff_name: 'A', clockin_id: '111111' },
-      ];
+      const rows = [{ staff_id: 1, face_hashes: ['short'], staff_name: 'A', clockin_id: '111111' }];
       expect(findBestFaceMatchAmongStaff(h64, rows)).toBeNull();
     });
 

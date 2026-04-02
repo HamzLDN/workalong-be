@@ -30,7 +30,9 @@ export DB_NAME=users
 NODE_ENV=production npm run migrate:prod
 ```
 
-This applies the same schema changes that exist on your local mock: `approved_at`/`approved_by` on `time_entries`, `subscription_discount_percent` on `users`, etc. Migrations are idempotent (safe to run if already applied).
+This applies the same incremental migrations as your mock DB, in order: `subscription_discount_percent` on `users`, `approved_at`/`approved_by` on `time_entries`, `timezone` on `users` and `leave_category` on `time_entries`, **`device_links` (clock-in kiosk links)**, **`staff_face_profiles` (Face ID)**, etc. See `scripts/run-migrations-for-prod.js` for the full list. Migrations are idempotent (safe to re-run if already applied).
+
+**Git push does not run SQL** — after deploy, run `npm run migrate:prod` against production (or run the same SQL files your mock used) so prod matches mock.
 
 ---
 

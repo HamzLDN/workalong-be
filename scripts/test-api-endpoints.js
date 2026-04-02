@@ -1896,11 +1896,7 @@ async function testFaceIdKioskValidation() {
   console.log(`  Face verify (missing clockinId):`);
   assertResult('status 400', { status: 400 }, { status: verify.status }, verifyOk);
 
-  const identify = await makePlainClockinPost(
-    '/clockin/face/identify',
-    { linkToken: 'dummy' },
-    fp
-  );
+  const identify = await makePlainClockinPost('/clockin/face/identify', { linkToken: 'dummy' }, fp);
   const identifyOk = identify.status === 400;
   console.log(`  Face identify (missing faceHash):`);
   assertResult('status 400', { status: 400 }, { status: identify.status }, identifyOk);
@@ -1944,7 +1940,11 @@ async function testFaceIdKioskFlow() {
     deviceFingerprint: clockinDeviceFingerprint,
     faceHash,
   };
-  const enroll = await makePlainClockinPost('/clockin/face/enroll', enrollBody, clockinDeviceFingerprint);
+  const enroll = await makePlainClockinPost(
+    '/clockin/face/enroll',
+    enrollBody,
+    clockinDeviceFingerprint
+  );
   console.log(`  Face enroll:`);
   const enrollOk = enroll.ok && enroll.data?.success === true;
   assertResult(
@@ -1961,7 +1961,11 @@ async function testFaceIdKioskFlow() {
     deviceFingerprint: clockinDeviceFingerprint,
     faceHash,
   };
-  const verify = await makePlainClockinPost('/clockin/face/verify', verifyBody, clockinDeviceFingerprint);
+  const verify = await makePlainClockinPost(
+    '/clockin/face/verify',
+    verifyBody,
+    clockinDeviceFingerprint
+  );
   console.log(`  Face verify:`);
   const verifyOk = verify.ok && verify.data?.verified === true;
   assertResult(
@@ -2752,7 +2756,10 @@ async function runAllTests() {
     else results.failed++;
 
     const faceIdFlowOk = await testFaceIdKioskFlow();
-    results.tests.push({ name: 'Face ID kiosk (enroll → verify → identify)', passed: faceIdFlowOk });
+    results.tests.push({
+      name: 'Face ID kiosk (enroll → verify → identify)',
+      passed: faceIdFlowOk,
+    });
     if (faceIdFlowOk) results.passed++;
     else results.failed++;
 

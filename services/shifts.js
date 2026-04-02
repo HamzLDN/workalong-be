@@ -932,8 +932,7 @@ export async function approveShift(shiftId, userId, approvedBy) {
     let timeEntryId = null;
     let actualHoursWorked = null;
 
-    const isLeaveShift =
-      shift.shift_type === 'paid_leave' || shift.shift_type === 'unpaid_leave';
+    const isLeaveShift = shift.shift_type === 'paid_leave' || shift.shift_type === 'unpaid_leave';
 
     if (isLeaveShift) {
       const leaveCat = shift.shift_type === 'paid_leave' ? 'paid_leave' : 'unpaid_leave';

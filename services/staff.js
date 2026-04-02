@@ -862,8 +862,7 @@ export async function getMonthlyEarningsChart(userId, year, month) {
 export async function updateTimeEntry(userId, timeEntryId, data) {
   const { staffId, date, hoursWorked, overtimeHours, notes, leaveCategory } = data;
   const lc = LEAVE_CATEGORIES.has(leaveCategory) ? leaveCategory : 'none';
-  const ot =
-    lc === 'paid_leave' || lc === 'unpaid_leave' ? 0 : parseFloat(overtimeHours || 0) || 0;
+  const ot = lc === 'paid_leave' || lc === 'unpaid_leave' ? 0 : parseFloat(overtimeHours || 0) || 0;
 
   const r = await pool.query(
     `UPDATE time_entries
@@ -874,7 +873,9 @@ export async function updateTimeEntry(userId, timeEntryId, data) {
     [staffId, date, hoursWorked, ot, notes ?? null, lc, timeEntryId, userId]
   );
   if (r.rows.length === 0) {
-    throw new Error('Time entry not found or cannot be edited (only manually logged entries can be changed here)');
+    throw new Error(
+      'Time entry not found or cannot be edited (only manually logged entries can be changed here)'
+    );
   }
   return r.rows[0];
 }
@@ -887,7 +888,9 @@ export async function deleteTimeEntry(entryId, userId) {
     [entryId, userId]
   );
   if (r.rows.length === 0) {
-    throw new Error('Time entry not found or cannot be deleted (clock-in entries are managed from the schedule)');
+    throw new Error(
+      'Time entry not found or cannot be deleted (clock-in entries are managed from the schedule)'
+    );
   }
 }
 

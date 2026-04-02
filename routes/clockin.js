@@ -4,10 +4,7 @@ import { pool } from '../lib/db.js';
 import { config } from '../lib/config.js';
 import { requireAuth } from '../middleware/auth.js';
 import { checkGeofence } from '../lib/geofence.js';
-import {
-  findBestFaceMatchAmongStaff,
-  verifyFaceHashAgainstHashes,
-} from '../lib/faceHashMatch.js';
+import { findBestFaceMatchAmongStaff, verifyFaceHashAgainstHashes } from '../lib/faceHashMatch.js';
 
 const router = express.Router();
 const isDev = process.env.NODE_ENV !== 'production';
@@ -194,30 +191,38 @@ router.post('/face/enroll', async (req, res) => {
     const { clockinId, linkToken, faceHash } = req.body;
     const deviceFingerprint = req.headers['x-device-fingerprint'] || req.body.deviceFingerprint;
     if (!clockinId || !linkToken || !deviceFingerprint || !faceHash) {
-      return res.status(400).json({ error: 'clockinId, linkToken, device fingerprint and face hash are required' });
+      return res
+        .status(400)
+        .json({ error: 'clockinId, linkToken, device fingerprint and face hash are required' });
     }
 
     const linkResult = await pool.query(
       `SELECT dl.* FROM device_links dl WHERE dl.link_token = $1 AND dl.is_active = TRUE`,
       [linkToken]
     );
-    if (linkResult.rows.length === 0) return res.status(404).json({ error: 'Invalid or inactive link' });
+    if (linkResult.rows.length === 0)
+      return res.status(404).json({ error: 'Invalid or inactive link' });
     const link = linkResult.rows[0];
     if (link.device_fingerprint && link.device_fingerprint !== deviceFingerprint) {
-      return res.status(403).json({ error: 'Device fingerprint mismatch', code: 'DEVICE_MISMATCH' });
+      return res
+        .status(403)
+        .json({ error: 'Device fingerprint mismatch', code: 'DEVICE_MISMATCH' });
     }
     const staff = await resolveStaffByClockCode(link.user_id, clockinId);
     if (!staff) {
-      return res.status(403).json({ error: 'Invalid clock-in ID or staff member not found', code: 'STAFF_NOT_FOUND' });
+      return res
+        .status(403)
+        .json({ error: 'Invalid clock-in ID or staff member not found', code: 'STAFF_NOT_FOUND' });
     }
 
     const existing = await pool.query(
       `SELECT face_hashes FROM staff_face_profiles WHERE staff_id = $1 AND user_id = $2`,
       [staff.staff_id, link.user_id]
     );
-    const hashes = existing.rows.length > 0 && Array.isArray(existing.rows[0].face_hashes)
-      ? existing.rows[0].face_hashes.map((x) => String(x))
-      : [];
+    const hashes =
+      existing.rows.length > 0 && Array.isArray(existing.rows[0].face_hashes)
+        ? existing.rows[0].face_hashes.map((x) => String(x))
+        : [];
     const next = [String(faceHash), ...hashes.filter((h) => h !== faceHash)].slice(0, 5);
 
     await pool.query(
@@ -253,7 +258,9 @@ router.post('/face/verify', async (req, res) => {
       return res.status(404).json({ error: 'Invalid or inactive link' });
     const link = linkResult.rows[0];
     if (link.device_fingerprint && link.device_fingerprint !== deviceFingerprint) {
-      return res.status(403).json({ error: 'Device fingerprint mismatch', code: 'DEVICE_MISMATCH' });
+      return res
+        .status(403)
+        .json({ error: 'Device fingerprint mismatch', code: 'DEVICE_MISMATCH' });
     }
 
     const staff = await resolveStaffByClockCode(link.user_id, clockinId);
@@ -273,9 +280,7 @@ router.post('/face/verify', async (req, res) => {
             : faceVerification.reason === 'FACE_REQUIRED'
               ? 'Face verification required. Please allow camera and try again.'
               : 'Face verification failed. Please align your face and retry.';
-      return res
-        .status(403)
-        .json({ error: msg, code: faceVerification.reason || 'FACE_REQUIRED' });
+      return res.status(403).json({ error: msg, code: faceVerification.reason || 'FACE_REQUIRED' });
     }
 
     await pool.query('UPDATE device_links SET last_used_at = NOW() WHERE id = $1', [link.id]);
@@ -310,7 +315,9 @@ router.post('/face/identify', async (req, res) => {
       return res.status(404).json({ error: 'Invalid or inactive link' });
     const link = linkResult.rows[0];
     if (link.device_fingerprint && link.device_fingerprint !== deviceFingerprint) {
-      return res.status(403).json({ error: 'Device fingerprint mismatch', code: 'DEVICE_MISMATCH' });
+      return res
+        .status(403)
+        .json({ error: 'Device fingerprint mismatch', code: 'DEVICE_MISMATCH' });
     }
 
     const match = await findBestFaceMatchForUser(link.user_id, faceHash);
@@ -387,9 +394,9 @@ router.post('/clock-action', async (req, res) => {
           ? 'Face enrollment required. Please tap Enroll Face first.'
           : faceVerification.reason === 'FACE_REENROLL_REQUIRED'
             ? 'Face profile needs re-enrollment after an update. Please enroll face again.'
-          : faceVerification.reason === 'FACE_REQUIRED'
-            ? 'Face verification required. Please allow camera and try again.'
-            : 'Face verification failed. Please align your face and retry.';
+            : faceVerification.reason === 'FACE_REQUIRED'
+              ? 'Face verification required. Please allow camera and try again.'
+              : 'Face verification failed. Please align your face and retry.';
       return res.status(403).json({ error: msg, code: faceVerification.reason || 'FACE_REQUIRED' });
     }
 

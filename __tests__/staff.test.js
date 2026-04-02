@@ -339,7 +339,7 @@ describe('Staff Functions', () => {
       await deleteTimeEntry(1, 1);
 
       expect(mockQueryFn).toHaveBeenCalledWith(
-        expect.stringContaining("DELETE FROM time_entries"),
+        expect.stringContaining('DELETE FROM time_entries'),
         [1, 1]
       );
       expect(mockQueryFn.mock.calls[0][0]).toContain("entry_type = 'manual'");

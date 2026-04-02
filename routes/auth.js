@@ -71,7 +71,10 @@ async function getUserWithSubscription(userId) {
         }
         return row;
       } catch (e2) {
-        if (e2.code === '42703' || (e2.message && e2.message.includes('subscription_staff_limit'))) {
+        if (
+          e2.code === '42703' ||
+          (e2.message && e2.message.includes('subscription_staff_limit'))
+        ) {
           const r = await pool.query(
             'SELECT id, email, name, is_verified, subscription_status, subscription_plan FROM users WHERE id = $1',
             [userId]
@@ -969,7 +972,8 @@ router.put('/profile', async (req, res) => {
         const tz = timezone.trim();
         if (tz.length > 120 || !/^[A-Za-z0-9_+\-/]+$/.test(tz)) {
           return res.status(400).json({
-            error: 'Invalid timezone. Use an IANA name like Europe/London or leave empty for browser default.',
+            error:
+              'Invalid timezone. Use an IANA name like Europe/London or leave empty for browser default.',
           });
         }
         updates.push(`timezone = $${paramCount++}`);
