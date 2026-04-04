@@ -5,114 +5,140 @@ import { getSession } from '../services/auth.js';
 import { getStaffSession } from '../services/staff-auth.js';
 import { logSecurityEvent } from '../lib/api-security.js';
 
+async function authenticateUserRequest(req, res, { requireCsrf = true } = {}) {
+  if (req.userId && req.apiKey) {
+    return { ok: true };
+  }
+
+  const oneday = 1 * 24 * 60 * 60 * 1000;
+  const apiKey =
+    req.headers['x-api-key'] ||
+    (req.headers.authorization && req.headers.authorization.startsWith('Bearer wak_')
+      ? req.headers.authorization.replace('Bearer ', '')
+      : null);
+
+  if (apiKey && apiKey.startsWith('wak_')) {
+    const { verifyApiKey } = await import('../api-security.js');
+    const keyData = await verifyApiKey(apiKey);
+    if (keyData) {
+      req.userId = keyData.user_id;
+      req.user = { id: keyData.user_id, email: keyData.email, name: keyData.name };
+      req.apiKey = keyData;
+      return { ok: true };
+    }
+    res.status(401).json({ error: 'Invalid or expired API key' });
+    return { ok: false };
+  }
+
+  let sessionId = req.cookies.sessionId;
+  let fromCookie = true;
+  if (!sessionId && req.headers.authorization) {
+    const authHeader = req.headers.authorization;
+    sessionId = authHeader.replace('Bearer ', '');
+    fromCookie = false;
+    if (
+      sessionId &&
+      sessionId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+    ) {
+      logSecurityEvent('session_token_in_authorization_header', {
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+        endpoint: req.path,
+        requestMethod: req.method,
+        details: {
+          message: 'Session token used in Authorization header.',
+          tokenPrefix: sessionId.substring(0, 8),
+        },
+        severity: 'info',
+      }).catch((err) => console.error('Failed to log security event:', err));
+    }
+  }
+
+  if (!sessionId || sessionId === 'undefined' || sessionId === 'null') {
+    res.status(401).json({ error: 'No valid session provided' });
+    return { ok: false };
+  }
+
+  const session = await getSession(sessionId);
+  if (!session) {
+    res.status(401).json({ error: 'Invalid or expired session' });
+    return { ok: false };
+  }
+
+  if (!fromCookie && sessionId) {
+    res.cookie('sessionId', sessionId, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: oneday * 7,
+    });
+  }
+
+  req.userId = session.user_id;
+  req.user = { id: session.user_id, email: session.email, name: session.name };
+
+  if (!requireCsrf) {
+    return { ok: true };
+  }
+
+  const csrfToken = req.headers['x-csrf-token'];
+  if (!csrfToken) {
+    await logSecurityEvent('csrf_token_missing', {
+      userId: session.user_id,
+      ipAddress: req.ip,
+      endpoint: req.path,
+      requestMethod: req.method,
+      severity: 'warning',
+    });
+    res.status(403).json({
+      error:
+        'CSRF token required. Include X-CSRF-Token header. Get token from /api/auth/csrf-token endpoint.',
+    });
+    return { ok: false };
+  }
+
+  const expectedToken = crypto
+    .createHash('sha256')
+    .update(
+      sessionId +
+        (process.env.SESSION_SECRET ||
+          config.sessionSecret ||
+          'change-this-secret-key-in-production')
+    )
+    .digest('hex');
+  if (csrfToken !== expectedToken) {
+    await logSecurityEvent('csrf_token_invalid', {
+      userId: session.user_id,
+      ipAddress: req.ip,
+      endpoint: req.path,
+      requestMethod: req.method,
+      severity: 'warning',
+    });
+    res.status(403).json({ error: 'Invalid CSRF token' });
+    return { ok: false };
+  }
+
+  return { ok: true };
+}
+
 export async function requireAuth(req, res, next) {
   try {
-    if (req.userId && req.apiKey) {
-      return next();
-    }
-
-    const oneday = 1 * 24 * 60 * 60 * 1000;
-    const apiKey =
-      req.headers['x-api-key'] ||
-      (req.headers.authorization && req.headers.authorization.startsWith('Bearer wak_')
-        ? req.headers.authorization.replace('Bearer ', '')
-        : null);
-
-    if (apiKey && apiKey.startsWith('wak_')) {
-      const { verifyApiKey } = await import('../api-security.js');
-      const keyData = await verifyApiKey(apiKey);
-      if (keyData) {
-        req.userId = keyData.user_id;
-        req.user = { id: keyData.user_id, email: keyData.email, name: keyData.name };
-        req.apiKey = keyData;
-        return next();
-      }
-      return res.status(401).json({ error: 'Invalid or expired API key' });
-    }
-
-    let sessionId = req.cookies.sessionId;
-    let fromCookie = true;
-    if (!sessionId && req.headers.authorization) {
-      const authHeader = req.headers.authorization;
-      sessionId = authHeader.replace('Bearer ', '');
-      fromCookie = false;
-      if (
-        sessionId &&
-        sessionId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
-      ) {
-        logSecurityEvent('session_token_in_authorization_header', {
-          ipAddress: req.ip,
-          userAgent: req.headers['user-agent'],
-          endpoint: req.path,
-          requestMethod: req.method,
-          details: {
-            message: 'Session token used in Authorization header.',
-            tokenPrefix: sessionId.substring(0, 8),
-          },
-          severity: 'info',
-        }).catch((err) => console.error('Failed to log security event:', err));
-      }
-    }
-
-    if (!sessionId || sessionId === 'undefined' || sessionId === 'null') {
-      return res.status(401).json({ error: 'No valid session provided' });
-    }
-
-    const session = await getSession(sessionId);
-    if (!session) {
-      return res.status(401).json({ error: 'Invalid or expired session' });
-    }
-
-    if (!fromCookie && sessionId) {
-      res.cookie('sessionId', sessionId, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: oneday * 7,
-      });
-    }
-
-    req.userId = session.user_id;
-    req.user = { id: session.user_id, email: session.email, name: session.name };
-
-    const csrfToken = req.headers['x-csrf-token'];
-    if (!csrfToken) {
-      await logSecurityEvent('csrf_token_missing', {
-        userId: session.user_id,
-        ipAddress: req.ip,
-        endpoint: req.path,
-        requestMethod: req.method,
-        severity: 'warning',
-      });
-      return res.status(403).json({
-        error:
-          'CSRF token required. Include X-CSRF-Token header. Get token from /api/auth/csrf-token endpoint.',
-      });
-    }
-
-    const expectedToken = crypto
-      .createHash('sha256')
-      .update(
-        sessionId +
-          (process.env.SESSION_SECRET ||
-            config.sessionSecret ||
-            'change-this-secret-key-in-production')
-      )
-      .digest('hex');
-    if (csrfToken !== expectedToken) {
-      await logSecurityEvent('csrf_token_invalid', {
-        userId: session.user_id,
-        ipAddress: req.ip,
-        endpoint: req.path,
-        requestMethod: req.method,
-        severity: 'warning',
-      });
-      return res.status(403).json({ error: 'Invalid CSRF token' });
-    }
-
+    const result = await authenticateUserRequest(req, res, { requireCsrf: true });
+    if (!result.ok) return;
     next();
   } catch (error) {
     console.error('Auth error:', error);
+    res.status(401).json({ error: 'Authentication failed' });
+  }
+}
+
+export async function requireAuthCompat(req, res, next) {
+  try {
+    const result = await authenticateUserRequest(req, res, { requireCsrf: false });
+    if (!result.ok) return;
+    next();
+  } catch (error) {
+    console.error('Compat auth error:', error);
     res.status(401).json({ error: 'Authentication failed' });
   }
 }

@@ -1,6 +1,10 @@
 import fetch from 'node-fetch';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
+import {
+  TRANSPORT_CLIENT_ACTIVE_HEADER,
+  TRANSPORT_CLIENT_ACTIVE_VALUE,
+} from '../lib/transportClientHeader.js';
 
 dotenv.config();
 
@@ -250,7 +254,7 @@ async function makeObfuscatedRequest(endpoint, body, method, user) {
   const url = `${API_BASE_URL}${endpoint}`;
   const headers = {
     'Content-Type': 'application/x-obfuscated',
-    'X-Obfuscation-Enabled': 'true',
+    [TRANSPORT_CLIENT_ACTIVE_HEADER]: TRANSPORT_CLIENT_ACTIVE_VALUE,
     'X-Request-Timestamp': timestamp.toString(),
     'X-Request-Nonce': nonce,
     'X-Request-Signature': signature,
@@ -743,7 +747,7 @@ async function testObfuscationSecurity() {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-obfuscated',
-      'X-Obfuscation-Enabled': 'true',
+      [TRANSPORT_CLIENT_ACTIVE_HEADER]: TRANSPORT_CLIENT_ACTIVE_VALUE,
       'X-Request-Timestamp': timestamp.toString(),
       'X-Request-Nonce': nonce,
       'X-Request-Signature': tamperedSignature,
@@ -774,7 +778,7 @@ async function testObfuscationSecurity() {
     method: 'GET',
     headers: {
       'Content-Type': 'application/x-obfuscated',
-      'X-Obfuscation-Enabled': 'true',
+      [TRANSPORT_CLIENT_ACTIVE_HEADER]: TRANSPORT_CLIENT_ACTIVE_VALUE,
       'X-Request-Timestamp': Date.now().toString(),
       'X-Request-Nonce': Math.random().toString(36).substring(2, 15),
       'X-Request-Signature': 'wrong-signature',
@@ -789,6 +793,61 @@ async function testObfuscationSecurity() {
       wrongSessionRequest.status === 403 ||
       wrongSessionRequest.status === 400,
     `Status: ${wrongSessionRequest.status}`
+  );
+}
+
+// 4b. Face ID kiosk routes (non-public; require signed transport like other API routes)
+async function testFaceIdKioskSecurity() {
+  console.log('\n========================================');
+  console.log('4b. Face ID Kiosk Security');
+  console.log('========================================\n');
+
+  const hash64 = 'a'.repeat(64);
+  const baseBody = {
+    clockinId: '123456',
+    linkToken: 'not-a-real-token',
+    deviceFingerprint: 'fp-test',
+    faceHash: hash64,
+  };
+
+  const plainEnroll = await makeRequest('/clockin/face/enroll', {
+    method: 'POST',
+    body: JSON.stringify(baseBody),
+  });
+  const enrollMsg = `${plainEnroll.data?.error || ''} ${plainEnroll.data?.message || ''}`;
+  recordTest(
+    'Face ID: enroll without transport header must be rejected (400)',
+    plainEnroll.status === 400 &&
+      (enrollMsg.includes('Client protocol') || enrollMsg.includes('supported client')),
+    `Status: ${plainEnroll.status}`
+  );
+
+  const plainVerify = await makeRequest('/clockin/face/verify', {
+    method: 'POST',
+    body: JSON.stringify(baseBody),
+  });
+  const verifyMsg = `${plainVerify.data?.error || ''} ${plainVerify.data?.message || ''}`;
+  recordTest(
+    'Face ID: verify without transport header must be rejected (400)',
+    plainVerify.status === 400 &&
+      (verifyMsg.includes('Client protocol') || verifyMsg.includes('supported client')),
+    `Status: ${plainVerify.status}`
+  );
+
+  const plainIdentify = await makeRequest('/clockin/face/identify', {
+    method: 'POST',
+    body: JSON.stringify({
+      linkToken: 'not-a-real-token',
+      deviceFingerprint: 'fp-test',
+      faceHash: hash64,
+    }),
+  });
+  const identifyMsg = `${plainIdentify.data?.error || ''} ${plainIdentify.data?.message || ''}`;
+  recordTest(
+    'Face ID: identify without transport header must be rejected (400)',
+    plainIdentify.status === 400 &&
+      (identifyMsg.includes('Client protocol') || identifyMsg.includes('supported client')),
+    `Status: ${plainIdentify.status}`
   );
 }
 
@@ -1752,7 +1811,7 @@ async function testExtendedObfuscationSecurity() {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-obfuscated',
-      'X-Obfuscation-Enabled': 'true',
+      [TRANSPORT_CLIENT_ACTIVE_HEADER]: TRANSPORT_CLIENT_ACTIVE_VALUE,
       'X-Request-Timestamp': timestamp.toString(),
       'X-Request-Nonce': nonce,
       'X-Request-Signature': signature,
@@ -1790,7 +1849,7 @@ async function testExtendedObfuscationSecurity() {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-obfuscated',
-      'X-Obfuscation-Enabled': 'true',
+      [TRANSPORT_CLIENT_ACTIVE_HEADER]: TRANSPORT_CLIENT_ACTIVE_VALUE,
       'X-Request-Timestamp': futureTimestamp.toString(),
       'X-Request-Nonce': futureNonce,
       'X-Request-Signature': futureSignature,
@@ -1828,7 +1887,7 @@ async function testExtendedObfuscationSecurity() {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-obfuscated',
-      'X-Obfuscation-Enabled': 'true',
+      [TRANSPORT_CLIENT_ACTIVE_HEADER]: TRANSPORT_CLIENT_ACTIVE_VALUE,
       'X-Request-Timestamp': timestamp1.toString(),
       'X-Request-Nonce': nonce1,
       'X-Request-Signature': signature1,
@@ -1859,7 +1918,7 @@ async function testExtendedObfuscationSecurity() {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-obfuscated',
-      'X-Obfuscation-Enabled': 'true',
+      [TRANSPORT_CLIENT_ACTIVE_HEADER]: TRANSPORT_CLIENT_ACTIVE_VALUE,
       'X-Request-Timestamp': timestamp2.toString(),
       'X-Request-Nonce': nonce1, // Reused nonce
       'X-Request-Signature': signature2,
@@ -2189,6 +2248,7 @@ async function runSecurityTests() {
   await testCSRFProtection();
   await testAuthenticationBypass();
   await testObfuscationSecurity();
+  await testFaceIdKioskSecurity();
   await testSessionSecurity();
   await testInputValidation();
   await testPrivilegeEscalation();

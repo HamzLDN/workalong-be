@@ -2,12 +2,50 @@ import crypto from 'crypto';
 import express from 'express';
 import { pool } from '../lib/db.js';
 import { config } from '../lib/config.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireAuthCompat } from '../middleware/auth.js';
 import { checkGeofence } from '../lib/geofence.js';
-import { findBestFaceMatchAmongStaff, verifyFaceHashAgainstHashes } from '../lib/faceHashMatch.js';
+import {
+  findBestFaceMatchAmongStaff,
+  verifyFaceHashAgainstHashes,
+  formatStaffDisplayName,
+} from '../lib/faceHashMatch.js';
 
 const router = express.Router();
 const isDev = process.env.NODE_ENV !== 'production';
+
+/**
+ * Fixed SELECT fragments for staff display names — only these literals are ever interpolated into SQL.
+ * (User input always uses parameterized $1, $2, … — never string-concatenated into the query text.)
+ */
+const SQL_STAFF_NAME_COLS_WITH_LASTNAME = 's.name as staff_name, s.lastname as last_name';
+const SQL_STAFF_NAME_COLS_NAME_ONLY = 's.name as staff_name';
+
+/** Postgres cannot SELECT a missing column; probe once (cached in prod) for optional staff.lastname. */
+let _staffLastnameColumnChecked = false;
+let _staffHasLastnameColumn = false;
+
+async function staffHasLastnameColumn() {
+  const cacheOk = process.env.NODE_ENV !== 'test';
+  if (cacheOk && _staffLastnameColumnChecked) return _staffHasLastnameColumn;
+  try {
+    const r = await pool.query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'staff' AND column_name = 'lastname'
+       LIMIT 1`
+    );
+    _staffHasLastnameColumn = r.rows.length > 0;
+  } catch {
+    _staffHasLastnameColumn = false;
+  }
+  if (cacheOk) _staffLastnameColumnChecked = true;
+  return _staffHasLastnameColumn;
+}
+
+async function sqlStaffNameColumns() {
+  return (await staffHasLastnameColumn())
+    ? SQL_STAFF_NAME_COLS_WITH_LASTNAME
+    : SQL_STAFF_NAME_COLS_NAME_ONLY;
+}
 
 async function resolveStaffByClockCode(userId, rawInput) {
   const raw = String(rawInput || '').trim();
@@ -15,21 +53,23 @@ async function resolveStaffByClockCode(userId, rawInput) {
   const code = digits.slice(-6);
   if (code.length !== 6) return null;
 
+  const nameCols = await sqlStaffNameColumns();
+
   let staffResult = await pool.query(
-    `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
+    `SELECT s.id as staff_id, ${nameCols}, s.user_id FROM staff s
      WHERE s.user_id = $1 AND s.clockin_id = $2`,
     [String(userId), code]
   );
   if (staffResult.rows.length === 0) {
     staffResult = await pool.query(
-      `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
+      `SELECT s.id as staff_id, ${nameCols}, s.user_id FROM staff s
        WHERE s.user_id = $1 AND s.username IS NOT NULL AND RIGHT(TRIM(s.username), 6) = $2`,
       [String(userId), code]
     );
   }
   if (staffResult.rows.length === 0) {
     staffResult = await pool.query(
-      `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
+      `SELECT s.id as staff_id, ${nameCols}, s.user_id FROM staff s
        WHERE s.user_id = $1 AND s.username IS NOT NULL
        AND RIGHT(REGEXP_REPLACE(TRIM(s.username), '[^0-9]', '', 'g'), 6) = $2`,
       [String(userId), code]
@@ -37,14 +77,14 @@ async function resolveStaffByClockCode(userId, rawInput) {
   }
   if (staffResult.rows.length === 0 && raw !== code) {
     staffResult = await pool.query(
-      `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
+      `SELECT s.id as staff_id, ${nameCols}, s.user_id FROM staff s
        WHERE s.username = $1 AND s.user_id = $2`,
-      [raw, userId]
+      [raw, String(userId)]
     );
   }
   if (staffResult.rows.length === 0 && raw.length >= 6) {
     staffResult = await pool.query(
-      `SELECT s.id as staff_id, s.name as staff_name, s.user_id FROM staff s
+      `SELECT s.id as staff_id, ${nameCols}, s.user_id FROM staff s
        WHERE s.user_id = $1 AND s.clockin_id = $2`,
       [String(userId), raw]
     );
@@ -65,8 +105,9 @@ async function verifyFaceHashForStaff(staffId, userId, faceHash) {
 }
 
 async function findBestFaceMatchForUser(userId, faceHash) {
+  const nameCols = await sqlStaffNameColumns();
   const rows = await pool.query(
-    `SELECT sf.staff_id, sf.face_hashes, s.name as staff_name, s.clockin_id
+    `SELECT sf.staff_id, sf.face_hashes, ${nameCols}, s.clockin_id, s.username
      FROM staff_face_profiles sf
      JOIN staff s ON s.id = sf.staff_id AND s.user_id = sf.user_id
      WHERE sf.user_id = $1 AND sf.is_enabled = TRUE AND s.status = 'active'`,
@@ -75,7 +116,7 @@ async function findBestFaceMatchForUser(userId, faceHash) {
   return findBestFaceMatchAmongStaff(faceHash, rows.rows);
 }
 
-router.post('/generate-link', requireAuth, async (req, res) => {
+router.post('/generate-link', requireAuthCompat, async (req, res) => {
   try {
     const { deviceName, expiresInDays } = req.body;
     const linkToken = crypto.randomBytes(32).toString('hex');
@@ -107,7 +148,7 @@ router.post('/generate-link', requireAuth, async (req, res) => {
   }
 });
 
-router.get('/links', requireAuth, async (req, res) => {
+router.get('/links', requireAuthCompat, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT dl.* FROM device_links dl WHERE dl.user_id = $1 ORDER BY dl.created_at DESC`,
@@ -132,7 +173,7 @@ router.get('/links', requireAuth, async (req, res) => {
   }
 });
 
-router.delete('/links/:linkId', requireAuth, async (req, res) => {
+router.delete('/links/:linkId', requireAuthCompat, async (req, res) => {
   try {
     const { linkId } = req.params;
     const result = await pool.query(
@@ -188,12 +229,26 @@ router.get('/verify-link/:token', async (req, res) => {
 
 router.post('/face/enroll', async (req, res) => {
   try {
-    const { clockinId, linkToken, faceHash } = req.body;
+    const { clockinId, linkToken, faceHash, faceHashes } = req.body;
     const deviceFingerprint = req.headers['x-device-fingerprint'] || req.body.deviceFingerprint;
-    if (!clockinId || !linkToken || !deviceFingerprint || !faceHash) {
-      return res
-        .status(400)
-        .json({ error: 'clockinId, linkToken, device fingerprint and face hash are required' });
+
+    const rawList = Array.isArray(faceHashes) ? faceHashes : faceHash != null ? [faceHash] : [];
+    const normalized = rawList.map((h) => String(h ?? '').trim()).filter((h) => h.length >= 32);
+
+    const dedupedIncoming = [];
+    const seenIn = new Set();
+    for (const h of normalized) {
+      if (!seenIn.has(h)) {
+        seenIn.add(h);
+        dedupedIncoming.push(h);
+      }
+    }
+
+    if (!clockinId || !linkToken || !deviceFingerprint || dedupedIncoming.length === 0) {
+      return res.status(400).json({
+        error:
+          'clockinId, linkToken, device fingerprint and at least one face hash (faceHash or faceHashes) are required',
+      });
     }
 
     const linkResult = await pool.query(
@@ -223,7 +278,10 @@ router.post('/face/enroll', async (req, res) => {
       existing.rows.length > 0 && Array.isArray(existing.rows[0].face_hashes)
         ? existing.rows[0].face_hashes.map((x) => String(x))
         : [];
-    const next = [String(faceHash), ...hashes.filter((h) => h !== faceHash)].slice(0, 5);
+    // Prefer fresh enrollment samples first (up to 5), then retain prior hashes not duplicated.
+    const cappedNew = dedupedIncoming.slice(0, 5);
+    const rest = hashes.filter((h) => !cappedNew.includes(h));
+    const next = [...cappedNew, ...rest].slice(0, 5);
 
     await pool.query(
       `INSERT INTO staff_face_profiles (staff_id, user_id, face_hashes, is_enabled, enrolled_at, updated_at)
@@ -288,7 +346,7 @@ router.post('/face/verify', async (req, res) => {
       success: true,
       verified: true,
       staffId: staff.staff_id,
-      staffName: staff.staff_name,
+      staffName: formatStaffDisplayName(staff.staff_name, staff.last_name),
       message: 'Face verified',
     });
   } catch (error) {
@@ -327,11 +385,14 @@ router.post('/face/identify', async (req, res) => {
       return res.json({ identified: false });
     }
 
+    const code = match.clockinCode || null;
     return res.json({
       identified: true,
-      staffId: match.staffId,
       staffName: match.staffName,
-      clockinId: match.clockinId || null,
+      staffFirstName: match.staffFirstName || '',
+      staffLastName: match.staffLastName || '',
+      clockinCode: code,
+      clockinId: code,
       message: 'Face identified',
     });
   } catch (error) {

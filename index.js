@@ -21,6 +21,7 @@ import { registerRoutes } from './routes/index.js';
 const app = express();
 let httpsServer = null;
 let shuttingDown = false;
+let cleanupInterval = null;
 
 const allowedOrigins = [
   'http://localhost',
@@ -99,7 +100,8 @@ app.use(
   })
 );
 
-setInterval(cleanupExpiredSessions, 60 * 60 * 1000);
+cleanupInterval = setInterval(cleanupExpiredSessions, 60 * 60 * 1000);
+cleanupInterval.unref?.();
 
 registerRoutes(app);
 
@@ -107,14 +109,30 @@ const HTTP_PORT = config.port || 3001;
 const HTTPS_PORT = 443;
 
 const httpServer = http.createServer(app);
-try {
-  httpServer.listen(HTTP_PORT, () => {
+
+function handleListenError(name, port) {
+  return (err) => {
+    if (err.code === 'EACCES') {
+      console.log(`??  Cannot bind ${name} server to port ${port} (requires elevated privileges)`);
+    } else if (err.code === 'EADDRINUSE') {
+      console.log(`??  Port ${port} is already in use for ${name}`);
+      console.log('??  Another backend process is likely still running.');
+    } else {
+      console.error(`? ${name} server error:`, err.message);
+    }
+
+    if (!shuttingDown) {
+      shutdown(`${name}_STARTUP_ERROR`, 1);
+    }
+  };
+}
+
+httpServer
+  .listen(HTTP_PORT, () => {
     console.log(`?? HTTP Server running on http://localhost:${HTTP_PORT}`);
     console.log(`?? API available at http://localhost:${HTTP_PORT}/api`);
-  });
-} catch (err) {
-  console.error('Startup migration failed:', err);
-}
+  })
+  .on('error', handleListenError('HTTP', HTTP_PORT));
 
 let httpsOptions = null;
 const LETSENCRYPT_KEY = '/etc/letsencrypt/live/workalong.co.uk/privkey.pem';
@@ -164,16 +182,7 @@ try {
         console.log(`??  Using port ${HTTPS_DEV_PORT} for development. Use sudo for port 443.`);
       }
     })
-    .on('error', (err) => {
-      if (err.code === 'EACCES') {
-        console.log(`??  Cannot bind to port ${HTTPS_DEV_PORT} (requires sudo/admin)`);
-        console.log(`?? Run with: sudo NODE_ENV=production node index.js`);
-      } else if (err.code === 'EADDRINUSE') {
-        console.log(`??  Port ${HTTPS_DEV_PORT} is already in use`);
-      } else {
-        console.error('? HTTPS server error:', err.message);
-      }
-    });
+    .on('error', handleListenError('HTTPS', HTTPS_DEV_PORT, true));
 } catch (err) {
   console.log('??  HTTPS certificates not found. Running HTTP only.');
   console.log(
@@ -182,10 +191,15 @@ try {
   console.log('?? For development: cd workalong-backend && ./docker/scripts/generate-cert.sh');
 }
 
-async function shutdown(signal) {
+async function shutdown(signal, exitCode = 0, { skipExit = false } = {}) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`\nReceived ${signal}. Shutting down servers...`);
+
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+    cleanupInterval = null;
+  }
 
   const closeServer = (server, name) =>
     new Promise((resolve) => {
@@ -208,8 +222,14 @@ async function shutdown(signal) {
     console.error('DB pool shutdown error:', err.message || err);
   }
 
-  process.exit(0);
+  if (!skipExit) {
+    process.exit(exitCode);
+  }
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGUSR2', async () => {
+  await shutdown('SIGUSR2', 0, { skipExit: true });
+  process.kill(process.pid, 'SIGUSR2');
+});

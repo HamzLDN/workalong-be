@@ -1,6 +1,17 @@
 import crypto from 'crypto';
 import { getSession } from '../services/auth.js';
 import { logSecurityEvent } from '../lib/api-security.js';
+import {
+  TRANSPORT_CLIENT_ACTIVE_HEADER,
+  TRANSPORT_CLIENT_ACTIVE_VALUE,
+} from '../lib/transportClientHeader.js';
+
+export { TRANSPORT_CLIENT_ACTIVE_HEADER, TRANSPORT_CLIENT_ACTIVE_VALUE };
+
+function isClientTransportActive(req) {
+  const h = req.headers;
+  return h[TRANSPORT_CLIENT_ACTIVE_HEADER] === TRANSPORT_CLIENT_ACTIVE_VALUE;
+}
 
 function generateObfuscationKey(sessionId) {
   if (!sessionId) {
@@ -127,15 +138,9 @@ const PUBLIC_ENDPOINTS = [
   '/api/payment/config',
   '/payment/verify-session',
   '/api/payment/verify-session',
-  // Kiosk clocking flow (link-token + device-fingerprint based)
+  // Kiosk clocking flow (link-token + device-fingerprint based; no session)
   '/clockin/clock-action',
   '/api/clockin/clock-action',
-  '/clockin/face/enroll',
-  '/api/clockin/face/enroll',
-  '/clockin/face/verify',
-  '/api/clockin/face/verify',
-  '/clockin/face/identify',
-  '/api/clockin/face/identify',
 ];
 
 const PUBLIC_ENDPOINT_PREFIXES = [
@@ -189,7 +194,7 @@ function hasRequestBody(req) {
 
 export async function verifyObfuscatedRequest(req, res, next) {
   try {
-    const obfuscationEnabled = req.headers['x-obfuscation-enabled'] === 'true';
+    const transportActive = isClientTransportActive(req);
     const isPublic = isPublicEndpoint(req.path);
 
     // Public endpoints don't require obfuscation
@@ -197,8 +202,8 @@ export async function verifyObfuscatedRequest(req, res, next) {
       return next();
     }
 
-    // All non-public endpoints require obfuscation (including GET like /activities, /staff)
-    if (!obfuscationEnabled) {
+    // All non-public endpoints require signed transport + XOR body when applicable
+    if (!transportActive) {
       await logSecurityEvent('obfuscation_required', {
         ipAddress: req.ip,
         endpoint: req.path,
@@ -211,9 +216,8 @@ export async function verifyObfuscatedRequest(req, res, next) {
         severity: 'warning',
       });
       return res.status(400).json({
-        error: 'Obfuscation required',
-        message:
-          'All requests to this endpoint must use obfuscation. Include X-Obfuscation-Enabled: true header.',
+        error: 'Client protocol required',
+        message: 'This endpoint must be called from a supported client.',
       });
     }
 
@@ -408,14 +412,14 @@ export function obfuscateResponse(req, res, next) {
   // Always obfuscate responses for authenticated endpoints with data
   const isPublic = isPublicEndpoint(req.path);
   const hasData = hasRequestBody(req);
-  const obfuscationRequested = req.headers['x-obfuscation-enabled'] === 'true';
+  const transportRequested = isClientTransportActive(req);
 
   // Obfuscate if:
   // 1. Request was obfuscated (req.obfuscation exists)
   // 2. OR it's an authenticated endpoint with data (not public)
   const shouldObfuscate =
     (req.obfuscation && req.obfuscation.enabled) ||
-    (obfuscationRequested && !isPublic && hasData) ||
+    (transportRequested && !isPublic && hasData) ||
     (!isPublic && hasData && (req.userId || req.staffId));
 
   if (!shouldObfuscate) {

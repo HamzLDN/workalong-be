@@ -61,6 +61,11 @@ const ADDITIVE_MIGRATIONS = [
     file: 'add-staff-face-profiles.sql',
     dir: SCHEMA_DIR,
   },
+  {
+    name: 'staff.lastname (full name on kiosk)',
+    file: 'add_staff_lastname.sql',
+    dir: SCHEMA_DIR,
+  },
 ];
 
 function splitSqlStatements(sql) {

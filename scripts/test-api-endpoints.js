@@ -3,6 +3,10 @@ import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { execSync } from 'child_process';
 import { pool } from '../lib/db.js';
+import {
+  TRANSPORT_CLIENT_ACTIVE_HEADER,
+  TRANSPORT_CLIENT_ACTIVE_VALUE,
+} from '../lib/transportClientHeader.js';
 
 dotenv.config();
 
@@ -114,7 +118,6 @@ function generateDeviceFingerprint() {
 
 // Make obfuscated request using clock-link auth (X-Link-Token + X-Device-Fingerprint)
 // Matches frontend: uses clocklink:token:fp as obfuscation key, same body/headers as clockin API
-// OBFUSCATED clock-link request (X-Obfuscation-Enabled + signed body)
 async function makeClockLinkRequest(endpoint, body, method, linkToken, deviceFingerprint) {
   const clocklinkSessionId = `clocklink:${linkToken}:${deviceFingerprint}`;
   const timestamp = Date.now();
@@ -165,7 +168,7 @@ async function makeClockLinkRequest(endpoint, body, method, linkToken, deviceFin
 
   const url = `${API_BASE_URL}${endpoint}`;
   const headers = {
-    'X-Obfuscation-Enabled': 'true',
+    [TRANSPORT_CLIENT_ACTIVE_HEADER]: TRANSPORT_CLIENT_ACTIVE_VALUE,
     'X-Request-Timestamp': timestamp.toString(),
     'X-Request-Nonce': nonce,
     'X-Request-Signature': signature,
@@ -225,45 +228,6 @@ async function makeClockLinkRequest(endpoint, body, method, linkToken, deviceFin
       status: 0,
       ok: false,
       error: error.message,
-    };
-  }
-}
-
-/**
- * Plain JSON POST to kiosk Face ID routes (matches frontend clockin API with skipObfuscation).
- * Sends X-Device-Fingerprint and optional X-Link-Token headers.
- */
-async function makePlainClockinPost(endpoint, body, deviceFingerprint) {
-  const url = `${API_BASE_URL}${endpoint}`;
-  const headers = {
-    'Content-Type': 'application/json',
-    'X-Device-Fingerprint': deviceFingerprint,
-  };
-  if (body?.linkToken) {
-    headers['X-Link-Token'] = body.linkToken;
-  }
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body || {}),
-    });
-    let data = {};
-    try {
-      data = await response.json();
-    } catch (_) {
-      data = {};
-    }
-    return {
-      status: response.status,
-      ok: response.ok,
-      data,
-    };
-  } catch (error) {
-    return {
-      status: 0,
-      ok: false,
-      data: { error: error.message },
     };
   }
 }
@@ -448,7 +412,7 @@ function generateRequestSignature(method, url, body, sessionId, timestamp, nonce
   return Math.abs(finalHash).toString(36);
 }
 
-// OBFUSCATED request helper (X-Obfuscation-Enabled, signed, XOR-encoded body)
+// OBFUSCATED request helper (signed, XOR-encoded body)
 // Used for all authenticated, obfuscated endpoints (staff, shifts, budgets, fraud, etc.).
 async function makeObfuscatedRequest(endpoint, body, method = 'POST') {
   if (!sessionId) {
@@ -518,7 +482,7 @@ async function makeObfuscatedRequest(endpoint, body, method = 'POST') {
 
   const url = `${API_BASE_URL}${endpoint}`;
   const headers = {
-    'X-Obfuscation-Enabled': 'true',
+    [TRANSPORT_CLIENT_ACTIVE_HEADER]: TRANSPORT_CLIENT_ACTIVE_VALUE,
     'X-Request-Timestamp': timestamp.toString(),
     'X-Request-Nonce': nonce,
     'X-Request-Signature': signature,
@@ -1874,34 +1838,87 @@ async function testGetAuditLogs() {
 }
 
 // ============================================
-// FACE ID (kiosk — plain JSON, public clockin paths)
+// FACE ID (kiosk — obfuscated POST, same as frontend)
 // ============================================
 
 async function testFaceIdKioskValidation() {
-  console.log('\n=== Testing Face ID kiosk endpoints (validation, plain JSON) ===');
+  console.log('\n=== Testing Face ID kiosk endpoints (validation, obfuscated) ===');
   const fp = 'test-fp-face-validation';
   const hash64 = 'a'.repeat(64);
+  const dummyTok = 'dummy-face-validation-token';
 
-  const enroll = await makePlainClockinPost('/clockin/face/enroll', {}, fp);
+  const enroll = await makeClockLinkRequest('/clockin/face/enroll', {}, 'POST', dummyTok, fp);
   const enrollOk = enroll.status === 400;
   console.log(`  Face enroll (missing body):`);
   assertResult('status 400', { status: 400 }, { status: enroll.status }, enrollOk);
 
-  const verify = await makePlainClockinPost(
+  const verify = await makeClockLinkRequest(
     '/clockin/face/verify',
     { linkToken: 'dummy', faceHash: hash64 },
+    'POST',
+    'dummy',
     fp
   );
   const verifyOk = verify.status === 400;
   console.log(`  Face verify (missing clockinId):`);
   assertResult('status 400', { status: 400 }, { status: verify.status }, verifyOk);
 
-  const identify = await makePlainClockinPost('/clockin/face/identify', { linkToken: 'dummy' }, fp);
+  const identify = await makeClockLinkRequest(
+    '/clockin/face/identify',
+    { linkToken: 'dummy' },
+    'POST',
+    'dummy',
+    fp
+  );
   const identifyOk = identify.status === 400;
   console.log(`  Face identify (missing faceHash):`);
   assertResult('status 400', { status: 400 }, { status: identify.status }, identifyOk);
 
-  return enrollOk && verifyOk && identifyOk;
+  const badTok = `bad${'0'.repeat(60)}`;
+  const badEnroll = await makeClockLinkRequest(
+    '/clockin/face/enroll',
+    {
+      clockinId: '123456',
+      linkToken: badTok,
+      deviceFingerprint: fp,
+      faceHash: hash64,
+    },
+    'POST',
+    badTok,
+    fp
+  );
+  const badEnrollOk = badEnroll.status === 404;
+  console.log(`  Face enroll (invalid link token → 404):`);
+  assertResult('status 404', { status: 404 }, { status: badEnroll.status }, badEnrollOk);
+
+  const badVerify = await makeClockLinkRequest(
+    '/clockin/face/verify',
+    {
+      clockinId: '123456',
+      linkToken: badTok,
+      deviceFingerprint: fp,
+      faceHash: hash64,
+    },
+    'POST',
+    badTok,
+    fp
+  );
+  const badVerifyOk = badVerify.status === 404;
+  console.log(`  Face verify (invalid link token → 404):`);
+  assertResult('status 404', { status: 404 }, { status: badVerify.status }, badVerifyOk);
+
+  const badIdentify = await makeClockLinkRequest(
+    '/clockin/face/identify',
+    { linkToken: badTok, deviceFingerprint: fp, faceHash: hash64 },
+    'POST',
+    badTok,
+    fp
+  );
+  const badIdentifyOk = badIdentify.status === 404;
+  console.log(`  Face identify (invalid link token → 404):`);
+  assertResult('status 404', { status: 404 }, { status: badIdentify.status }, badIdentifyOk);
+
+  return enrollOk && verifyOk && identifyOk && badEnrollOk && badVerifyOk && badIdentifyOk;
 }
 
 /** Enroll → verify → identify with the same synthetic face hash (after clock link + staff exist). */
@@ -1940,9 +1957,11 @@ async function testFaceIdKioskFlow() {
     deviceFingerprint: clockinDeviceFingerprint,
     faceHash,
   };
-  const enroll = await makePlainClockinPost(
+  const enroll = await makeClockLinkRequest(
     '/clockin/face/enroll',
     enrollBody,
+    'POST',
+    clockinLinkToken,
     clockinDeviceFingerprint
   );
   console.log(`  Face enroll:`);
@@ -1961,9 +1980,11 @@ async function testFaceIdKioskFlow() {
     deviceFingerprint: clockinDeviceFingerprint,
     faceHash,
   };
-  const verify = await makePlainClockinPost(
+  const verify = await makeClockLinkRequest(
     '/clockin/face/verify',
     verifyBody,
+    'POST',
+    clockinLinkToken,
     clockinDeviceFingerprint
   );
   console.log(`  Face verify:`);
@@ -1974,31 +1995,89 @@ async function testFaceIdKioskFlow() {
     { ok: verify.ok, verified: verify.data?.verified, error: verify.data?.error },
     verifyOk
   );
+  if (!verifyOk) return false;
+
+  // Multi-sample enrollment (same as frontend enrollFace([hash1, hash2, ...]))
+  const samp1 = crypto.randomBytes(32).toString('hex');
+  const samp2 = crypto.randomBytes(32).toString('hex');
+  const enrollMulti = await makeClockLinkRequest(
+    '/clockin/face/enroll',
+    {
+      clockinId: code,
+      linkToken: clockinLinkToken,
+      deviceFingerprint: clockinDeviceFingerprint,
+      faceHashes: [samp1, samp2],
+    },
+    'POST',
+    clockinLinkToken,
+    clockinDeviceFingerprint
+  );
+  console.log(`  Face enroll (faceHashes array):`);
+  const enrollMultiOk = enrollMulti.ok && enrollMulti.data?.success === true;
+  assertResult(
+    'enroll faceHashes',
+    { ok: true, success: true },
+    { ok: enrollMulti.ok, success: enrollMulti.data?.success, error: enrollMulti.data?.error },
+    enrollMultiOk
+  );
+  if (!enrollMultiOk) return false;
+
+  const verifyAfterMulti = await makeClockLinkRequest(
+    '/clockin/face/verify',
+    {
+      clockinId: code,
+      linkToken: clockinLinkToken,
+      deviceFingerprint: clockinDeviceFingerprint,
+      faceHash: samp1,
+    },
+    'POST',
+    clockinLinkToken,
+    clockinDeviceFingerprint
+  );
+  console.log(`  Face verify (after faceHashes enroll):`);
+  const verifyAfterMultiOk = verifyAfterMulti.ok && verifyAfterMulti.data?.verified === true;
+  assertResult(
+    'verify after multi-sample',
+    { ok: true, verified: true },
+    {
+      ok: verifyAfterMulti.ok,
+      verified: verifyAfterMulti.data?.verified,
+      error: verifyAfterMulti.data?.error,
+    },
+    verifyAfterMultiOk
+  );
+  if (!verifyAfterMultiOk) return false;
 
   const identifyBody = {
     linkToken: clockinLinkToken,
     deviceFingerprint: clockinDeviceFingerprint,
-    faceHash,
+    faceHash: samp1,
   };
-  const identify = await makePlainClockinPost(
+  const identify = await makeClockLinkRequest(
     '/clockin/face/identify',
     identifyBody,
+    'POST',
+    clockinLinkToken,
     clockinDeviceFingerprint
   );
   console.log(`  Face identify:`);
   const identifyOk = identify.ok && identify.data?.identified === true;
   assertResult(
     'identify matched',
-    { ok: true, identified: true, staffId: staffId },
+    { ok: true, identified: true, clockinCode: code },
     {
       ok: identify.ok,
       identified: identify.data?.identified,
-      staffId: identify.data?.staffId,
+      clockinCode: identify.data?.clockinCode,
+      clockinId: identify.data?.clockinId,
     },
-    identifyOk && identify.data?.staffId === staffId
+    identifyOk &&
+      identify.data?.clockinCode === code &&
+      identify.data?.clockinId === code &&
+      identify.data?.staffId === undefined
   );
 
-  return enrollOk && verifyOk && identifyOk;
+  return enrollOk && verifyOk && enrollMultiOk && verifyAfterMultiOk && identifyOk;
 }
 
 // ============================================
@@ -2154,7 +2233,7 @@ async function testClockInFlowWithStaff() {
 
   // 6b. Face enrollment (clock-action requires a verified face hash when Face ID is enabled)
   const faceHash = crypto.randomBytes(32).toString('hex');
-  const enrollFace = await makePlainClockinPost(
+  const enrollFace = await makeClockLinkRequest(
     '/clockin/face/enroll',
     {
       clockinId: codeToUse,
@@ -2162,6 +2241,8 @@ async function testClockInFlowWithStaff() {
       deviceFingerprint: clockinDeviceFingerprint,
       faceHash,
     },
+    'POST',
+    clockinLinkToken,
     clockinDeviceFingerprint
   );
   if (!enrollFace.ok || enrollFace.data?.success !== true) {
@@ -2757,7 +2838,7 @@ async function runAllTests() {
 
     const faceIdFlowOk = await testFaceIdKioskFlow();
     results.tests.push({
-      name: 'Face ID kiosk (enroll → verify → identify)',
+      name: 'Face ID kiosk (enroll → verify → faceHashes → verify → identify)',
       passed: faceIdFlowOk,
     });
     if (faceIdFlowOk) results.passed++;
