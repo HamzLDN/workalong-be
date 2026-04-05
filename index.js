@@ -17,8 +17,29 @@ import {
 } from './middleware/security.js';
 import { verifyObfuscatedRequest, obfuscateResponse } from './middleware/obfuscation.js';
 import { registerRoutes } from './routes/index.js';
+import { createProxyMiddleware } from 'http-proxy-middleware';
 
 const app = express();
+
+/** When NODE_ENV=dev, forward support chat + Socket.IO to admin-panel-api (default :5055) so direct API hits work. */
+const adminPanelTarget =
+  process.env.ADMIN_PANEL_API_URL || process.env.SUPPORT_CHAT_UPSTREAM || 'http://127.0.0.1:5055';
+let adminSocketIoProxy = null;
+if (process.env.NODE_ENV === 'dev' && process.env.ADMIN_PANEL_PROXY !== 'false') {
+  adminSocketIoProxy = createProxyMiddleware({
+    target: adminPanelTarget,
+    changeOrigin: true,
+    ws: true,
+  });
+  app.use(
+    '/api/support',
+    createProxyMiddleware({
+      target: adminPanelTarget,
+      changeOrigin: true,
+    })
+  );
+  app.use('/socket.io', adminSocketIoProxy);
+}
 let httpsServer = null;
 let shuttingDown = false;
 let cleanupInterval = null;
@@ -120,6 +141,17 @@ const HTTPS_PORT = 443;
 
 const httpServer = http.createServer(app);
 
+function attachAdminPanelSocketUpgrade(server) {
+  if (!adminSocketIoProxy || !server) return;
+  server.on('upgrade', (req, socket, head) => {
+    if (req.url?.startsWith('/socket.io')) {
+      adminSocketIoProxy.upgrade(req, socket, head);
+    }
+  });
+}
+
+attachAdminPanelSocketUpgrade(httpServer);
+
 function handleListenError(name, port) {
   return (err) => {
     if (err.code === 'EACCES') {
@@ -176,6 +208,7 @@ try {
   }
 
   httpsServer = https.createServer(httpsOptions, app);
+  attachAdminPanelSocketUpgrade(httpsServer);
 
   const HTTPS_DEV_PORT =
     process.env.NODE_ENV === 'production' || process.env.DOCKER === 'true' ? HTTPS_PORT : 3443;
