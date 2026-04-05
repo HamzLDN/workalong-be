@@ -8,6 +8,11 @@ import {
 
 export { TRANSPORT_CLIENT_ACTIVE_HEADER, TRANSPORT_CLIENT_ACTIVE_VALUE };
 
+/** When NODE_ENV=dev and DISABLE_OBFUSCATION=true (see npm run dev), skip XOR + signed transport for easier debugging. */
+function isDevPlainApi() {
+  return process.env.NODE_ENV === 'dev' && process.env.DISABLE_OBFUSCATION === 'true';
+}
+
 function isClientTransportActive(req) {
   const h = req.headers;
   return h[TRANSPORT_CLIENT_ACTIVE_HEADER] === TRANSPORT_CLIENT_ACTIVE_VALUE;
@@ -195,6 +200,10 @@ function hasRequestBody(req) {
 
 export async function verifyObfuscatedRequest(req, res, next) {
   try {
+    if (isDevPlainApi()) {
+      return next();
+    }
+
     const transportActive = isClientTransportActive(req);
     const pathFromUrl = req.originalUrl ? req.originalUrl.split('?')[0] : '';
     const isPublic = isPublicEndpoint(req.path) || (pathFromUrl && isPublicEndpoint(pathFromUrl));
@@ -411,6 +420,10 @@ export async function verifyObfuscatedRequest(req, res, next) {
 }
 
 export function obfuscateResponse(req, res, next) {
+  if (isDevPlainApi()) {
+    return next();
+  }
+
   // Always obfuscate responses for authenticated endpoints with data
   const isPublic = isPublicEndpoint(req.path);
   const hasData = hasRequestBody(req);
