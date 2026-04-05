@@ -148,20 +148,13 @@ const PUBLIC_ENDPOINT_PREFIXES = [
   '/api/clockin/verify-link/',
   '/clockin/status/',
   '/api/clockin/status/',
-  // Face ID (large JSON bodies; client uses skipObfuscation + link token headers)
-  '/clockin/face/',
-  '/api/clockin/face/',
 ];
 
-/** Exported for tests — kiosk Face ID must stay public (plain JSON + link token). */
+/** Exported for tests — public routes skip transport/signature (see verifyObfuscatedRequest). */
 export function isPublicEndpoint(path) {
   if (!path) return false;
   // Remove query string
   const cleanPath = path.split('?')[0];
-  // Any proxy/gateway prefix: .../clockin/face/... must bypass obfuscation (substring match).
-  if (cleanPath.includes('/clockin/face/')) {
-    return true;
-  }
   // Normalize path - handle both /api/activities and /activities
   let normalized = cleanPath;
   if (!normalized.startsWith('/')) {
