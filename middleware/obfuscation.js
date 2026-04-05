@@ -197,8 +197,7 @@ export async function verifyObfuscatedRequest(req, res, next) {
   try {
     const transportActive = isClientTransportActive(req);
     const pathFromUrl = req.originalUrl ? req.originalUrl.split('?')[0] : '';
-    const isPublic =
-      isPublicEndpoint(req.path) || (pathFromUrl && isPublicEndpoint(pathFromUrl));
+    const isPublic = isPublicEndpoint(req.path) || (pathFromUrl && isPublicEndpoint(pathFromUrl));
 
     // Public endpoints don't require obfuscation
     if (isPublic) {
