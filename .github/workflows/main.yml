@@ -417,6 +417,7 @@ jobs:
             --env-file .env \
             -e NODE_ENV=production \
             -e DOCKER=true \
+            -e PORT=8080 \
             -e DB_HOST=workalong-postgres \
             -e DB_PORT=5432 \
             -v /root/workalong-frontend/certs:/app/certs:ro \
