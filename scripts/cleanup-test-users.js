@@ -37,7 +37,8 @@ function parseArgs(argv) {
 
 function createPool(dbOverrides) {
   const user = dbOverrides.user || process.env.DB_USER;
-  const password = dbOverrides.password !== undefined ? dbOverrides.password : process.env.DB_PASSWORD;
+  const password =
+    dbOverrides.password !== undefined ? dbOverrides.password : process.env.DB_PASSWORD;
   const host = dbOverrides.host || process.env.DB_HOST;
   const port = parseInt(dbOverrides.port || process.env.DB_PORT || '5432', 10);
   const database = dbOverrides.database || process.env.DB_NAME;
@@ -55,8 +56,7 @@ const MATCH_STRICT = `(
   )
 )`;
 
-const MATCH_LOOSE =
-  "LOWER(email) LIKE '%test%' OR LOWER(COALESCE(name, '')) LIKE '%test%'";
+const MATCH_LOOSE = "LOWER(email) LIKE '%test%' OR LOWER(COALESCE(name, '')) LIKE '%test%'";
 
 async function main() {
   const { flags, db: dbOverrides } = parseArgs(process.argv);
@@ -78,15 +78,21 @@ async function main() {
     `SELECT id, email, name, created_at FROM users WHERE ${match} ORDER BY id`
   );
 
-  const mode = loose ? 'LOOSE: email or name contains "test" anywhere' : 'STRICT: @example.com and "test" in email or name';
+  const mode = loose
+    ? 'LOOSE: email or name contains "test" anywhere'
+    : 'STRICT: @example.com and "test" in email or name';
   console.log(`Mode: ${mode}`);
   console.log(`Found ${preview.rows.length} user(s):\n`);
   for (const row of preview.rows) {
-    console.log(`  id=${row.id}  email=${row.email}  name=${row.name || '—'}  created_at=${row.created_at}`);
+    console.log(
+      `  id=${row.id}  email=${row.email}  name=${row.name || '—'}  created_at=${row.created_at}`
+    );
   }
 
   if (!execute) {
-    console.log('\nDry-run only. Re-run with --execute to delete. Add --loose to match any email/name containing "test".');
+    console.log(
+      '\nDry-run only. Re-run with --execute to delete. Add --loose to match any email/name containing "test".'
+    );
     await pool.end();
     return;
   }
@@ -117,9 +123,7 @@ async function main() {
       );
     }
 
-    const del = await client.query(
-      `DELETE FROM users WHERE ${match} RETURNING id, email`
-    );
+    const del = await client.query(`DELETE FROM users WHERE ${match} RETURNING id, email`);
 
     await client.query('COMMIT');
     console.log(`\nDeleted ${del.rowCount} user(s).`);
