@@ -21,11 +21,22 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 
 const app = express();
 
-/** When NODE_ENV=dev, forward support chat + Socket.IO to admin-panel-api (default :5055) so direct API hits work. */
+/**
+ * Forward support chat + Socket.IO to admin-panel-api.
+ * - Dev: default target http://127.0.0.1:5055 (unless ADMIN_PANEL_PROXY=false).
+ * - Prod Docker: set ADMIN_PANEL_API_URL=http://admin-panel-api:5055 so nginx can send all /api to
+ *   this backend and we still reach the admin service (avoids relying on nginx splitting /api/support).
+ */
 const adminPanelTarget =
   process.env.ADMIN_PANEL_API_URL || process.env.SUPPORT_CHAT_UPSTREAM || 'http://127.0.0.1:5055';
+const useAdminPanelProxy =
+  process.env.ADMIN_PANEL_PROXY !== 'false' &&
+  (process.env.NODE_ENV === 'dev' ||
+    process.env.ADMIN_PANEL_API_URL ||
+    process.env.SUPPORT_CHAT_UPSTREAM);
+
 let adminSocketIoProxy = null;
-if (process.env.NODE_ENV === 'dev' && process.env.ADMIN_PANEL_PROXY !== 'false') {
+if (useAdminPanelProxy) {
   adminSocketIoProxy = createProxyMiddleware({
     target: adminPanelTarget,
     changeOrigin: true,
@@ -39,6 +50,9 @@ if (process.env.NODE_ENV === 'dev' && process.env.ADMIN_PANEL_PROXY !== 'false')
     })
   );
   app.use('/socket.io', adminSocketIoProxy);
+  if (process.env.NODE_ENV === 'production' || process.env.DOCKER === 'true') {
+    console.log(`[proxy] Admin panel API: ${adminPanelTarget} (/api/support, /socket.io)`);
+  }
 }
 let httpsServer = null;
 let shuttingDown = false;

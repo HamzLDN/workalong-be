@@ -22,4 +22,8 @@ describe('isPublicEndpoint', () => {
   it('treats admin support-chat API paths as public (real handler is on admin-panel-api)', () => {
     expect(isPublicEndpoint('/api/support/chat/messages')).toBe(true);
   });
+
+  it('treats /support/... (nginx alias to admin) as public when misrouted to this backend', () => {
+    expect(isPublicEndpoint('/support/chat/messages')).toBe(true);
+  });
 });
