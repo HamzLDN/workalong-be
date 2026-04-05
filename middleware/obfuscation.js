@@ -153,6 +153,9 @@ const PUBLIC_ENDPOINT_PREFIXES = [
   '/api/clockin/verify-link/',
   '/clockin/status/',
   '/api/clockin/status/',
+  // Support chat is served by admin-panel-api (port 5055). If a request hits this backend by mistake,
+  // skip obfuscation so the request fails with a normal 404 instead of "transport required".
+  '/api/support',
 ];
 
 /** Exported for tests — public routes skip transport/signature (see verifyObfuscatedRequest). */

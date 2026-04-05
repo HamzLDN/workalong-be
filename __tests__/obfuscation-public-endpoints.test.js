@@ -18,4 +18,8 @@ describe('isPublicEndpoint', () => {
   it('does not mark arbitrary clockin paths as public', () => {
     expect(isPublicEndpoint('/api/clockin/evil-face-hack')).toBe(false);
   });
+
+  it('treats admin support-chat API paths as public (real handler is on admin-panel-api)', () => {
+    expect(isPublicEndpoint('/api/support/chat/messages')).toBe(true);
+  });
 });

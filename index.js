@@ -72,9 +72,19 @@ app.use(
 
       if (allowedOrigins.indexOf(origin) !== -1) {
         callback(null, true);
-      } else {
-        callback(new Error('Not allowed by CORS'));
+        return;
       }
+
+      const adminOrigins = (process.env.ADMIN_PANEL_ORIGINS || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (adminOrigins.length && adminOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
   })

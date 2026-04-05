@@ -41,6 +41,40 @@ services:
       - ../workalong-frontend/dist:/usr/share/nginx/html:ro
     depends_on:
       - backend
+      - admin-panel-api
+    networks:
+      - workalong-network
+
+  # Admin panel API (support chat, Socket.IO, /api/admin) — same DB as backend
+  admin-panel-api:
+    build:
+      context: ../admin_panel
+      dockerfile: Dockerfile.api
+    container_name: admin-panel-api
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - ADMIN_SERVER_PORT=5055
+      - ADMIN_SERVER_BIND=0.0.0.0
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=workalong
+      - DB_PASSWORD=admin
+      - DB_NAME=users
+      - ADMIN_PANEL_ORIGINS=https://workalong.co.uk,https://www.workalong.co.uk,https://api.workalong.co.uk
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          "node -e \"fetch('http://127.0.0.1:5055/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
     networks:
       - workalong-network
 
