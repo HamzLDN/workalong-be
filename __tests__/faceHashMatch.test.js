@@ -283,6 +283,37 @@ describe('faceHashMatch', () => {
         clockinCode: '111111',
       });
     });
+
+    it('still picks a winner when 1st/2nd are far enough apart (gap ≥ kiosk minimum)', () => {
+      const L = 256;
+      const P = '0'.repeat(L);
+      const H1 = '1'.repeat(12) + '0'.repeat(L - 12);
+      const H2 = '1'.repeat(22) + '0'.repeat(L - 22);
+      const rows = [
+        { staff_id: 1, face_hashes: [H1], staff_name: 'A', clockin_id: '111111' },
+        { staff_id: 2, face_hashes: [H2], staff_name: 'B', clockin_id: '222222' },
+      ];
+      const r = findBestFaceMatchAmongStaff(P, rows);
+      expect(r).toEqual({
+        staffId: 1,
+        staffName: 'A',
+        staffFirstName: 'A',
+        staffLastName: '',
+        clockinCode: '111111',
+      });
+    });
+
+    it('returns null when 1st/2nd are close (would mis-identify if we picked)', () => {
+      const L = 256;
+      const P = '0'.repeat(L);
+      const H1 = '1'.repeat(12) + '0'.repeat(L - 12);
+      const H2 = '1'.repeat(15) + '0'.repeat(L - 15);
+      const rows = [
+        { staff_id: 1, face_hashes: [H1], staff_name: 'A', clockin_id: '111111' },
+        { staff_id: 2, face_hashes: [H2], staff_name: 'B', clockin_id: '222222' },
+      ];
+      expect(findBestFaceMatchAmongStaff(P, rows)).toBeNull();
+    });
   });
 
   describe('maxAcceptableHammingDistanceIdentify', () => {

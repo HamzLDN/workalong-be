@@ -796,7 +796,7 @@ async function testObfuscationSecurity() {
   );
 }
 
-// 4b. Face ID kiosk routes (non-public; require signed transport like other API routes)
+// 4b. Face ID kiosk routes (plain JSON like clock-action; link token validated in route)
 async function testFaceIdKioskSecurity() {
   console.log('\n========================================');
   console.log('4b. Face ID Kiosk Security');
@@ -816,10 +816,12 @@ async function testFaceIdKioskSecurity() {
   });
   const enrollMsg = `${plainEnroll.data?.error || ''} ${plainEnroll.data?.message || ''}`;
   recordTest(
-    'Face ID: enroll without transport header must be rejected (400)',
-    plainEnroll.status === 400 &&
-      (enrollMsg.includes('Client protocol') || enrollMsg.includes('supported client')),
-    `Status: ${plainEnroll.status}`
+    'Face ID: enroll without transport reaches handler (invalid link → 404, not client protocol)',
+    plainEnroll.status === 404 &&
+      enrollMsg.includes('Invalid') &&
+      !enrollMsg.includes('Client protocol') &&
+      !enrollMsg.includes('supported client'),
+    `Status: ${plainEnroll.status} ${enrollMsg}`
   );
 
   const plainVerify = await makeRequest('/clockin/face/verify', {
@@ -828,10 +830,11 @@ async function testFaceIdKioskSecurity() {
   });
   const verifyMsg = `${plainVerify.data?.error || ''} ${plainVerify.data?.message || ''}`;
   recordTest(
-    'Face ID: verify without transport header must be rejected (400)',
-    plainVerify.status === 400 &&
-      (verifyMsg.includes('Client protocol') || verifyMsg.includes('supported client')),
-    `Status: ${plainVerify.status}`
+    'Face ID: verify without transport reaches handler (invalid link → 404/403)',
+    (plainVerify.status === 404 || plainVerify.status === 403) &&
+      !verifyMsg.includes('Client protocol') &&
+      !verifyMsg.includes('supported client'),
+    `Status: ${plainVerify.status} ${verifyMsg}`
   );
 
   const plainIdentify = await makeRequest('/clockin/face/identify', {
@@ -844,10 +847,11 @@ async function testFaceIdKioskSecurity() {
   });
   const identifyMsg = `${plainIdentify.data?.error || ''} ${plainIdentify.data?.message || ''}`;
   recordTest(
-    'Face ID: identify without transport header must be rejected (400)',
-    plainIdentify.status === 400 &&
-      (identifyMsg.includes('Client protocol') || identifyMsg.includes('supported client')),
-    `Status: ${plainIdentify.status}`
+    'Face ID: identify without transport reaches handler (invalid link → 404/403)',
+    (plainIdentify.status === 404 || plainIdentify.status === 403) &&
+      !identifyMsg.includes('Client protocol') &&
+      !identifyMsg.includes('supported client'),
+    `Status: ${plainIdentify.status} ${identifyMsg}`
   );
 }
 

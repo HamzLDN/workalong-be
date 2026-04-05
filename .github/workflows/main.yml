@@ -442,4 +442,3 @@ jobs:
           echo "Health check failed after 5 attempts"
           docker logs workalong-backend --tail 50
           exit 1
-

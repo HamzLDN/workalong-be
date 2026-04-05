@@ -94,7 +94,7 @@ router.get('/shifts', async (req, res) => {
         : null);
 
     if (apiKey && apiKey.startsWith('wak_')) {
-      const { verifyApiKey } = await import('../api-security.js');
+      const { verifyApiKey } = await import('../lib/api-security.js');
       const keyData = await verifyApiKey(apiKey);
       if (keyData) {
         req.userId = keyData.user_id;

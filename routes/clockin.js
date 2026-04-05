@@ -9,6 +9,11 @@ import {
   verifyFaceHashAgainstHashes,
   formatStaffDisplayName,
 } from '../lib/faceHashMatch.js';
+import {
+  findBestEmbeddingMatchAmongStaff,
+  verifyEmbeddingAgainstStored,
+  normalizeEmbeddingArray,
+} from '../lib/faceEmbeddingMatch.js';
 
 const router = express.Router();
 const isDev = process.env.NODE_ENV !== 'production';
@@ -92,28 +97,53 @@ async function resolveStaffByClockCode(userId, rawInput) {
   return staffResult.rows[0] || null;
 }
 
-async function verifyFaceHashForStaff(staffId, userId, faceHash) {
+async function verifyFaceForStaff(staffId, userId, { faceHash, faceEmbedding }) {
   const profile = await pool.query(
-    `SELECT face_hashes FROM staff_face_profiles
+    `SELECT face_hashes, face_embeddings FROM staff_face_profiles
      WHERE staff_id = $1 AND user_id = $2 AND is_enabled = TRUE`,
     [staffId, userId]
   );
   if (profile.rows.length === 0) {
     return { ok: false, reason: 'FACE_NOT_ENROLLED' };
   }
-  return verifyFaceHashAgainstHashes(faceHash, profile.rows[0].face_hashes);
+  const row = profile.rows[0];
+  const hasEmb =
+    Array.isArray(row.face_embeddings) &&
+    row.face_embeddings.length > 0 &&
+    row.face_embeddings.some((x) => normalizeEmbeddingArray(x));
+
+  if (hasEmb) {
+    const emb = normalizeEmbeddingArray(faceEmbedding);
+    if (!emb) return { ok: false, reason: 'FACE_REQUIRED' };
+    return verifyEmbeddingAgainstStored(emb, row.face_embeddings);
+  }
+  if (faceHash && typeof faceHash === 'string' && faceHash.length >= 32) {
+    return verifyFaceHashAgainstHashes(faceHash, row.face_hashes);
+  }
+  return { ok: false, reason: 'FACE_REQUIRED' };
 }
 
-async function findBestFaceMatchForUser(userId, faceHash) {
+async function findBestFaceMatchForUser(userId, faceHash, faceEmbedding) {
   const nameCols = await sqlStaffNameColumns();
   const rows = await pool.query(
-    `SELECT sf.staff_id, sf.face_hashes, ${nameCols}, s.clockin_id, s.username
+    `SELECT sf.staff_id, sf.face_hashes, sf.face_embeddings, ${nameCols}, s.clockin_id, s.username
      FROM staff_face_profiles sf
      JOIN staff s ON s.id = sf.staff_id AND s.user_id = sf.user_id
      WHERE sf.user_id = $1 AND sf.is_enabled = TRUE AND s.status = 'active'`,
     [userId]
   );
-  return findBestFaceMatchAmongStaff(faceHash, rows.rows);
+  const emb = normalizeEmbeddingArray(faceEmbedding);
+  if (emb) {
+    const withEmb = rows.rows.filter(
+      (r) => Array.isArray(r.face_embeddings) && r.face_embeddings.length > 0
+    );
+    if (withEmb.length === 0) return null;
+    return findBestEmbeddingMatchAmongStaff(emb, withEmb);
+  }
+  if (faceHash && typeof faceHash === 'string') {
+    return findBestFaceMatchAmongStaff(faceHash, rows.rows);
+  }
+  return null;
 }
 
 router.post('/generate-link', requireAuthCompat, async (req, res) => {
@@ -229,8 +259,21 @@ router.get('/verify-link/:token', async (req, res) => {
 
 router.post('/face/enroll', async (req, res) => {
   try {
-    const { clockinId, linkToken, faceHash, faceHashes } = req.body;
+    const { clockinId, linkToken, faceHash, faceHashes, faceEmbeddings } = req.body;
     const deviceFingerprint = req.headers['x-device-fingerprint'] || req.body.deviceFingerprint;
+
+    const embeddingList = Array.isArray(faceEmbeddings) ? faceEmbeddings : [];
+    const normalizedEmb = [];
+    const seenEmb = new Set();
+    for (const e of embeddingList) {
+      const arr = normalizeEmbeddingArray(e);
+      if (!arr) continue;
+      const key = arr.map((x) => x.toFixed(6)).join(',');
+      if (!seenEmb.has(key)) {
+        seenEmb.add(key);
+        normalizedEmb.push(arr);
+      }
+    }
 
     const rawList = Array.isArray(faceHashes) ? faceHashes : faceHash != null ? [faceHash] : [];
     const normalized = rawList.map((h) => String(h ?? '').trim()).filter((h) => h.length >= 32);
@@ -244,10 +287,13 @@ router.post('/face/enroll', async (req, res) => {
       }
     }
 
-    if (!clockinId || !linkToken || !deviceFingerprint || dedupedIncoming.length === 0) {
+    const useEmbeddings = normalizedEmb.length > 0;
+    const useHashes = dedupedIncoming.length > 0;
+
+    if (!clockinId || !linkToken || !deviceFingerprint || (!useEmbeddings && !useHashes)) {
       return res.status(400).json({
         error:
-          'clockinId, linkToken, device fingerprint and at least one face hash (faceHash or faceHashes) are required',
+          'clockinId, linkToken, device fingerprint and at least one face sample (faceEmbeddings or faceHash/faceHashes) are required',
       });
     }
 
@@ -271,25 +317,46 @@ router.post('/face/enroll', async (req, res) => {
     }
 
     const existing = await pool.query(
-      `SELECT face_hashes FROM staff_face_profiles WHERE staff_id = $1 AND user_id = $2`,
+      `SELECT face_hashes, face_embeddings FROM staff_face_profiles WHERE staff_id = $1 AND user_id = $2`,
       [staff.staff_id, link.user_id]
     );
-    const hashes =
-      existing.rows.length > 0 && Array.isArray(existing.rows[0].face_hashes)
-        ? existing.rows[0].face_hashes.map((x) => String(x))
-        : [];
-    // Prefer fresh enrollment samples first (up to 5), then retain prior hashes not duplicated.
-    const cappedNew = dedupedIncoming.slice(0, 5);
-    const rest = hashes.filter((h) => !cappedNew.includes(h));
-    const next = [...cappedNew, ...rest].slice(0, 5);
 
-    await pool.query(
-      `INSERT INTO staff_face_profiles (staff_id, user_id, face_hashes, is_enabled, enrolled_at, updated_at)
-       VALUES ($1, $2, $3::jsonb, TRUE, NOW(), NOW())
-       ON CONFLICT (staff_id)
-       DO UPDATE SET face_hashes = EXCLUDED.face_hashes, is_enabled = TRUE, updated_at = NOW()`,
-      [staff.staff_id, link.user_id, JSON.stringify(next)]
-    );
+    if (useEmbeddings) {
+      const cappedNew = normalizedEmb.slice(0, 5);
+      const prior =
+        existing.rows.length > 0 && Array.isArray(existing.rows[0].face_embeddings)
+          ? existing.rows[0].face_embeddings.map((x) => normalizeEmbeddingArray(x)).filter(Boolean)
+          : [];
+      const rest = prior.filter((emb) => {
+        const key = emb.map((x) => x.toFixed(6)).join(',');
+        return !cappedNew.some((c) => c.map((x) => x.toFixed(6)).join(',') === key);
+      });
+      const nextEmb = [...cappedNew, ...rest].slice(0, 5);
+
+      await pool.query(
+        `INSERT INTO staff_face_profiles (staff_id, user_id, face_hashes, face_embeddings, is_enabled, enrolled_at, updated_at)
+         VALUES ($1, $2, $3::jsonb, $4::jsonb, TRUE, NOW(), NOW())
+         ON CONFLICT (staff_id)
+         DO UPDATE SET face_embeddings = EXCLUDED.face_embeddings, face_hashes = EXCLUDED.face_hashes, is_enabled = TRUE, updated_at = NOW()`,
+        [staff.staff_id, link.user_id, JSON.stringify([]), JSON.stringify(nextEmb)]
+      );
+    } else {
+      const hashes =
+        existing.rows.length > 0 && Array.isArray(existing.rows[0].face_hashes)
+          ? existing.rows[0].face_hashes.map((x) => String(x))
+          : [];
+      const cappedNew = dedupedIncoming.slice(0, 5);
+      const rest = hashes.filter((h) => !cappedNew.includes(h));
+      const next = [...cappedNew, ...rest].slice(0, 5);
+
+      await pool.query(
+        `INSERT INTO staff_face_profiles (staff_id, user_id, face_hashes, face_embeddings, is_enabled, enrolled_at, updated_at)
+         VALUES ($1, $2, $3::jsonb, $4::jsonb, TRUE, NOW(), NOW())
+         ON CONFLICT (staff_id)
+         DO UPDATE SET face_hashes = EXCLUDED.face_hashes, face_embeddings = EXCLUDED.face_embeddings, is_enabled = TRUE, updated_at = NOW()`,
+        [staff.staff_id, link.user_id, JSON.stringify(next), JSON.stringify([])]
+      );
+    }
     await pool.query('UPDATE device_links SET last_used_at = NOW() WHERE id = $1', [link.id]);
     res.json({ success: true, message: 'Face enrolled successfully' });
   } catch (error) {
@@ -300,12 +367,14 @@ router.post('/face/enroll', async (req, res) => {
 
 router.post('/face/verify', async (req, res) => {
   try {
-    const { clockinId, linkToken, faceHash } = req.body;
+    const { clockinId, linkToken, faceHash, faceEmbedding } = req.body;
     const deviceFingerprint = req.headers['x-device-fingerprint'] || req.body.deviceFingerprint;
-    if (!clockinId || !linkToken || !deviceFingerprint || !faceHash) {
-      return res
-        .status(400)
-        .json({ error: 'clockinId, linkToken, device fingerprint and face hash are required' });
+    const hasEmb = normalizeEmbeddingArray(faceEmbedding);
+    if (!clockinId || !linkToken || !deviceFingerprint || (!faceHash && !hasEmb)) {
+      return res.status(400).json({
+        error:
+          'clockinId, linkToken, device fingerprint and face sample (faceEmbedding or faceHash) are required',
+      });
     }
 
     const linkResult = await pool.query(
@@ -328,7 +397,10 @@ router.post('/face/verify', async (req, res) => {
         .json({ error: 'Invalid clock-in ID or staff member not found', code: 'STAFF_NOT_FOUND' });
     }
 
-    const faceVerification = await verifyFaceHashForStaff(staff.staff_id, link.user_id, faceHash);
+    const faceVerification = await verifyFaceForStaff(staff.staff_id, link.user_id, {
+      faceHash,
+      faceEmbedding,
+    });
     if (!faceVerification.ok) {
       const msg =
         faceVerification.reason === 'FACE_NOT_ENROLLED'
@@ -357,12 +429,14 @@ router.post('/face/verify', async (req, res) => {
 
 router.post('/face/identify', async (req, res) => {
   try {
-    const { linkToken, faceHash } = req.body;
+    const { linkToken, faceHash, faceEmbedding } = req.body;
     const deviceFingerprint = req.headers['x-device-fingerprint'] || req.body.deviceFingerprint;
-    if (!linkToken || !deviceFingerprint || !faceHash) {
-      return res
-        .status(400)
-        .json({ error: 'linkToken, device fingerprint and face hash are required' });
+    const hasEmb = normalizeEmbeddingArray(faceEmbedding);
+    if (!linkToken || !deviceFingerprint || (!faceHash && !hasEmb)) {
+      return res.status(400).json({
+        error:
+          'linkToken, device fingerprint and face sample (faceEmbedding or faceHash) are required',
+      });
     }
 
     const linkResult = await pool.query(
@@ -378,7 +452,7 @@ router.post('/face/identify', async (req, res) => {
         .json({ error: 'Device fingerprint mismatch', code: 'DEVICE_MISMATCH' });
     }
 
-    const match = await findBestFaceMatchForUser(link.user_id, faceHash);
+    const match = await findBestFaceMatchForUser(link.user_id, faceHash, faceEmbedding);
     await pool.query('UPDATE device_links SET last_used_at = NOW() WHERE id = $1', [link.id]);
 
     if (!match) {
@@ -403,7 +477,7 @@ router.post('/face/identify', async (req, res) => {
 
 router.post('/clock-action', async (req, res) => {
   try {
-    const { clockinId, action, linkToken, latitude, longitude, faceHash } = req.body;
+    const { clockinId, action, linkToken, latitude, longitude, faceHash, faceEmbedding } = req.body;
     const deviceFingerprint = req.headers['x-device-fingerprint'] || req.body.deviceFingerprint;
     if (!clockinId || !action || !linkToken) {
       return res
@@ -448,7 +522,10 @@ router.post('/clock-action', async (req, res) => {
     }
     const staffId = staff.staff_id;
 
-    const faceVerification = await verifyFaceHashForStaff(staffId, link.user_id, faceHash);
+    const faceVerification = await verifyFaceForStaff(staffId, link.user_id, {
+      faceHash,
+      faceEmbedding,
+    });
     if (!faceVerification.ok) {
       const msg =
         faceVerification.reason === 'FACE_NOT_ENROLLED'

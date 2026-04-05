@@ -66,6 +66,11 @@ const ADDITIVE_MIGRATIONS = [
     file: 'add_staff_lastname.sql',
     dir: SCHEMA_DIR,
   },
+  {
+    name: 'staff_face_profiles.face_embeddings (Face API descriptors)',
+    file: 'add-face-embeddings-column.sql',
+    dir: SCHEMA_DIR,
+  },
 ];
 
 function splitSqlStatements(sql) {

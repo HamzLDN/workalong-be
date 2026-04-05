@@ -148,6 +148,9 @@ const PUBLIC_ENDPOINT_PREFIXES = [
   '/api/clockin/verify-link/',
   '/clockin/status/',
   '/api/clockin/status/',
+  // Face ID (large JSON bodies; client uses skipObfuscation + link token headers)
+  '/clockin/face/',
+  '/api/clockin/face/',
 ];
 
 function isPublicEndpoint(path) {

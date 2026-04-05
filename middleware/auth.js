@@ -18,7 +18,7 @@ async function authenticateUserRequest(req, res, { requireCsrf = true } = {}) {
       : null);
 
   if (apiKey && apiKey.startsWith('wak_')) {
-    const { verifyApiKey } = await import('../api-security.js');
+    const { verifyApiKey } = await import('../lib/api-security.js');
     const keyData = await verifyApiKey(apiKey);
     if (keyData) {
       req.userId = keyData.user_id;
@@ -227,7 +227,7 @@ export async function authenticateStaffOrUser(req, res) {
   if (!sessionId && req.headers.authorization) {
     const authHeader = req.headers.authorization;
     if (authHeader.startsWith('Bearer wak_')) {
-      const { verifyApiKey } = await import('../api-security.js');
+      const { verifyApiKey } = await import('../lib/api-security.js');
       const keyData = await verifyApiKey(authHeader.replace('Bearer ', ''));
       if (keyData) {
         req.userId = keyData.user_id;
