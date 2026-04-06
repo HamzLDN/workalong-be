@@ -205,6 +205,24 @@ function hasRequestBody(req) {
 export async function verifyObfuscatedRequest(req, res, next) {
   try {
     if (isDevPlainApi()) {
+      // Skip signature/timestamp validation in dev, but still decode the body when the frontend
+      // sent it in obfuscated format — otherwise req.body is the {data,format} wrapper and route
+      // handlers can't find staffId, shiftDate etc.
+      if (req.body && req.body.format === 'information' && req.body.hasOwnProperty('data')) {
+        let devSessionId = req.cookies?.sessionId;
+        if (!devSessionId && req.headers.authorization?.startsWith('Bearer ')) {
+          devSessionId = req.headers.authorization.replace('Bearer ', '').trim();
+        }
+        if (devSessionId && devSessionId !== 'undefined' && devSessionId !== 'null') {
+          try {
+            const devKey = generateObfuscationKey(devSessionId);
+            req.body =
+              req.body.data === '' ? {} : JSON.parse(deobfuscateData(req.body.data, devKey));
+          } catch (_) {
+            // If deobfuscation fails in dev, leave body as-is so the route returns a useful error
+          }
+        }
+      }
       return next();
     }
 

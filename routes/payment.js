@@ -130,6 +130,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
       handleSubscriptionSuccess,
       handleSubscriptionCanceled,
       handleSubscriptionUpdated,
+      handleInvoicePaymentSucceeded,
     } = await import('../services/stripe.js');
     const event = verifyWebhookSignature(req.body, signature);
     switch (event.type) {
@@ -141,6 +142,9 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
         break;
       case 'customer.subscription.updated':
         await handleSubscriptionUpdated(event.data.object);
+        break;
+      case 'invoice.payment_succeeded':
+        await handleInvoicePaymentSucceeded(event.data.object);
         break;
       default:
         break;
@@ -208,6 +212,26 @@ router.get('/verify-subscription', requireAuth, async (req, res) => {
   } catch (error) {
     console.error('Verify subscription error:', error);
     res.status(500).json({ error: 'Failed to verify subscription' });
+  }
+});
+
+// Force re-sync subscription status from Stripe — fixes cases where DB is out of sync
+router.post('/sync-subscription', requireAuth, async (req, res) => {
+  try {
+    const { verifySubscriptionStatus } = await import('../services/stripe.js');
+    const result = await verifySubscriptionStatus(req.userId);
+    res.json({
+      synced: true,
+      isActive: result.isActive,
+      status: result.status,
+      subscriptionPlan: result.subscriptionPlan,
+      message: result.isActive
+        ? 'Subscription is active and has been synced.'
+        : 'Subscription is not active.',
+    });
+  } catch (error) {
+    console.error('Sync subscription error:', error);
+    res.status(500).json({ error: 'Failed to sync subscription' });
   }
 });
 

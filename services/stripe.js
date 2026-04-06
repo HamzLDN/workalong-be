@@ -536,10 +536,11 @@ export async function handleSubscriptionUpdated(subscription) {
     if (result.rows.length === 0) return;
 
     const userId = result.rows[0].id;
-    const isCanceledOrScheduled =
-      subscription.status === 'canceled' || subscription.cancel_at_period_end === true;
+
+    // cancel_at_period_end=true means the user requested cancellation but is STILL ACTIVE until
+    // current_period_end. Only 'canceled', 'unpaid', or 'past_due' mean the user has lost access.
     const dbStatus =
-      isCanceledOrScheduled ||
+      subscription.status === 'canceled' ||
       subscription.status === 'unpaid' ||
       subscription.status === 'past_due'
         ? 'expired'
@@ -607,6 +608,55 @@ export async function handleSubscriptionUpdated(subscription) {
   } catch (error) {
     console.error('Error syncing subscription update:', error);
     throw error;
+  }
+}
+
+/**
+ * Handle invoice payment succeeded (fires on every renewal + initial payment)
+ * Keeps subscription_end_date and subscription_status up to date after each billing cycle.
+ */
+export async function handleInvoicePaymentSucceeded(invoice) {
+  try {
+    const subscriptionId =
+      typeof invoice.subscription === 'string' ? invoice.subscription : invoice.subscription?.id;
+    if (!subscriptionId) return;
+
+    const result = await pool.query('SELECT id FROM users WHERE stripe_subscription_id = $1', [
+      subscriptionId,
+    ]);
+    if (result.rows.length === 0) return;
+
+    const userId = result.rows[0].id;
+
+    // Retrieve the subscription to get the updated period end
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+    const periodEnd = subscription.current_period_end
+      ? new Date(subscription.current_period_end * 1000)
+      : null;
+
+    const dbStatus =
+      subscription.status === 'trialing'
+        ? 'trial'
+        : subscription.status === 'active'
+          ? 'paid'
+          : null;
+
+    if (dbStatus) {
+      await pool.query(
+        `UPDATE users 
+         SET subscription_status = $1,
+             subscription_end_date = $2,
+             last_payment_date = NOW(),
+             updated_at = NOW()
+         WHERE id = $3`,
+        [dbStatus, periodEnd, userId]
+      );
+      console.log(
+        `Invoice payment succeeded — subscription renewed for user ${userId} until ${periodEnd}`
+      );
+    }
+  } catch (error) {
+    console.error('Error handling invoice payment succeeded:', error);
   }
 }
 
@@ -1105,12 +1155,13 @@ export async function verifySubscriptionStatus(userId) {
         subscription = await stripe.subscriptions.retrieve(subscriptionId);
         stripeStatus = subscription.status; // active, canceled, past_due, etc.
 
-        // Treat as active only if not canceled (and not set to cancel at period end)
-        const isCanceledOrScheduled =
-          subscription.status === 'canceled' || subscription.cancel_at_period_end === true;
+        // cancel_at_period_end=true means user cancelled but is still active until period end.
+        // Only treat as inactive when Stripe status is literally 'canceled', 'unpaid', or 'past_due'.
         isActive =
-          !isCanceledOrScheduled &&
-          (subscription.status === 'active' || subscription.status === 'trialing');
+          (subscription.status === 'active' || subscription.status === 'trialing') &&
+          subscription.status !== 'canceled' &&
+          subscription.status !== 'unpaid' &&
+          subscription.status !== 'past_due';
 
         // Sync staff limit from Stripe metadata (for existing subscriptions; column may not exist before migration)
         const staffLimitFromStripe = parseInt(subscription.metadata?.staffCount || '0', 10) || null;
@@ -1138,10 +1189,9 @@ export async function verifySubscriptionStatus(userId) {
             throw e;
         }
 
-        // Update database with current Stripe status (treat cancel_at_period_end as expired)
+        // Sync DB status from Stripe — cancel_at_period_end keeps the user as 'paid' until period ends.
         let dbStatus = 'free';
         if (
-          isCanceledOrScheduled ||
           subscription.status === 'canceled' ||
           subscription.status === 'unpaid' ||
           subscription.status === 'past_due'
