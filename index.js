@@ -9,6 +9,7 @@ import { swaggerSpec } from './lib/swagger.js';
 import { config } from './lib/config.js';
 import { pool } from './lib/db.js';
 import { cleanupExpiredSessions } from './services/auth.js';
+import { runBillingReminders } from './services/billing-reminders.js';
 import {
   requestFingerprinting,
   detectSessionTokenMisuse,
@@ -147,6 +148,11 @@ app.use(
 
 cleanupInterval = setInterval(cleanupExpiredSessions, 60 * 60 * 1000);
 cleanupInterval.unref?.();
+
+// Run billing reminders once at startup (catches any missed from overnight) then every 24 hours
+runBillingReminders();
+const billingReminderInterval = setInterval(runBillingReminders, 24 * 60 * 60 * 1000);
+billingReminderInterval.unref?.();
 
 registerRoutes(app);
 

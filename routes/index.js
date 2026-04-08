@@ -1,5 +1,6 @@
 import authRouter from './auth.js';
 import contactRouter from './contact.js';
+import demoBookingRouter from './demo-booking.js';
 import locationRouter from './location.js';
 import locationsRouter from './locations.js';
 import staffRouter from './staff.js';
@@ -17,6 +18,7 @@ import paymentsRouter from './payments.js';
 export function registerRoutes(app) {
   app.use('/api/health', healthRouter);
   app.use('/api/contact', contactRouter);
+  app.use('/api/demo-booking', demoBookingRouter);
   app.use('/api/auth', authRouter);
   app.use('/api/location', locationRouter);
   app.use('/api/locations', locationsRouter);
