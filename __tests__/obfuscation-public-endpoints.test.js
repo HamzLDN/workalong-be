@@ -26,4 +26,15 @@ describe('isPublicEndpoint', () => {
   it('treats /support/... (nginx alias to admin) as public when misrouted to this backend', () => {
     expect(isPublicEndpoint('/support/chat/messages')).toBe(true);
   });
+
+  it('treats demo booking and contact as public (plain JSON, no signed transport)', () => {
+    expect(isPublicEndpoint('/api/demo-booking')).toBe(true);
+    expect(isPublicEndpoint('/demo-booking')).toBe(true);
+    expect(isPublicEndpoint('/api/contact')).toBe(true);
+  });
+
+  it('treats trailing-slash variants as public (proxies often normalize URLs)', () => {
+    expect(isPublicEndpoint('/api/demo-booking/')).toBe(true);
+    expect(isPublicEndpoint('/api/contact/')).toBe(true);
+  });
 });

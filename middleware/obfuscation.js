@@ -117,6 +117,8 @@ const PUBLIC_ENDPOINTS = [
   '/api/health',
   '/contact',
   '/api/contact',
+  '/demo-booking',
+  '/api/demo-booking',
   '/auth/public-csrf-token',
   '/api/auth/public-csrf-token',
   '/auth/signup',
@@ -161,9 +163,10 @@ const PUBLIC_ENDPOINT_PREFIXES = [
 
 /** Exported for tests — public routes skip transport/signature (see verifyObfuscatedRequest). */
 export function isPublicEndpoint(path) {
-  if (!path) return false;
-  // Remove query string
-  const cleanPath = path.split('?')[0];
+  if (path == null || path === '') return false;
+  // Remove query string; strip trailing slashes (proxies and browsers may send /api/foo/)
+  let cleanPath = path.split('?')[0];
+  cleanPath = cleanPath.replace(/\/+$/, '') || '/';
   // Normalize path - handle both /api/activities and /activities
   let normalized = cleanPath;
   if (!normalized.startsWith('/')) {
