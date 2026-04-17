@@ -160,6 +160,7 @@ describe('Auth Functions', () => {
         expect.any(Date),
         '127.0.0.1',
         'test-agent',
+        expect.stringMatching(/^[a-f0-9]{64}$/),
       ]);
       expect(result.sessionId).toBe(mockSessionId);
       expect(result.expiresAt).toBeInstanceOf(Date);
