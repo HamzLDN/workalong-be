@@ -308,6 +308,9 @@ export async function verifyObfuscatedRequest(req, res, next) {
         if (!devSessionId && req.headers.authorization?.startsWith('Bearer ')) {
           devSessionId = req.headers.authorization.replace('Bearer ', '').trim();
         }
+        if (!devSessionId && req.headers['x-link-token'] && req.headers['x-device-fingerprint']) {
+          devSessionId = `clocklink:${req.headers['x-link-token']}:${req.headers['x-device-fingerprint']}`;
+        }
         if (devSessionId && devSessionId !== 'undefined' && devSessionId !== 'null') {
           try {
             const devTs = req.headers['x-request-timestamp'];

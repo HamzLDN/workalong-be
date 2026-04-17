@@ -161,6 +161,9 @@ jobs:
           echo "Working directory: ${{ github.workspace }}"
           echo "Checking for .env file:"
           ls -la .env || echo ".env file not found in current directory"
+          # Disable admin-panel HTTP proxy (Docker-only ADMIN_PANEL_API_URL in .env breaks on self-hosted
+          # runners outside compose — proxy would target unreachable host and can break /api/admin).
+          export ADMIN_PANEL_PROXY=false
           # Set a dummy Stripe test key for dev mode to prevent initialization errors
           # Payment endpoints will fail gracefully with API errors
           export STRIPE_SECRET_KEY="${STRIPE_SECRET_KEY:-sk_test_00000000000000000000000000000000000000000000000000}"
@@ -182,6 +185,7 @@ jobs:
             exit 1
           fi
         env:
+          ADMIN_PANEL_PROXY: 'false'
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY || 'sk_test_00000000000000000000000000000000000000000000000000' }}
 
       - name: Wait for backend server to be ready
