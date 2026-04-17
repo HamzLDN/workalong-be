@@ -39,13 +39,9 @@ const defaultAdminPanelUrl =
     : 'http://127.0.0.1:5055';
 const adminPanelTarget =
   process.env.ADMIN_PANEL_API_URL || process.env.SUPPORT_CHAT_UPSTREAM || defaultAdminPanelUrl;
-const useAdminPanelProxy =
-  process.env.ADMIN_PANEL_PROXY !== 'false' &&
-  (process.env.NODE_ENV === 'dev' ||
-    process.env.NODE_ENV === 'production' ||
-    process.env.DOCKER === 'true' ||
-    process.env.ADMIN_PANEL_API_URL ||
-    process.env.SUPPORT_CHAT_UPSTREAM);
+// Always proxy unless explicitly disabled (CI / self-hosted runners set ADMIN_PANEL_PROXY=false).
+// If the proxy is off, /api/admin/* is handled by app.use('/api', shiftsRouter) → 404.
+const useAdminPanelProxy = process.env.ADMIN_PANEL_PROXY !== 'false';
 
 let adminSocketIoProxy = null;
 if (useAdminPanelProxy) {
@@ -55,26 +51,44 @@ if (useAdminPanelProxy) {
     ws: true,
   });
   // Must match before any /api/* route on this server — otherwise /api/admin hits registerRoutes → 404.
-  app.use(
-    '/api/admin',
-    createProxyMiddleware({
-      target: adminPanelTarget,
-      changeOrigin: true,
-    })
-  );
+  const adminProxy = createProxyMiddleware({
+    target: adminPanelTarget,
+    changeOrigin: true,
+    on: {
+      error(err, req, res) {
+        console.error('[proxy] Admin panel upstream error:', err?.message || err);
+        if (!res.headersSent) {
+          res.status(502).json({
+            error: 'Admin API unreachable',
+            detail: err?.message || String(err),
+          });
+        }
+      },
+    },
+  });
+  app.use('/api/admin', adminProxy);
   app.use(
     '/api/support',
     createProxyMiddleware({
       target: adminPanelTarget,
       changeOrigin: true,
+      on: {
+        error(err, req, res) {
+          console.error('[proxy] Support upstream error:', err?.message || err);
+          if (!res.headersSent) {
+            res.status(502).json({
+              error: 'Admin API unreachable',
+              detail: err?.message || String(err),
+            });
+          }
+        },
+      },
     })
   );
   app.use('/socket.io', adminSocketIoProxy);
-  if (process.env.NODE_ENV === 'production' || process.env.DOCKER === 'true') {
-    console.log(
-      `[proxy] Admin panel API: ${adminPanelTarget} (/api/admin, /api/support, /socket.io)`
-    );
-  }
+  console.log(
+    `[proxy] Admin panel upstream: ${adminPanelTarget} (/api/admin, /api/support, /socket.io) — set ADMIN_PANEL_PROXY=false to disable`
+  );
 }
 let httpsServer = null;
 let shuttingDown = false;
