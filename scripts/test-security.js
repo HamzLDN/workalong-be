@@ -1759,6 +1759,19 @@ async function testConcurrency() {
     }
   }
 
+  // Align client CSRF with DB: long test runs mix plain + obfuscated calls; a 403 on an
+  // intermediate GET (e.g. enumeration) can leave userA.csrfToken stale vs sessions.csrf_token.
+  const csrfRefresh = await makeRequest('/auth/csrf-token', {
+    method: 'GET',
+    headers: {
+      Cookie: `sessionId=${userA.sessionId}`,
+      Authorization: `Bearer ${userA.sessionId}`,
+    },
+  });
+  if (csrfRefresh.ok && csrfRefresh.data?.csrfToken) {
+    userA.csrfToken = csrfRefresh.data.csrfToken;
+  }
+
   const update1 = makeObfuscatedRequest(
     `/shifts/${userA.shiftId}`,
     {
