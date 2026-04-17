@@ -105,7 +105,7 @@ Used by fraud endpoints and some shift bulk actions. Requires an **active Stripe
 
 ### Proxied routes (not implemented in this repo)
 
-- **`/api/support/*`** — forwarded to the admin-panel API (`ADMIN_PANEL_API_URL`, default `http://127.0.0.1:5055`).
+- **`/api/admin/*`** and **`/api/support/*`** — forwarded to the admin-panel API (`ADMIN_PANEL_API_URL`). Local **`NODE_ENV=dev`**: default upstream is `http://127.0.0.1:15055` (matches `admin_panel` dev server + Vite proxy). Production/Docker: default `http://127.0.0.1:5055` unless overridden.
 - **`/socket.io`** — WebSocket proxy to the same upstream for support chat.
 
 ---

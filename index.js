@@ -26,15 +26,24 @@ const app = express();
 
 /**
  * Forward support chat + Socket.IO to admin-panel-api.
- * - Dev: default target http://127.0.0.1:5055 (unless ADMIN_PANEL_PROXY=false).
- * - Prod Docker: set ADMIN_PANEL_API_URL=http://admin-panel-api:5055 so nginx can send all /api to
- *   this backend and we still reach the admin service (avoids relying on nginx splitting /api/support).
+ * - Dev: default target matches admin_panel (see defaultAdminPanelUrl).
+ * - Prod: enable proxy whenever NODE_ENV=production or DOCKER=true so /api/admin is not handled by
+ *   registerRoutes (404). Set ADMIN_PANEL_API_URL for Docker network (e.g. admin-panel-api:5055).
+ * - CI: set ADMIN_PANEL_PROXY=false when the admin upstream is unreachable.
  */
+// admin_panel/server defaults: port 15055 when NODE_ENV=dev, 5055 in production/Docker (see admin_panel/server/index.js).
+// Docker sets ADMIN_PANEL_API_URL explicitly; local dev must reach the same port Vite proxies to (vite.config.js → 15055).
+const defaultAdminPanelUrl =
+  process.env.NODE_ENV === 'dev' && !process.env.DOCKER
+    ? 'http://127.0.0.1:15055'
+    : 'http://127.0.0.1:5055';
 const adminPanelTarget =
-  process.env.ADMIN_PANEL_API_URL || process.env.SUPPORT_CHAT_UPSTREAM || 'http://127.0.0.1:5055';
+  process.env.ADMIN_PANEL_API_URL || process.env.SUPPORT_CHAT_UPSTREAM || defaultAdminPanelUrl;
 const useAdminPanelProxy =
   process.env.ADMIN_PANEL_PROXY !== 'false' &&
   (process.env.NODE_ENV === 'dev' ||
+    process.env.NODE_ENV === 'production' ||
+    process.env.DOCKER === 'true' ||
     process.env.ADMIN_PANEL_API_URL ||
     process.env.SUPPORT_CHAT_UPSTREAM);
 
