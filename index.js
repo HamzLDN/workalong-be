@@ -10,11 +10,13 @@ import { config } from './lib/config.js';
 import { pool } from './lib/db.js';
 import { cleanupExpiredSessions } from './services/auth.js';
 import { runBillingReminders } from './services/billing-reminders.js';
+import { ensureAppSettingsTable } from './lib/appSettings.js';
 import {
   requestFingerprinting,
   detectSessionTokenMisuse,
   securityHeaders,
   createRateLimiter,
+  trackAuthFailureBursts,
 } from './middleware/security.js';
 import { verifyObfuscatedRequest, obfuscateResponse } from './middleware/obfuscation.js';
 import { registerRoutes } from './routes/index.js';
@@ -43,6 +45,14 @@ if (useAdminPanelProxy) {
     changeOrigin: true,
     ws: true,
   });
+  // Must match before any /api/* route on this server — otherwise /api/admin hits registerRoutes → 404.
+  app.use(
+    '/api/admin',
+    createProxyMiddleware({
+      target: adminPanelTarget,
+      changeOrigin: true,
+    })
+  );
   app.use(
     '/api/support',
     createProxyMiddleware({
@@ -52,12 +62,18 @@ if (useAdminPanelProxy) {
   );
   app.use('/socket.io', adminSocketIoProxy);
   if (process.env.NODE_ENV === 'production' || process.env.DOCKER === 'true') {
-    console.log(`[proxy] Admin panel API: ${adminPanelTarget} (/api/support, /socket.io)`);
+    console.log(
+      `[proxy] Admin panel API: ${adminPanelTarget} (/api/admin, /api/support, /socket.io)`
+    );
   }
 }
 let httpsServer = null;
 let shuttingDown = false;
 let cleanupInterval = null;
+/** Cleared on shutdown; billing only scheduled after HTTP listen succeeds (avoids pool.end vs billing race on port conflict). */
+let billingReminderInterval = null;
+/** Serialized billing runs; awaited in shutdown before pool.end(). */
+let billingRemindersChain = Promise.resolve();
 
 const allowedOrigins = [
   'http://localhost',
@@ -74,6 +90,8 @@ const allowedOrigins = [
   'http://www.workalong.co.uk',
   'https://api.workalong.co.uk',
   'http://api.workalong.co.uk',
+  'https://ai.workalong.co.uk',
+  'http://ai.workalong.co.uk',
 ];
 
 if (process.env.DOCKER === 'true' || process.env.NODE_ENV === 'production') {
@@ -123,13 +141,21 @@ app.use(
       callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
+    exposedHeaders: ['X-CSRF-Token'],
   })
 );
 app.use(express.json({ type: ['application/json', 'application/x-obfuscated'] }));
 app.use(cookieParser());
 
+if (process.env.NODE_ENV === 'production' && process.env.DISABLE_OBFUSCATION === 'true') {
+  console.warn(
+    '[security] DISABLE_OBFUSCATION=true with NODE_ENV=production: verify obfuscation settings; plain JSON may be easier to scrape if misconfigured.'
+  );
+}
+
 app.set('trust proxy', 1);
 
+app.use(trackAuthFailureBursts);
 app.use(securityHeaders);
 app.use(requestFingerprinting);
 app.use(detectSessionTokenMisuse);
@@ -148,11 +174,6 @@ app.use(
 
 cleanupInterval = setInterval(cleanupExpiredSessions, 60 * 60 * 1000);
 cleanupInterval.unref?.();
-
-// Run billing reminders once at startup (catches any missed from overnight) then every 24 hours
-runBillingReminders();
-const billingReminderInterval = setInterval(runBillingReminders, 24 * 60 * 60 * 1000);
-billingReminderInterval.unref?.();
 
 registerRoutes(app);
 
@@ -189,10 +210,23 @@ function handleListenError(name, port) {
   };
 }
 
+function enqueueBillingReminders() {
+  if (shuttingDown) return;
+  billingRemindersChain = billingRemindersChain
+    .then(() => runBillingReminders())
+    .catch((err) => console.error('[BillingReminder] Job failed:', err));
+}
+
 httpServer
   .listen(HTTP_PORT, () => {
     console.log(`?? HTTP Server running on http://localhost:${HTTP_PORT}`);
     console.log(`?? API available at http://localhost:${HTTP_PORT}/api`);
+    // Only after HTTP binds: avoids runBillingReminders() racing with shutdown + pool.end() when
+    // the port is already taken (EADDRINUSE → handleListenError → shutdown).
+    enqueueBillingReminders();
+    ensureAppSettingsTable().catch((e) => console.warn('[appSettings] ensure failed:', e.message));
+    billingReminderInterval = setInterval(enqueueBillingReminders, 24 * 60 * 60 * 1000);
+    billingReminderInterval.unref?.();
   })
   .on('error', handleListenError('HTTP', HTTP_PORT));
 
@@ -264,6 +298,11 @@ async function shutdown(signal, exitCode = 0, { skipExit = false } = {}) {
     cleanupInterval = null;
   }
 
+  if (billingReminderInterval) {
+    clearInterval(billingReminderInterval);
+    billingReminderInterval = null;
+  }
+
   const closeServer = (server, name) =>
     new Promise((resolve) => {
       if (!server || !server.listening) return resolve();
@@ -277,6 +316,12 @@ async function shutdown(signal, exitCode = 0, { skipExit = false } = {}) {
     await Promise.all([closeServer(httpServer, 'HTTP'), closeServer(httpsServer, 'HTTPS')]);
   } catch (err) {
     console.error('Server shutdown error:', err.message || err);
+  }
+
+  try {
+    await billingRemindersChain;
+  } catch {
+    // Errors already logged in enqueueBillingReminders
   }
 
   try {

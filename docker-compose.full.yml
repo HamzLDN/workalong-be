@@ -39,9 +39,12 @@ services:
       # Hot-swap volume: mount local dist/ to container's nginx html directory
       # Build locally with 'npm run build', then files appear instantly in container
       - ../workalong-frontend/dist:/usr/share/nginx/html:ro
+      # Dashboard SPA — nginx `root /usr/share/nginx/admin-panel` (see docker/nginx-frontend-ssl.conf)
+      - ../admin_panel/dist:/usr/share/nginx/admin-panel:ro
     depends_on:
       - backend
       - admin-panel-api
+      - workalong-ai
     networks:
       - workalong-network
 
@@ -61,7 +64,7 @@ services:
       - DB_USER=workalong
       - DB_PASSWORD=admin
       - DB_NAME=users
-      - ADMIN_PANEL_ORIGINS=https://workalong.co.uk,https://www.workalong.co.uk,https://api.workalong.co.uk
+      - ADMIN_PANEL_ORIGINS=https://workalong.co.uk,https://www.workalong.co.uk,https://api.workalong.co.uk,https://dashboard.workalong.co.uk
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,6 +96,9 @@ services:
       - PORT=8080
       - NODE_ENV=production
       - DOCKER=true
+      # Forward /api/admin to admin-panel-api when a client hits this backend (misconfigured nginx, or direct :8080).
+      - ADMIN_PANEL_API_URL=http://admin-panel-api:5055
+      - INTERNAL_SERVICE_SECRET=${INTERNAL_SERVICE_SECRET:-}
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_USER=workalong
@@ -113,6 +119,25 @@ services:
       timeout: 10s
       retries: 5
       start_period: 120s
+    networks:
+      - workalong-network
+
+  # Groq assistant — https://ai.workalong.co.uk (see ../workalong-ai/README.md)
+  workalong-ai:
+    build:
+      context: ../workalong-ai
+      dockerfile: Dockerfile
+    container_name: workalong-ai
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.1-8b-instant}
+      - INTERNAL_SERVICE_SECRET=${INTERNAL_SERVICE_SECRET:-}
+      - WORKALONG_BACKEND_URL=http://workalong-backend:8080
+      - ALLOWED_ORIGINS=https://workalong.co.uk,https://www.workalong.co.uk
+    depends_on:
+      - backend
     networks:
       - workalong-network
 

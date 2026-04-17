@@ -18,6 +18,7 @@ import {
 } from '../services/auth.js';
 import { logAuthActivity } from '../lib/activity.js';
 import { logSecurityEvent } from '../lib/api-security.js';
+import { ensureSessionCsrfToken, verifyBrowserSessionCsrf } from '../lib/csrfSession.js';
 import { createRateLimiter } from '../middleware/security.js';
 import { requireAuth } from '../middleware/auth.js';
 
@@ -731,15 +732,10 @@ router.get('/csrf-token', async (req, res) => {
         maxAge: 7 * 24 * 60 * 60 * 1000,
       });
     }
-    const csrfToken = crypto
-      .createHash('sha256')
-      .update(
-        sessionId +
-          (process.env.SESSION_SECRET ||
-            config.sessionSecret ||
-            'change-this-secret-key-in-production')
-      )
-      .digest('hex');
+    const csrfToken = await ensureSessionCsrfToken(sessionId);
+    if (!csrfToken) {
+      return res.status(401).json({ error: 'Invalid or expired session' });
+    }
     res.json({ csrfToken });
   } catch (error) {
     console.error('CSRF token generation error:', error);
@@ -762,39 +758,8 @@ router.get('/me', async (req, res) => {
     if (!session) {
       return res.status(401).json({ error: 'Invalid or expired session' });
     }
-    const csrfToken = req.headers['x-csrf-token'];
-    if (!csrfToken) {
-      await logSecurityEvent('csrf_token_missing', {
-        userId: session.user_id,
-        ipAddress: req.ip,
-        endpoint: req.path,
-        requestMethod: req.method,
-        severity: 'warning',
-      });
-      return res.status(403).json({
-        error:
-          'CSRF token required. Include X-CSRF-Token header. Get token from /api/auth/csrf-token endpoint.',
-      });
-    }
-    const expectedToken = crypto
-      .createHash('sha256')
-      .update(
-        sessionId +
-          (process.env.SESSION_SECRET ||
-            config.sessionSecret ||
-            'change-this-secret-key-in-production')
-      )
-      .digest('hex');
-    if (csrfToken !== expectedToken) {
-      await logSecurityEvent('csrf_token_invalid', {
-        userId: session.user_id,
-        ipAddress: req.ip,
-        endpoint: req.path,
-        requestMethod: req.method,
-        severity: 'warning',
-      });
-      return res.status(403).json({ error: 'Invalid CSRF token' });
-    }
+    const csrfOk = await verifyBrowserSessionCsrf(req, res, sessionId, session.user_id);
+    if (!csrfOk) return;
     if (!fromCookie && sessionId) {
       res.cookie('sessionId', sessionId, {
         httpOnly: true,
@@ -905,6 +870,10 @@ router.put('/profile', async (req, res) => {
     if (!session) {
       return res.status(401).json({ error: 'Invalid or expired session' });
     }
+
+    const csrfOk = await verifyBrowserSessionCsrf(req, res, sessionId, session.user_id);
+    if (!csrfOk) return;
+
     const { name, email, latitude, longitude, timezone } = req.body;
 
     // Validate email if provided

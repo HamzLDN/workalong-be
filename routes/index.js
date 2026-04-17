@@ -13,10 +13,12 @@ import paymentRouter from './payment.js';
 import activitiesRouter from './activities.js';
 import securityRouter from './security.js';
 import healthRouter from './health.js';
+import publicSettingsRouter from './public-settings.js';
 import paymentsRouter from './payments.js';
 
 export function registerRoutes(app) {
   app.use('/api/health', healthRouter);
+  app.use('/api/public', publicSettingsRouter);
   app.use('/api/contact', contactRouter);
   app.use('/api/demo-booking', demoBookingRouter);
   app.use('/api/auth', authRouter);

@@ -1,8 +1,6 @@
 import express from 'express';
-import crypto from 'crypto';
-import { config } from '../lib/config.js';
 import { pool } from '../lib/db.js';
-import { getSession } from '../services/auth.js';
+import { ifNoneMatchSatisfied, weakEtagForJson } from '../lib/conditionalJson.js';
 import { sanitizeString } from '../lib/sanitize.js';
 import {
   getShifts,
@@ -14,6 +12,7 @@ import {
   getShiftStats,
   checkShiftConflict,
   calculateEndTime,
+  INVALID_STAFF_ID,
   approveShift,
   approveShifts,
   unapproveShift,
@@ -103,42 +102,13 @@ router.get('/shifts', async (req, res) => {
         return res.status(401).json({ error: 'Invalid or expired API key' });
       }
     } else {
-      let sessionId = req.cookies.sessionId;
-      if (!sessionId && req.headers.authorization) {
-        sessionId = req.headers.authorization.replace('Bearer ', '');
+      const authResult = await authenticateStaffOrUser(req, res);
+      if (!authResult && !req.userId) {
+        if (!res.headersSent) {
+          return res.status(401).json({ error: 'Authentication required' });
+        }
+        return;
       }
-      if (!sessionId || sessionId === 'undefined' || sessionId === 'null') {
-        return res.status(401).json({ error: 'No valid session provided' });
-      }
-      const session = await getSession(sessionId);
-      if (!session) {
-        return res.status(401).json({ error: 'Invalid or expired session' });
-      }
-      const csrfToken = req.headers['x-csrf-token'];
-      if (!csrfToken) {
-        return res.status(403).json({
-          error:
-            'CSRF token required. Include X-CSRF-Token header. Get token from /api/auth/csrf-token endpoint.',
-        });
-      }
-      const expectedToken = crypto
-        .createHash('sha256')
-        .update(
-          sessionId +
-            (process.env.SESSION_SECRET ||
-              config.sessionSecret ||
-              'change-this-secret-key-in-production')
-        )
-        .digest('hex');
-      if (csrfToken !== expectedToken) {
-        return res.status(403).json({ error: 'Invalid CSRF token' });
-      }
-      req.userId = session.user_id;
-    }
-
-    const authResult = await authenticateStaffOrUser(req, res);
-    if (!authResult && !req.userId) {
-      return res.status(401).json({ error: 'Authentication required' });
     }
 
     const {
@@ -161,15 +131,30 @@ router.get('/shifts', async (req, res) => {
     }
 
     const shifts = await getShifts(req.userId, filters);
+    if (res.headersSent) return;
+
+    const payload = { shifts };
+    const etag = weakEtagForJson(payload);
     res.set('X-Shifts-ClientNow', filters.clientNow ? 'yes' : 'no');
     res.set(
       'X-Shifts-TimezoneOffset',
       filters.timezoneOffset !== undefined ? String(filters.timezoneOffset) : 'none'
     );
-    res.json({ shifts });
+
+    // Same behaviour as other JSON list routes: allow 304 when If-None-Match matches this body
+    // (send the ETag from the first response on the next request). Omit If-None-Match → always 200.
+    if (ifNoneMatchSatisfied(req.headers['if-none-match'], etag)) {
+      res.set('ETag', etag);
+      return res.status(304).end();
+    }
+
+    res.set('ETag', etag);
+    res.json(payload);
   } catch (error) {
     console.error('Get shifts error:', error);
-    res.status(500).json({ error: 'Failed to get shifts' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to get shifts' });
+    }
   }
 });
 
@@ -243,6 +228,9 @@ router.post('/shifts', requireAuth, async (req, res) => {
     res.status(201).json({ message: 'Shift created successfully', shift });
   } catch (error) {
     console.error('Create shift error:', error);
+    if (error.message === INVALID_STAFF_ID) {
+      return res.status(400).json({ error: 'Staff ID must be a positive integer' });
+    }
     if (error.message && error.message.includes('does not belong to this user')) {
       return res
         .status(403)
@@ -271,6 +259,9 @@ router.post('/shifts/bulk', requireAuth, requireSubscription, async (req, res) =
     });
   } catch (error) {
     console.error('Create bulk shifts error:', error);
+    if (error.message === INVALID_STAFF_ID) {
+      return res.status(400).json({ error: 'Staff ID must be a positive integer' });
+    }
     if (error.message && error.message.includes('does not belong to this user')) {
       return res.status(403).json({
         error: 'You do not have permission to create shifts for one or more staff members',
@@ -336,6 +327,9 @@ router.put('/shifts/:id', requireAuth, async (req, res) => {
     res.json({ message: 'Shift updated successfully', shift });
   } catch (error) {
     console.error('Update shift error:', error);
+    if (error.message === INVALID_STAFF_ID) {
+      return res.status(400).json({ error: 'Staff ID must be a positive integer' });
+    }
     res.status(500).json({ error: 'Failed to update shift' });
   }
 });

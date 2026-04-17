@@ -2,6 +2,17 @@ import { pool } from '../lib/db.js';
 import { sanitizeString } from '../lib/sanitize.js';
 import fs from 'fs';
 
+/** Rejects objects/arrays; ensures a single finite positive integer for DB bigint columns. */
+function coercePositiveIntId(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'object') return null;
+  const n = typeof value === 'string' ? parseInt(String(value).trim(), 10) : Number(value);
+  if (!Number.isFinite(n) || n < 1 || n !== Math.trunc(n)) return null;
+  return n;
+}
+
+export const INVALID_STAFF_ID = 'INVALID_STAFF_ID';
+
 export function calculateEndTime(startTime, hours) {
   const [startHour, startMin] = startTime.split(':').map(Number);
   const totalMinutes = startHour * 60 + startMin + hours * 60;
@@ -366,9 +377,14 @@ export async function createShift(userId, data) {
     notes,
   } = data;
 
+  const staffIdNum = coercePositiveIntId(staffId);
+  if (staffIdNum === null) {
+    throw new Error(INVALID_STAFF_ID);
+  }
+
   // Verify that the staff member belongs to this user
   const staffCheck = await pool.query('SELECT id FROM staff WHERE id = $1 AND user_id = $2', [
-    staffId,
+    staffIdNum,
     userId,
   ]);
 
@@ -395,7 +411,7 @@ export async function createShift(userId, data) {
     RETURNING *`,
     [
       userId,
-      staffId,
+      staffIdNum,
       normalizedDate, // Use normalized date
       startTime,
       shiftHours,
@@ -434,8 +450,12 @@ export async function updateShift(shiftId, userId, data) {
   let paramCount = 1;
 
   if (staffId !== undefined) {
+    const staffIdNum = coercePositiveIntId(staffId);
+    if (staffIdNum === null) {
+      throw new Error(INVALID_STAFF_ID);
+    }
     updates.push(`staff_id = $${paramCount++}`);
-    values.push(staffId);
+    values.push(staffIdNum);
   }
   if (shiftDate !== undefined) {
     updates.push(`shift_date = $${paramCount++}`);
@@ -652,14 +672,18 @@ export async function createBulkShifts(userId, shifts) {
     const createdShifts = [];
 
     for (const shift of shifts) {
+      const staffIdNum = coercePositiveIntId(shift.staffId);
+      if (staffIdNum === null) {
+        throw new Error(INVALID_STAFF_ID);
+      }
       // Verify that the staff member belongs to this user
       const staffCheck = await client.query('SELECT id FROM staff WHERE id = $1 AND user_id = $2', [
-        shift.staffId,
+        staffIdNum,
         userId,
       ]);
 
       if (staffCheck.rows.length === 0) {
-        throw new Error(`Staff member ${shift.staffId} not found or does not belong to this user`);
+        throw new Error(`Staff member ${staffIdNum} not found or does not belong to this user`);
       }
 
       const shiftHours = parseFloat(shift.hours) || 0;
@@ -677,7 +701,7 @@ export async function createBulkShifts(userId, shifts) {
         RETURNING *`,
         [
           userId,
-          shift.staffId,
+          staffIdNum,
           shift.shiftDate,
           shift.startTime,
           shiftHours,
@@ -742,6 +766,11 @@ export async function checkShiftConflict(
   endTime,
   excludeShiftId = null
 ) {
+  const staffIdNum = coercePositiveIntId(staffId);
+  if (staffIdNum === null) {
+    throw new Error(INVALID_STAFF_ID);
+  }
+
   const isOvernight = endTime < startTime;
 
   let query = `
@@ -762,7 +791,7 @@ export async function checkShiftConflict(
     )
   `;
 
-  const params = [userId, staffId, shiftDate, isOvernight];
+  const params = [userId, staffIdNum, shiftDate, isOvernight];
 
   if (excludeShiftId) {
     query += ' AND id != $5';

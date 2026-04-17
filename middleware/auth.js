@@ -1,9 +1,8 @@
-import crypto from 'crypto';
-import { config } from '../lib/config.js';
 import { pool } from '../lib/db.js';
 import { getSession } from '../services/auth.js';
 import { getStaffSession } from '../services/staff-auth.js';
 import { logSecurityEvent } from '../lib/api-security.js';
+import { verifyBrowserSessionCsrf } from '../lib/csrfSession.js';
 
 async function authenticateUserRequest(req, res, { requireCsrf = true } = {}) {
   if (req.userId && req.apiKey) {
@@ -81,40 +80,8 @@ async function authenticateUserRequest(req, res, { requireCsrf = true } = {}) {
     return { ok: true };
   }
 
-  const csrfToken = req.headers['x-csrf-token'];
-  if (!csrfToken) {
-    await logSecurityEvent('csrf_token_missing', {
-      userId: session.user_id,
-      ipAddress: req.ip,
-      endpoint: req.path,
-      requestMethod: req.method,
-      severity: 'warning',
-    });
-    res.status(403).json({
-      error:
-        'CSRF token required. Include X-CSRF-Token header. Get token from /api/auth/csrf-token endpoint.',
-    });
-    return { ok: false };
-  }
-
-  const expectedToken = crypto
-    .createHash('sha256')
-    .update(
-      sessionId +
-        (process.env.SESSION_SECRET ||
-          config.sessionSecret ||
-          'change-this-secret-key-in-production')
-    )
-    .digest('hex');
-  if (csrfToken !== expectedToken) {
-    await logSecurityEvent('csrf_token_invalid', {
-      userId: session.user_id,
-      ipAddress: req.ip,
-      endpoint: req.path,
-      requestMethod: req.method,
-      severity: 'warning',
-    });
-    res.status(403).json({ error: 'Invalid CSRF token' });
+  const csrfOk = await verifyBrowserSessionCsrf(req, res, sessionId, session.user_id);
+  if (!csrfOk) {
     return { ok: false };
   }
 
@@ -243,39 +210,8 @@ export async function authenticateStaffOrUser(req, res) {
     const userSession = await getSession(sessionId);
     if (userSession) {
       if (!req.apiKey) {
-        const csrfToken = req.headers['x-csrf-token'];
-        if (!csrfToken) {
-          await logSecurityEvent('csrf_token_missing', {
-            userId: userSession.user_id,
-            ipAddress: req.ip,
-            endpoint: req.path,
-            requestMethod: req.method,
-            severity: 'warning',
-          });
-          res.status(403).json({
-            error:
-              'CSRF token required. Include X-CSRF-Token header. Get token from /api/auth/csrf-token endpoint.',
-          });
-          return null;
-        }
-        const expectedToken = crypto
-          .createHash('sha256')
-          .update(
-            sessionId +
-              (process.env.SESSION_SECRET ||
-                config.sessionSecret ||
-                'change-this-secret-key-in-production')
-          )
-          .digest('hex');
-        if (csrfToken !== expectedToken) {
-          await logSecurityEvent('csrf_token_invalid', {
-            userId: userSession.user_id,
-            ipAddress: req.ip,
-            endpoint: req.path,
-            requestMethod: req.method,
-            severity: 'warning',
-          });
-          res.status(403).json({ error: 'Invalid CSRF token' });
+        const csrfOk = await verifyBrowserSessionCsrf(req, res, sessionId, userSession.user_id);
+        if (!csrfOk) {
           return null;
         }
       }

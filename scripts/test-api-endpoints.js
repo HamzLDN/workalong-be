@@ -41,12 +41,21 @@ function assertStatusResponse(testName, result, expectedStatus = 200) {
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8081/api';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-this-secret-key-in-production';
 
-// Generate CSRF token from session ID (used for BOTH plain and obfuscated flows)
-function generateCsrfToken(sessionId) {
-  return crypto
-    .createHash('sha256')
-    .update(sessionId + SESSION_SECRET)
-    .digest('hex');
+/** Bootstrap CSRF from GET /auth/csrf-token (no X-CSRF-Token required). */
+async function fetchCsrfTokenFromApi(sid) {
+  if (!sid) return null;
+  const url = `${API_BASE_URL}/auth/csrf-token`;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${sid}`,
+      Cookie: `sessionId=${sid}`,
+    },
+  });
+  if (!response.ok) return null;
+  const data = await response.json().catch(() => ({}));
+  return data?.csrfToken || null;
 }
 
 // ============================================
@@ -123,7 +132,7 @@ async function makeClockLinkRequest(endpoint, body, method, linkToken, deviceFin
   const timestamp = Date.now();
   const nonce =
     Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-  const key = generateObfuscationKey(clocklinkSessionId);
+  const key = generateObfuscationKey(clocklinkSessionId, timestamp);
 
   let endpointPath = endpoint;
   if (endpointPath.includes('?')) {
@@ -291,6 +300,11 @@ async function makeRequest(endpoint, options = {}) {
       headers,
     });
 
+    const rotatedCsrf = response.headers.get('x-csrf-token');
+    if (rotatedCsrf) {
+      csrfToken = rotatedCsrf;
+    }
+
     // Extract session and CSRF token from Set-Cookie header
     const setCookieHeader = response.headers.get('set-cookie');
     if (setCookieHeader) {
@@ -302,8 +316,8 @@ async function makeRequest(endpoint, options = {}) {
         if (!sessionId || newSessionId !== sessionId) {
           const oldSessionId = sessionId;
           sessionId = newSessionId;
-          // Always regenerate CSRF token when session changes
-          csrfToken = generateCsrfToken(sessionId);
+          // Always fetch CSRF token when session changes
+          csrfToken = (await fetchCsrfTokenFromApi(sessionId)) || csrfToken;
           if (oldSessionId) {
             console.log(
               `  ${YELLOW}WARNING:${RESET} Session ID changed from ${oldSessionId.substring(0, 20)}... to ${sessionId.substring(0, 20)}...`
@@ -363,16 +377,19 @@ async function makeRequest(endpoint, options = {}) {
   }
 }
 
-function generateObfuscationKey(sessionId) {
+function generateObfuscationKey(sessionId, referenceMs = Date.now()) {
   if (!sessionId) {
     throw new Error('Session required for API obfuscation');
   }
-  const timeComponent = Math.floor(Date.now() / 60000);
+  const ms =
+    typeof referenceMs === 'number' && Number.isFinite(referenceMs) ? referenceMs : Date.now();
+  const timeComponent = Math.floor(ms / 60000);
   return `${sessionId}_${timeComponent}`.substring(0, 32);
 }
 
 function generateRequestSignature(method, url, body, sessionId, timestamp, nonce) {
-  const key = generateObfuscationKey(sessionId);
+  const refMs = Number(timestamp);
+  const key = generateObfuscationKey(sessionId, Number.isFinite(refMs) ? refMs : Date.now());
 
   // Normalize endpoint path exactly like the backend does:
   // 1. Remove query string
@@ -419,15 +436,15 @@ async function makeObfuscatedRequest(endpoint, body, method = 'POST') {
     throw new Error('Session required for obfuscated requests');
   }
 
-  // Ensure CSRF token is generated from current session
+  // Ensure CSRF token is loaded from current session
   if (!csrfToken) {
-    csrfToken = generateCsrfToken(sessionId);
+    csrfToken = await fetchCsrfTokenFromApi(sessionId);
   }
 
   const timestamp = Date.now();
   const nonce =
     Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-  const key = generateObfuscationKey(sessionId);
+  const key = generateObfuscationKey(sessionId, timestamp);
 
   // Normalize endpoint exactly like backend does
   let endpointPath = endpoint;
@@ -510,13 +527,18 @@ async function makeObfuscatedRequest(endpoint, body, method = 'POST') {
   try {
     const response = await fetch(url, fetchOptions);
 
+    const rotatedCsrf = response.headers.get('x-csrf-token');
+    if (rotatedCsrf) {
+      csrfToken = rotatedCsrf;
+    }
+
     // Update session and CSRF token from response
     const setCookie = response.headers.get('set-cookie');
     if (setCookie) {
       const sessionMatch = setCookie.match(/sessionId=([^;]+)/);
       if (sessionMatch) {
         sessionId = sessionMatch[1];
-        csrfToken = generateCsrfToken(sessionId);
+        csrfToken = (await fetchCsrfTokenFromApi(sessionId)) || csrfToken;
       }
       if (setCookie.includes('csrfToken=')) {
         const csrfMatch = setCookie.match(/csrfToken=([^;]+)/);
@@ -2462,9 +2484,9 @@ async function runAllTests() {
   if (signupOk) results.passed++;
   else results.failed++;
 
-  // Generate CSRF token from the session we just created
+  // Load CSRF token from the session we just created
   if (sessionId) {
-    csrfToken = generateCsrfToken(sessionId);
+    csrfToken = await fetchCsrfTokenFromApi(sessionId);
     console.log(`  CSRF Token generated from session: ${csrfToken.substring(0, 20)}...`);
     console.log(`  Session ID: ${sessionId.substring(0, 30)}...`);
   } else {
@@ -2477,7 +2499,7 @@ async function runAllTests() {
     console.log(`  ${YELLOW}WARNING:${RESET} No session available, attempting signin...`);
     const signinOk = await testSignin();
     if (signinOk && sessionId) {
-      csrfToken = generateCsrfToken(sessionId);
+      csrfToken = await fetchCsrfTokenFromApi(sessionId);
       console.log(`  CSRF Token generated from signin session: ${csrfToken.substring(0, 20)}...`);
     }
   }
@@ -2503,7 +2525,7 @@ async function runAllTests() {
       `\n${YELLOW}WARNING:${RESET} No session available, skipping authenticated endpoint tests`
     );
   } else if (!csrfToken) {
-    csrfToken = generateCsrfToken(sessionId);
+    csrfToken = await fetchCsrfTokenFromApi(sessionId);
     console.log(
       `\n${GREEN}PASS:${RESET} Generated CSRF token for session: ${sessionId.substring(0, 20)}...`
     );

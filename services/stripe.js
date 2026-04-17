@@ -1,6 +1,7 @@
 import Stripe from 'stripe';
 import { config } from '../lib/config.js';
 import { pool } from '../lib/db.js';
+import { getTrialPeriodDays } from '../lib/appSettings.js';
 
 // Initialize Stripe with your secret key
 const stripeSecretKey = config.stripe?.secretKey || process.env.STRIPE_SECRET_KEY;
@@ -268,6 +269,8 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
     const hasPromoCode = stripePromotionCodeId !== null;
     const shouldRemoveTrialPeriod = is100PercentFreeForever || hasPromoCode;
 
+    const trialDays = await getTrialPeriodDays();
+
     if (shouldRemoveTrialPeriod) {
       console.log(
         `[Checkout] 🚫🚫🚫 PROMO CODE DETECTED - NO TRIAL PERIOD (is100PercentFreeForever: ${is100PercentFreeForever}, hasPromoCode: ${hasPromoCode})`
@@ -275,9 +278,9 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
       console.log(`[Checkout] 🚫 subscriptionData will NOT have trial_period_days`);
       // DO NOTHING - don't set trial_period_days at all
     } else if (firstTimeSubscriber) {
-      // Only add trial for first-time subscribers WITHOUT promo codes
-      subscriptionData.trial_period_days = 14;
-      console.log(`[Checkout] ✅ Adding 14-day trial period for first-time subscriber`);
+      // Only add trial for first-time subscribers WITHOUT promo codes (length from app_settings / dashboard)
+      subscriptionData.trial_period_days = trialDays;
+      console.log(`[Checkout] ✅ Adding ${trialDays}-day trial period for first-time subscriber`);
     } else {
       console.log(`[Checkout] ❌ Skipping trial period (not first-time subscriber)`);
     }
@@ -298,7 +301,8 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
 
     // Build product description - exclude trial text if ANY promo code exists
     // Simple rule: If promo code exists, no trial text in description
-    const trialText = firstTimeSubscriber && !shouldRemoveTrialPeriod ? '. 14-day free trial.' : '';
+    const trialText =
+      firstTimeSubscriber && !shouldRemoveTrialPeriod ? `. ${trialDays}-day free trial.` : '';
     const productDescription = `Staff: ${staffCount}, Multi-location: ${multiLocation ? 'Yes' : 'No'}${trialText}`;
     console.log(`[Checkout] Product description: "${productDescription}"`);
     console.log(

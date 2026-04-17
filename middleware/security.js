@@ -10,6 +10,7 @@ import {
 } from '../lib/api-security.js';
 import { getSession } from '../services/auth.js';
 import crypto from 'crypto';
+import { verifyBrowserSessionCsrf } from '../lib/csrfSession.js';
 
 export async function requireApiKey(req, res, next) {
   try {
@@ -125,30 +126,124 @@ export async function requireWhitelistedIp(req, res, next) {
   }
 }
 
+/** UUID v4 (session tokens, staff session ids). */
+const SESSION_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * Rate-limit bucket: prefer API key hash, then browser session (cookie / Bearer),
+ * then staff session cookie, then IP. Avoids one NAT IP sharing one bucket for all users.
+ */
+export function defaultRateLimitIdentifier(req) {
+  const headerKey =
+    req.headers['x-api-key'] ||
+    (req.headers.authorization?.startsWith('Bearer wak_')
+      ? req.headers.authorization.replace(/^Bearer\s+/i, '').trim()
+      : null);
+  if (headerKey?.startsWith('wak_')) {
+    const h = crypto.createHash('sha256').update(headerKey).digest('hex').slice(0, 32);
+    return `ak:${h}`;
+  }
+
+  const bearer = req.headers.authorization?.startsWith('Bearer ')
+    ? req.headers.authorization.replace(/^Bearer\s+/i, '').trim()
+    : '';
+  if (bearer && SESSION_UUID_RE.test(bearer)) {
+    return `sess:${bearer}`;
+  }
+
+  const sid = req.cookies?.sessionId;
+  if (sid && SESSION_UUID_RE.test(String(sid))) {
+    return `sess:${sid}`;
+  }
+
+  const staffSid = req.cookies?.staffSessionId;
+  if (staffSid && SESSION_UUID_RE.test(String(staffSid))) {
+    return `staffsess:${staffSid}`;
+  }
+
+  return `ip:${req.ip || req.connection?.remoteAddress || 'unknown'}`;
+}
+
+function resolveRateLimitThresholds(options) {
+  const { limitPerMinute = 100, limitPerHour = 5000 } = options;
+  const isProd = process.env.NODE_ENV === 'production';
+  if (isProd) {
+    return {
+      perMinute: parseInt(process.env.RATE_LIMIT_PER_MINUTE || String(limitPerMinute), 10),
+      perHour: parseInt(process.env.RATE_LIMIT_PER_HOUR || String(limitPerHour), 10),
+    };
+  }
+  return {
+    perMinute: parseInt(process.env.RATE_LIMIT_PER_MINUTE_DEV || '2500', 10),
+    perHour: parseInt(process.env.RATE_LIMIT_PER_HOUR_DEV || '50000', 10),
+  };
+}
+
+/** Many 401/403s from one IP in a short window — possible credential stuffing or token scan. */
+const authFailureByIp = new Map();
+
+export function trackAuthFailureBursts(req, res, next) {
+  res.on('finish', () => {
+    const code = res.statusCode;
+    if (code !== 401 && code !== 403) return;
+
+    const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+    const now = Date.now();
+    const windowMs = 60_000;
+    let row = authFailureByIp.get(ip);
+    if (!row || now > row.expires) {
+      row = { count: 0, expires: now + windowMs, logged: false };
+      authFailureByIp.set(ip, row);
+    }
+    row.count += 1;
+
+    const threshold = parseInt(process.env.AUTH_FAILURE_BURST_THRESHOLD || '40', 10);
+    if (row.count >= threshold && !row.logged) {
+      row.logged = true;
+      logSecurityEvent('auth_failure_burst', {
+        ipAddress: ip,
+        endpoint: req.path,
+        requestMethod: req.method,
+        details: { failuresInWindow: row.count, windowMs },
+        severity: 'warning',
+      }).catch(() => {});
+    }
+
+    if (authFailureByIp.size > 5000) {
+      for (const [k, v] of authFailureByIp) {
+        if (now > v.expires) authFailureByIp.delete(k);
+      }
+    }
+  });
+  next();
+}
+
 export function createRateLimiter(options = {}) {
-  const { limitPerMinute = 60, limitPerHour = 1000, identifierFn = null } = options;
+  const { identifierFn = null } = options;
 
   return async (req, res, next) => {
-    // Only apply rate limiting in production
-    if (process.env.NODE_ENV !== 'production') {
+    if (process.env.RATE_LIMIT_DISABLED === 'true') {
       return next();
     }
 
     try {
-      let identifier;
+      const { perMinute: basePerMinute, perHour: basePerHour } =
+        resolveRateLimitThresholds(options);
 
-      if (identifierFn) {
+      let identifier;
+      if (typeof identifierFn === 'function') {
         identifier = identifierFn(req);
-      } else if (req.apiKey) {
+      } else if (req.apiKey?.api_key_hash) {
         identifier = `api_key:${req.apiKey.api_key_hash}`;
       } else if (req.userId) {
         identifier = `user:${req.userId}`;
       } else {
-        identifier = `ip:${req.ip || req.connection.remoteAddress}`;
+        identifier = defaultRateLimitIdentifier(req);
       }
 
-      const perMinute = req.apiKey?.rate_limit_per_minute || limitPerMinute;
-      const perHour = req.apiKey?.rate_limit_per_hour || limitPerHour;
+      const perMinute = req.apiKey?.rate_limit_per_minute ?? basePerMinute;
+      const perHour = req.apiKey?.rate_limit_per_hour ?? basePerHour;
 
       const rateLimitResult = await checkRateLimit(identifier, req.path, perMinute, perHour);
 
@@ -438,36 +533,8 @@ export async function requireCsrfToken(req, res, next) {
       return res.status(401).json({ error: 'Invalid session' });
     }
 
-    const csrfToken = req.headers['x-csrf-token'];
-
-    if (!csrfToken) {
-      await logSecurityEvent('csrf_token_missing', {
-        userId: session.user_id,
-        ipAddress: req.ip,
-        endpoint: req.path,
-        requestMethod: req.method,
-        severity: 'warning',
-      });
-
-      return res.status(403).json({ error: 'CSRF token required. Include X-CSRF-Token header.' });
-    }
-
-    const expectedToken = crypto
-      .createHash('sha256')
-      .update(sessionId + (process.env.SESSION_SECRET || 'change-this-secret-key-in-production'))
-      .digest('hex');
-
-    if (csrfToken !== expectedToken) {
-      await logSecurityEvent('csrf_token_invalid', {
-        userId: session.user_id,
-        ipAddress: req.ip,
-        endpoint: req.path,
-        requestMethod: req.method,
-        severity: 'warning',
-      });
-
-      return res.status(403).json({ error: 'Invalid CSRF token' });
-    }
+    const csrfOk = await verifyBrowserSessionCsrf(req, res, sessionId, session.user_id);
+    if (!csrfOk) return;
 
     next();
   } catch (error) {

@@ -2,6 +2,7 @@ import bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { pool } from '../lib/db.js';
 import { sanitizeString } from '../lib/sanitize.js';
+import { generateStoredCsrfToken } from '../lib/csrfSession.js';
 
 export async function createUser(email, password, name, company = null) {
   const passwordHash = await bcrypt.hash(password, 10);
@@ -38,11 +39,12 @@ export async function verifyPassword(password, hash) {
 export async function createSession(userId, ipAddress, userAgent) {
   const sessionId = uuidv4();
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  const csrfToken = generateStoredCsrfToken();
 
   await pool.query(
-    `INSERT INTO sessions (id, user_id, expires_at, ip_address, user_agent) 
-     VALUES ($1, $2, $3, $4, $5)`,
-    [sessionId, userId, expiresAt, ipAddress, userAgent]
+    `INSERT INTO sessions (id, user_id, expires_at, ip_address, user_agent, csrf_token) 
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [sessionId, userId, expiresAt, ipAddress, userAgent, csrfToken]
   );
 
   return { sessionId, expiresAt };

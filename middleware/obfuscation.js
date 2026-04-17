@@ -18,11 +18,14 @@ function isClientTransportActive(req) {
   return h[TRANSPORT_CLIENT_ACTIVE_HEADER] === TRANSPORT_CLIENT_ACTIVE_VALUE;
 }
 
-function generateObfuscationKey(sessionId) {
+/** @param {number} [referenceMs] Wall time used for the rotating minute bucket (defaults to now). Must match the request's X-Request-Timestamp when verifying or replaying. */
+function generateObfuscationKey(sessionId, referenceMs = Date.now()) {
   if (!sessionId) {
     throw new Error('Session required for API obfuscation');
   }
-  const timeComponent = Math.floor(Date.now() / 60000);
+  const ms =
+    typeof referenceMs === 'number' && Number.isFinite(referenceMs) ? referenceMs : Date.now();
+  const timeComponent = Math.floor(ms / 60000);
   return `${sessionId}_${timeComponent}`.substring(0, 32);
 }
 
@@ -55,7 +58,8 @@ function obfuscateData(data, key) {
 }
 
 function generateRequestSignature(method, url, body, sessionId, timestamp, nonce) {
-  const key = generateObfuscationKey(sessionId);
+  const refMs = Number(timestamp);
+  const key = generateObfuscationKey(sessionId, Number.isFinite(refMs) ? refMs : Date.now());
   const payload = `${method}:${url}:${body || ''}:${timestamp}:${nonce}`;
 
   let hash = 0;
@@ -89,6 +93,75 @@ function verifyRequestSignature(method, endpoint, body, sessionId, timestamp, no
   return expectedSignature === signature;
 }
 
+/**
+ * Validates signed-transport headers against the request body (before body deobfuscation).
+ * Used in dev plain API when the client still sends transport + signature headers.
+ * @returns {null | { status: number, body: object }}
+ */
+function verifySignedTransportHeaders(req, parsedBody) {
+  let sessionId = req.cookies?.sessionId;
+  if (!sessionId && req.headers.authorization?.startsWith('Bearer ')) {
+    sessionId = req.headers.authorization.replace('Bearer ', '').trim();
+  }
+  if (!sessionId && req.headers['x-link-token'] && req.headers['x-device-fingerprint']) {
+    sessionId = `clocklink:${req.headers['x-link-token']}:${req.headers['x-device-fingerprint']}`;
+  }
+  if (!sessionId || sessionId === 'undefined' || sessionId === 'null') {
+    return { status: 401, body: { error: 'Session required for obfuscated requests' } };
+  }
+
+  const timestamp = req.headers['x-request-timestamp'];
+  const nonce = req.headers['x-request-nonce'];
+  const signature = req.headers['x-request-signature'];
+
+  const requestTime = parseInt(timestamp, 10);
+  const now = Date.now();
+  if (Math.abs(now - requestTime) > 5 * 60 * 1000) {
+    return { status: 400, body: { error: 'Request timestamp too old or invalid' } };
+  }
+
+  let bodyString = '';
+  if (parsedBody && typeof parsedBody === 'object') {
+    if (
+      parsedBody.format === 'information' &&
+      Object.prototype.hasOwnProperty.call(parsedBody, 'data')
+    ) {
+      bodyString = parsedBody.data || '';
+    } else {
+      const keys = Object.keys(parsedBody);
+      bodyString = keys.length === 0 ? '' : JSON.stringify(parsedBody);
+    }
+  } else if (parsedBody !== undefined && parsedBody !== null) {
+    bodyString = String(parsedBody);
+  }
+
+  let endpointPath = req.path;
+  if (endpointPath.includes('?')) {
+    endpointPath = endpointPath.split('?')[0];
+  }
+  if (!endpointPath.startsWith('/')) {
+    endpointPath = '/' + endpointPath;
+  }
+  if (endpointPath.startsWith('/api/')) {
+    endpointPath = endpointPath.substring(4);
+  }
+
+  const isValid = verifyRequestSignature(
+    req.method,
+    endpointPath,
+    bodyString,
+    sessionId,
+    timestamp,
+    nonce,
+    signature
+  );
+
+  if (!isValid) {
+    return { status: 401, body: { error: 'Invalid request signature' } };
+  }
+  return null;
+}
+
 function deobfuscateEndpoint(obfuscated) {
   try {
     const derotated = obfuscated
@@ -119,6 +192,8 @@ const PUBLIC_ENDPOINTS = [
   '/api/contact',
   '/demo-booking',
   '/api/demo-booking',
+  '/public/trial-period',
+  '/api/public/trial-period',
   '/auth/public-csrf-token',
   '/api/auth/public-csrf-token',
   '/auth/signup',
@@ -208,24 +283,53 @@ function hasRequestBody(req) {
 export async function verifyObfuscatedRequest(req, res, next) {
   try {
     if (isDevPlainApi()) {
-      // Skip signature/timestamp validation in dev, but still decode the body when the frontend
+      const rawBody = req.body;
+      // Requests that opt into signed transport must still fail on bad signatures (security tests / prod-like clients).
+      if (isClientTransportActive(req)) {
+        const sig = req.headers['x-request-signature'];
+        const ts = req.headers['x-request-timestamp'];
+        const nonce = req.headers['x-request-nonce'];
+        if (sig && ts && nonce) {
+          const transportErr = verifySignedTransportHeaders(req, rawBody);
+          if (transportErr) {
+            return res.status(transportErr.status).json(transportErr.body);
+          }
+        }
+      }
+      // Skip signature/timestamp validation for plain JSON in dev, but still decode the body when the frontend
       // sent it in obfuscated format — otherwise req.body is the {data,format} wrapper and route
       // handlers can't find staffId, shiftDate etc.
-      if (req.body && req.body.format === 'information' && req.body.hasOwnProperty('data')) {
+      if (
+        rawBody &&
+        rawBody.format === 'information' &&
+        Object.prototype.hasOwnProperty.call(rawBody, 'data')
+      ) {
         let devSessionId = req.cookies?.sessionId;
         if (!devSessionId && req.headers.authorization?.startsWith('Bearer ')) {
           devSessionId = req.headers.authorization.replace('Bearer ', '').trim();
         }
         if (devSessionId && devSessionId !== 'undefined' && devSessionId !== 'null') {
           try {
-            const devKey = generateObfuscationKey(devSessionId);
-            req.body =
-              req.body.data === '' ? {} : JSON.parse(deobfuscateData(req.body.data, devKey));
+            const devTs = req.headers['x-request-timestamp'];
+            const devRefMs = devTs ? parseInt(devTs, 10) : Date.now();
+            const devKey = generateObfuscationKey(
+              devSessionId,
+              Number.isFinite(devRefMs) ? devRefMs : Date.now()
+            );
+            req.body = rawBody.data === '' ? {} : JSON.parse(deobfuscateData(rawBody.data, devKey));
           } catch (_) {
             // If deobfuscation fails in dev, leave body as-is so the route returns a useful error
           }
         }
       }
+      return next();
+    }
+
+    // Trusted internal service (e.g. workalong-ai): plain JSON, Docker network + shared secret.
+    // Still requires user Authorization + CSRF; route handlers enforce access control.
+    const internalSecret = process.env.INTERNAL_SERVICE_SECRET;
+    if (internalSecret && req.headers['x-workalong-internal-secret'] === internalSecret) {
+      req.workalongInternalGateway = true;
       return next();
     }
 
@@ -403,7 +507,7 @@ export async function verifyObfuscatedRequest(req, res, next) {
 
     if (parsedBody && parsedBody.format === 'information' && parsedBody.hasOwnProperty('data')) {
       try {
-        const key = generateObfuscationKey(sessionId);
+        const key = generateObfuscationKey(sessionId, requestTime);
         // Handle empty string data - if data is empty, body should be empty object
         if (parsedBody.data === '') {
           req.body = {};
@@ -446,6 +550,10 @@ export async function verifyObfuscatedRequest(req, res, next) {
 
 export function obfuscateResponse(req, res, next) {
   if (isDevPlainApi()) {
+    return next();
+  }
+
+  if (req.workalongInternalGateway) {
     return next();
   }
 

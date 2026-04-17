@@ -9,8 +9,11 @@ CREATE TABLE public.sessions (
     expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone DEFAULT now(),
     ip_address text,
-    user_agent text
+    user_agent text,
+    csrf_token text
 );
+
+COMMENT ON COLUMN public.sessions.csrf_token IS 'Rotating browser CSRF secret; replaced after each successful X-CSRF-Token validation. GET /api/auth/csrf-token returns current value without consuming it.';
 
 
 --
