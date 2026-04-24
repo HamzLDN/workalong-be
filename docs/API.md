@@ -49,6 +49,12 @@ When you write curl or fetch examples for this API, always include:
 - For employer session: `X-CSRF-Token` from `/api/auth/csrf-token` unless using `wak_`.
 - For browser: `credentials: 'include'` if using cookies.
 
+### AI agent integration guide
+
+For a full walkthrough of building an AI agent that calls the WorkAlong API on a client's behalf using a `wak_` API key, see **[`docs/API-KEYS.md`](./API-KEYS.md)**.
+
+---
+
 ### Compact route index (search keys)
 
 Use this to jump to the right section: `health`, `contact`, `demo-booking`, `auth`, `location`, `locations`, `staff`, `shifts`, `shift-swaps`, `time-entries`, `payroll-preview`, `earnings`, `budgets`, `clockin`, `payment` (Stripe), `payments` (payroll), `fraud`, `activities`, `security`, `support` (proxied).
