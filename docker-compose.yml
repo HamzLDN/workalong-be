@@ -19,6 +19,7 @@ services:
       - DB_USER=workalong
       - DB_PASSWORD=admin
       - DB_NAME=users
+      - INTERNAL_SERVICE_SECRET=${INTERNAL_SERVICE_SECRET}
     volumes:
       - ../workalong-frontend/certs:/app/certs:ro
       - ../workalong-frontend/docker/ssl:/etc/nginx/ssl:ro
