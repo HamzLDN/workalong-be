@@ -377,14 +377,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Pull latest code
-        run: |
-          cd /root/workalong-backend
-          git pull origin main
-
       - name: Build Docker image
         run: |
-          cd /root/workalong-backend
+          cd "${{ github.workspace }}"
           echo "Building Docker image..."
           docker build -f Dockerfile.backend.ubuntu -t workalong-backend:latest .
 
