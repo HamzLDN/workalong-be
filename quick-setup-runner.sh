@@ -1,13 +1,14 @@
 #!/bin/bash
 # Quick setup - paste your token when prompted
 
-cd /root/actions-runner || (mkdir -p /root/actions-runner && cd /root/actions-runner)
+mkdir -p /root/actions/workalong-backend
+cd /root/actions/workalong-backend
 
 # Clean up if exists
 if [ -f "./config.sh" ]; then
     sudo ./svc.sh stop 2>/dev/null || true
     sudo ./svc.sh uninstall 2>/dev/null || true
-    cd /root && rm -rf actions-runner && mkdir -p actions-runner && cd actions-runner
+    cd /root/actions && rm -rf workalong-backend && mkdir -p workalong-backend && cd workalong-backend
 fi
 
 echo "Downloading runner..."

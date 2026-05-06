@@ -12,11 +12,11 @@ This allows GitHub Actions to run directly on your server, giving it access to `
 
 4. **On your server, run these commands:**
    ```bash
-   cd /root/workalong-backend
+   # Prefer a dedicated folder (not inside the repo):
+   mkdir -p /root/actions/workalong-backend && cd /root/actions/workalong-backend
    
    # Download and configure the runner (use the commands from GitHub)
    # Example:
-   mkdir -p actions-runner && cd actions-runner
    curl -o actions-runner-linux-x64-2.311.0.tar.gz -L https://github.com/actions/runner/releases/download/v2.311.0/actions-runner-linux-x64-2.311.0.tar.gz
    tar xzf ./actions-runner-linux-x64-2.311.0.tar.gz
    

@@ -26,8 +26,8 @@ if [ -z "$REGISTRATION_TOKEN" ]; then
     exit 1
 fi
 
-# Set up directory
-RUNNER_DIR="/root/actions-runner"
+# Install under /root/actions/<label> (not inside the git repo; avoids clutter).
+RUNNER_DIR="/root/actions/workalong-backend"
 echo ""
 echo "Setting up runner in: $RUNNER_DIR"
 

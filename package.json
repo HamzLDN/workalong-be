@@ -21,6 +21,8 @@
     "migrate:discount": "node scripts/run-discount-migration.js",
     "migrate:time-entry-approval": "node scripts/run-time-entry-approval-migration.js",
     "db:compare": "bash scripts/compare-db-schemas.sh",
+    "db:mock:init": "node scripts/generate-mock-init.js",
+    "db:mock:up": "npm run db:mock:init && docker compose -f docker-compose.mock.yml up -d",
     "migrate:prod": "node scripts/run-migrations-for-prod.js",
     "schema:sync:prod": "node scripts/run-migrations-for-prod.js"
   },
