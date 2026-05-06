@@ -236,6 +236,27 @@ const PUBLIC_ENDPOINT_PREFIXES = [
   '/support',
 ];
 
+// Some deployments mount the backend under an extra prefix (for example /api/v1).
+// Treat these suffixes as public too so auth recovery flows don't break with
+// "Client protocol required" when the route path is prefixed by a gateway.
+const PUBLIC_ENDPOINT_SUFFIXES = [
+  '/auth/public-csrf-token',
+  '/auth/signup',
+  '/auth/signin',
+  '/auth/forgot-password',
+  '/auth/reset-password',
+  '/auth/verify-code',
+  '/auth/csrf-token',
+  '/auth/session-id',
+  '/health',
+  '/contact',
+  '/demo-booking',
+  '/public/trial-period',
+  '/payment/webhook',
+  '/payment/config',
+  '/payment/verify-session',
+];
+
 /** Exported for tests — public routes skip transport/signature (see verifyObfuscatedRequest). */
 export function isPublicEndpoint(path) {
   if (path == null || path === '') return false;
@@ -255,6 +276,9 @@ export function isPublicEndpoint(path) {
     PUBLIC_ENDPOINTS.includes(normalized) ||
     PUBLIC_ENDPOINTS.includes(cleanPath) ||
     PUBLIC_ENDPOINTS.includes('/api' + normalized) ||
+    PUBLIC_ENDPOINT_SUFFIXES.some(
+      (suffix) => cleanPath.endsWith(suffix) || normalized.endsWith(suffix)
+    ) ||
     PUBLIC_ENDPOINT_PREFIXES.some(
       (prefix) => cleanPath.startsWith(prefix) || normalized.startsWith(prefix)
     );
