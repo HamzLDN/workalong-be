@@ -211,9 +211,10 @@ router.post('/portal/time-entries/:id/approve', requireStaffAuth, async (req, re
     }
 
     // Only allow approval when actual hours exceed scheduled by more than 3 minutes
-    const extraHours = entry.scheduled_hours != null
-      ? parseFloat(entry.hours_worked) - parseFloat(entry.scheduled_hours)
-      : 0;
+    const extraHours =
+      entry.scheduled_hours != null
+        ? parseFloat(entry.hours_worked) - parseFloat(entry.scheduled_hours)
+        : 0;
     if (entry.scheduled_hours != null && extraHours <= OVERTIME_THRESHOLD_HOURS) {
       return res.status(400).json({
         error: 'No overtime to approve — extra time does not exceed 3 minutes',
