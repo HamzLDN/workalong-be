@@ -48,49 +48,54 @@ router.get('/public-csrf-token', (req, res) => {
 async function getUserWithSubscription(userId) {
   try {
     const r = await pool.query(
-      'SELECT id, email, name, is_verified, subscription_status, subscription_plan, subscription_staff_limit, timezone FROM users WHERE id = $1',
+      `SELECT id, email, name, is_verified, subscription_status, subscription_plan,
+              subscription_staff_limit, timezone,
+              created_at, subscription_start_date,
+              annual_leave_hours_target, pension_employee_percent, pension_employer_percent
+       FROM users WHERE id = $1`,
       [userId]
     );
     const row = r.rows[0];
-    if (row && row.subscription_staff_limit == null) row.subscription_staff_limit = null;
+    if (!row) return null;
+    if (row.subscription_staff_limit == null) row.subscription_staff_limit = null;
     return row;
   } catch (colErr) {
-    if (
-      colErr.code === '42703' ||
-      (colErr.message && colErr.message.includes('subscription_staff_limit')) ||
-      (colErr.message && colErr.message.includes('timezone'))
-    ) {
-      try {
+    if (colErr.code !== '42703') throw colErr;
+    try {
+      const r = await pool.query(
+        `SELECT id, email, name, is_verified, subscription_status, subscription_plan, subscription_staff_limit, timezone,
+                created_at, subscription_start_date
+         FROM users WHERE id = $1`,
+        [userId]
+      );
+      const row = r.rows[0];
+      if (row && row.subscription_staff_limit == null) row.subscription_staff_limit = null;
+      if (row) {
+        row.annual_leave_hours_target = 150;
+        row.pension_employee_percent = 5;
+        row.pension_employer_percent = 3;
+      }
+      return row;
+    } catch (e2) {
+      if (e2.code === '42703' && String(e2.message || '').includes('timezone')) {
         const r = await pool.query(
-          'SELECT id, email, name, is_verified, subscription_status, subscription_plan, subscription_staff_limit FROM users WHERE id = $1',
+          `SELECT id, email, name, is_verified, subscription_status, subscription_plan, subscription_staff_limit,
+                  created_at, subscription_start_date
+           FROM users WHERE id = $1`,
           [userId]
         );
         const row = r.rows[0];
         if (row) {
-          if (row.subscription_staff_limit == null) row.subscription_staff_limit = null;
+          row.subscription_staff_limit = row.subscription_staff_limit ?? null;
           row.timezone = null;
+          row.annual_leave_hours_target = 150;
+          row.pension_employee_percent = 5;
+          row.pension_employer_percent = 3;
         }
         return row;
-      } catch (e2) {
-        if (
-          e2.code === '42703' ||
-          (e2.message && e2.message.includes('subscription_staff_limit'))
-        ) {
-          const r = await pool.query(
-            'SELECT id, email, name, is_verified, subscription_status, subscription_plan FROM users WHERE id = $1',
-            [userId]
-          );
-          const row = r.rows[0];
-          if (row) {
-            row.subscription_staff_limit = null;
-            row.timezone = null;
-          }
-          return row;
-        }
-        throw e2;
       }
+      throw e2;
     }
-    throw colErr;
   }
 }
 
@@ -783,11 +788,113 @@ router.get('/me', async (req, res) => {
         subscriptionStaffLimit:
           user.subscription_staff_limit != null ? user.subscription_staff_limit : null,
         timezone: user.timezone || null,
+        createdAt: user.created_at || null,
+        subscriptionStartDate: user.subscription_start_date || null,
+        annualLeaveHoursTarget: parseFloat(user.annual_leave_hours_target ?? 150) || 150,
+        pensionEmployeePercent: parseFloat(user.pension_employee_percent ?? 5) || 5,
+        pensionEmployerPercent: parseFloat(user.pension_employer_percent ?? 3) || 3,
       },
     });
   } catch (error) {
     console.error('Get user error:', error);
     res.status(500).json({ error: 'An error occurred' });
+  }
+});
+
+router.put('/payroll-preferences', async (req, res) => {
+  try {
+    let sessionId =
+      req.cookies.sessionId ||
+      (req.headers.authorization ? req.headers.authorization.replace('Bearer ', '') : null);
+    if (!sessionId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    const session = await getSession(sessionId);
+    if (!session) {
+      return res.status(401).json({ error: 'Invalid or expired session' });
+    }
+
+    const csrfOk = await verifyBrowserSessionCsrf(req, res, sessionId, session.user_id);
+    if (!csrfOk) return;
+
+    const { annualLeaveHoursTarget, pensionEmployeePercent, pensionEmployerPercent } = req.body;
+
+    if (
+      annualLeaveHoursTarget === undefined &&
+      pensionEmployeePercent === undefined &&
+      pensionEmployerPercent === undefined
+    ) {
+      return res.status(400).json({ error: 'No preferences to update' });
+    }
+
+    const updates = [];
+    const values = [];
+    let paramCount = 1;
+
+    if (annualLeaveHoursTarget !== undefined) {
+      const n = Number(annualLeaveHoursTarget);
+      if (!Number.isFinite(n) || n < 0 || n > 520) {
+        return res.status(400).json({ error: 'annualLeaveHoursTarget must be between 0 and 520' });
+      }
+      updates.push(`annual_leave_hours_target = $${paramCount++}`);
+      values.push(Math.round(n * 100) / 100);
+    }
+    if (pensionEmployeePercent !== undefined) {
+      const n = Number(pensionEmployeePercent);
+      if (!Number.isFinite(n) || n < 0 || n > 40) {
+        return res.status(400).json({ error: 'pensionEmployeePercent must be between 0 and 40' });
+      }
+      updates.push(`pension_employee_percent = $${paramCount++}`);
+      values.push(Math.round(n * 100) / 100);
+    }
+    if (pensionEmployerPercent !== undefined) {
+      const n = Number(pensionEmployerPercent);
+      if (!Number.isFinite(n) || n < 0 || n > 40) {
+        return res.status(400).json({ error: 'pensionEmployerPercent must be between 0 and 40' });
+      }
+      updates.push(`pension_employer_percent = $${paramCount++}`);
+      values.push(Math.round(n * 100) / 100);
+    }
+
+    updates.push('updated_at = NOW()');
+    values.push(session.user_id);
+
+    const q = `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount} RETURNING id, email, name, is_verified, subscription_status, subscription_plan, latitude, longitude, timezone,
+      annual_leave_hours_target, pension_employee_percent, pension_employer_percent`;
+
+    let result;
+    try {
+      result = await pool.query(q, values);
+    } catch (e) {
+      if (e.code === '42703') {
+        return res.status(503).json({
+          error:
+            'Database migration required: run add-payroll-hub-extension.sql (payroll preferences columns missing)',
+        });
+      }
+      throw e;
+    }
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const u = result.rows[0];
+    res.json({
+      message: 'Payroll preferences saved',
+      user: {
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        isVerified: u.is_verified,
+        annualLeaveHoursTarget: parseFloat(u.annual_leave_hours_target) || 150,
+        pensionEmployeePercent: parseFloat(u.pension_employee_percent) || 5,
+        pensionEmployerPercent: parseFloat(u.pension_employer_percent) || 3,
+      },
+    });
+  } catch (error) {
+    console.error('Payroll preferences error:', error);
+    res.status(500).json({ error: 'Failed to save payroll preferences' });
   }
 });
 

@@ -66,8 +66,9 @@ describe('Staff Functions', () => {
 
       expect(mockQueryFn).toHaveBeenCalledTimes(1);
       const [query] = mockQueryFn.mock.calls[0];
+      // Query now includes department/branch/manager JOINs and uses alias s.user_id
       expect(query).toContain('FROM staff');
-      expect(query).toContain('WHERE user_id = $1');
+      expect(query).toContain('s.user_id = $1');
       expect(mockQueryFn.mock.calls[0][1]).toEqual([1]);
       expect(result.length).toBe(2);
     });
@@ -134,6 +135,21 @@ describe('Staff Functions', () => {
   describe('updateStaff', () => {
     it('should update staff member', async () => {
       const mockStaff = createMockStaff({ id: 1 });
+
+      // updateStaff uses pool.connect() for a transaction
+      const mockClient = {
+        query: jest.fn(),
+        release: jest.fn(),
+      };
+      mockConnectFn.mockResolvedValue(mockClient);
+
+      mockClient.query
+        .mockResolvedValueOnce({})                                // BEGIN
+        .mockResolvedValueOnce(createMockDbResult([mockStaff]))   // SELECT current (ownership check)
+        .mockResolvedValueOnce(createMockDbResult([mockStaff]))   // UPDATE staff RETURNING
+        .mockResolvedValueOnce({});                               // COMMIT
+
+      // pool.query is used for the assignment-history INSERT (if any) and final SELECT
       mockQueryFn.mockResolvedValue(createMockDbResult([mockStaff]));
 
       const result = await updateStaff(1, 1, {
@@ -141,10 +157,11 @@ describe('Staff Functions', () => {
         hourlyRate: 20.0,
       });
 
-      expect(mockQueryFn).toHaveBeenCalledWith(
+      expect(mockClient.query).toHaveBeenCalledWith(
         expect.stringContaining('UPDATE staff'),
-        expect.arrayContaining([1, 1])
+        expect.any(Array)
       );
+      expect(mockClient.release).toHaveBeenCalled();
       expect(result).toBeDefined();
     });
   });

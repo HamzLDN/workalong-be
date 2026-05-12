@@ -66,36 +66,45 @@ describe('IDOR (Insecure Direct Object Reference) Security Tests', () => {
 
     it('should only return staff belonging to the authenticated user', async () => {
       const userId = 1;
-      const otherUserStaff = createMockStaff({ id: 10, user_id: 2 });
       const userStaff = createMockStaff({ id: 5, user_id: userId });
 
       mockQueryFn.mockResolvedValue(createMockDbResult([userStaff]));
 
       const result = await getStaff(userId);
 
-      expect(mockQueryFn).toHaveBeenCalledWith(expect.stringContaining('WHERE user_id = $1'), [
-        userId,
-      ]);
+      // Query now uses alias s.user_id (after department/branch/manager JOINs)
+      const [query, params] = mockQueryFn.mock.calls[0];
+      expect(query).toContain('s.user_id = $1');
+      expect(params).toEqual([userId]);
       expect(result).toHaveLength(1);
       expect(result[0].user_id).toBe(userId);
     });
 
     it("should prevent user from updating another user's staff", async () => {
       const attackerUserId = 1;
-      const victimUserId = 2;
       const staffId = 10;
 
-      // Mock: staff belongs to victim, update should fail
-      mockQueryFn.mockResolvedValue(createMockDbResult([]));
+      // updateStaff uses pool.connect() for a transaction
+      const mockClient = {
+        query: jest.fn(),
+        release: jest.fn(),
+      };
+      mockConnectFn.mockResolvedValue(mockClient);
+
+      mockClient.query
+        .mockResolvedValueOnce({})                         // BEGIN
+        .mockResolvedValueOnce(createMockDbResult([]))     // SELECT current — staff not owned by attacker
+        .mockResolvedValueOnce({});                        // ROLLBACK
 
       const result = await updateStaff(staffId, attackerUserId, { name: 'Hacked' });
 
-      expect(mockQueryFn).toHaveBeenCalledWith(
-        expect.stringContaining('WHERE id = $'),
-        expect.arrayContaining([staffId, attackerUserId])
-      );
-      // updateStaff returns undefined when no rows match (secure behavior)
-      expect(result).toBeUndefined();
+      // Ownership check: SELECT WHERE id=$1 AND user_id=$2 returns no rows → null
+      const ownershipQuery = mockClient.query.mock.calls[1];
+      expect(ownershipQuery[0]).toContain('WHERE id = $1 AND user_id = $2');
+      expect(ownershipQuery[1]).toEqual([staffId, attackerUserId]);
+      // updateStaff returns null when no rows match (secure behavior)
+      expect(result).toBeNull();
+      expect(mockClient.release).toHaveBeenCalled();
     });
 
     it("should prevent user from deleting another user's staff", async () => {

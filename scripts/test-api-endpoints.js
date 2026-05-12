@@ -2,6 +2,7 @@ import fetch from 'node-fetch';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { execSync } from 'child_process';
+import bcrypt from 'bcrypt';
 import { pool } from '../lib/db.js';
 import {
   TRANSPORT_CLIENT_ACTIVE_HEADER,
@@ -2412,6 +2413,389 @@ async function testGetReferenceNumbers() {
   return assertStatusResponse('Get Reference Numbers', result, 200);
 }
 
+// ============================================================
+// COMPANY STRUCTURE: branches & departments CRUD + cleanup
+// ============================================================
+async function testCompanyStructureFlow() {
+  console.log('\n=== Testing Company Structure CRUD (branches + departments) ===');
+  if (!sessionId) {
+    console.log(`${YELLOW}WARNING:${RESET} No session available, skipping company structure tests`);
+    return false;
+  }
+
+  let branchId = null;
+  let deptId = null;
+  const suffix = Date.now();
+  let allPassed = true;
+
+  try {
+    // 1. Create branch
+    const createBranch = await makeObfuscatedRequest(
+      '/company-structure/branches',
+      { name: `Test Branch ${suffix}`, address: '1 Test Street' },
+      'POST'
+    );
+    const createBranchOk = createBranch.status === 201 && !!createBranch.data?.branch;
+    console.log('  Create Branch:');
+    assertResult(
+      'Create Branch',
+      { status: 201, hasBranch: true },
+      { status: createBranch.status, hasBranch: !!createBranch.data?.branch },
+      createBranchOk
+    );
+    if (createBranchOk) branchId = createBranch.data.branch.id;
+    allPassed = allPassed && createBranchOk;
+
+    // 2. Create department under that branch (branchId may be null — route allows it)
+    const createDept = await makeObfuscatedRequest(
+      '/company-structure/departments',
+      { name: `Test Dept ${suffix}`, description: 'Integration test dept', branchId },
+      'POST'
+    );
+    const createDeptOk = createDept.status === 201 && !!createDept.data?.department;
+    console.log('  Create Department:');
+    assertResult(
+      'Create Department',
+      { status: 201, hasDepartment: true },
+      { status: createDept.status, hasDepartment: !!createDept.data?.department },
+      createDeptOk
+    );
+    if (createDeptOk) deptId = createDept.data.department.id;
+    allPassed = allPassed && createDeptOk;
+
+    // 3. Get company structure (should include the new branch + dept)
+    const getStructure = await makeObfuscatedRequest('/company-structure', {}, 'GET');
+    const getStructureOk = getStructure.ok && Array.isArray(getStructure.data?.branches);
+    console.log('  Get Company Structure:');
+    assertResult(
+      'Get Company Structure',
+      { status: 200, hasBranches: true },
+      { status: getStructure.status, hasBranches: Array.isArray(getStructure.data?.branches) },
+      getStructureOk
+    );
+    allPassed = allPassed && getStructureOk;
+
+    // 4. Update branch name
+    if (branchId) {
+      const updateBranch = await makeObfuscatedRequest(
+        `/company-structure/branches/${branchId}`,
+        { name: `Test Branch Updated ${suffix}` },
+        'PUT'
+      );
+      const updateBranchOk = updateBranch.ok && updateBranch.data?.branch?.name?.includes('Updated');
+      console.log('  Update Branch:');
+      assertResult(
+        'Update Branch',
+        { status: 200, nameUpdated: true },
+        { status: updateBranch.status, nameUpdated: !!updateBranch.data?.branch?.name?.includes('Updated') },
+        updateBranchOk
+      );
+      allPassed = allPassed && updateBranchOk;
+    }
+
+    // 5. Update department description
+    if (deptId) {
+      const updateDept = await makeObfuscatedRequest(
+        `/company-structure/departments/${deptId}`,
+        { description: 'Updated description' },
+        'PUT'
+      );
+      const updateDeptOk = updateDept.ok && !!updateDept.data?.department;
+      console.log('  Update Department:');
+      assertResult(
+        'Update Department',
+        { status: 200, hasDepartment: true },
+        { status: updateDept.status, hasDepartment: !!updateDept.data?.department },
+        updateDeptOk
+      );
+      allPassed = allPassed && updateDeptOk;
+    }
+  } finally {
+    // Cleanup — always delete even if tests fail, dept before branch
+    if (deptId) {
+      const delDept = await makeObfuscatedRequest(`/company-structure/departments/${deptId}`, {}, 'DELETE');
+      const delDeptOk = delDept.ok;
+      console.log(`  Delete Department (cleanup): ${delDeptOk ? `${GREEN}OK${RESET}` : `${RED}FAIL${RESET}`}`);
+    }
+    if (branchId) {
+      const delBranch = await makeObfuscatedRequest(`/company-structure/branches/${branchId}`, {}, 'DELETE');
+      const delBranchOk = delBranch.ok;
+      console.log(`  Delete Branch (cleanup): ${delBranchOk ? `${GREEN}OK${RESET}` : `${RED}FAIL${RESET}`}`);
+    }
+  }
+
+  return allPassed;
+}
+
+// ============================================================
+// STAFF ACCESS ROLE: promote to manager then reset, with cleanup
+// ============================================================
+async function testStaffAccessRoleCycle() {
+  console.log('\n=== Testing Staff Access Role Cycle (promote → demote) ===');
+  if (!sessionId) {
+    console.log(`${YELLOW}WARNING:${RESET} No session available, skipping access role tests`);
+    return false;
+  }
+
+  const newStaffId = await createTestStaff();
+  if (!newStaffId) {
+    console.log(`${YELLOW}WARNING:${RESET} Could not create test staff, skipping`);
+    return true;
+  }
+
+  let allPassed = true;
+
+  try {
+    // 1. Promote to manager
+    const promoteResult = await makeObfuscatedRequest(
+      `/staff/${newStaffId}`,
+      { accessRole: 'manager' },
+      'PUT'
+    );
+    const promoteOk =
+      promoteResult.ok && promoteResult.data?.staff?.access_role === 'manager';
+    console.log('  Promote to manager:');
+    assertResult(
+      'Promote to manager',
+      { status: 200, accessRole: 'manager' },
+      { status: promoteResult.status, accessRole: promoteResult.data?.staff?.access_role },
+      promoteOk
+    );
+    allPassed = allPassed && promoteOk;
+
+    // 2. Demote back to employee
+    const demoteResult = await makeObfuscatedRequest(
+      `/staff/${newStaffId}`,
+      { accessRole: 'employee' },
+      'PUT'
+    );
+    const demoteOk =
+      demoteResult.ok && demoteResult.data?.staff?.access_role === 'employee';
+    console.log('  Demote back to employee:');
+    assertResult(
+      'Demote back to employee',
+      { status: 200, accessRole: 'employee' },
+      { status: demoteResult.status, accessRole: demoteResult.data?.staff?.access_role },
+      demoteOk
+    );
+    allPassed = allPassed && demoteOk;
+
+    // 3. Invalid role is rejected
+    const invalidResult = await makeObfuscatedRequest(
+      `/staff/${newStaffId}`,
+      { accessRole: 'superadmin' },
+      'PUT'
+    );
+    const invalidOk = !invalidResult.ok && invalidResult.status === 400;
+    console.log('  Invalid access role rejected:');
+    assertResult(
+      'Invalid access role rejected',
+      { status: 400, ok: false },
+      { status: invalidResult.status, ok: invalidResult.ok },
+      invalidOk
+    );
+    allPassed = allPassed && invalidOk;
+  } finally {
+    // Cleanup — delete the test staff immediately
+    const delResult = await makeObfuscatedRequest(`/staff/${newStaffId}`, {}, 'DELETE');
+    const delOk = delResult.ok;
+    console.log(`  Delete test staff (cleanup): ${delOk ? `${GREEN}OK${RESET}` : `${RED}FAIL${RESET}`}`);
+  }
+
+  return allPassed;
+}
+
+// ============================================================
+// STAFF PORTAL: login as manager → /portal/team → logout
+//               login as employee → /portal/team → 403
+// Both with immediate cleanup of created staff
+// ============================================================
+async function testStaffPortalFlow() {
+  console.log('\n=== Testing Staff Portal Login Flow (manager + employee) ===');
+  if (!sessionId) {
+    console.log(`${YELLOW}WARNING:${RESET} No session available, skipping portal flow tests`);
+    return false;
+  }
+
+  const suffix = Date.now();
+  const managerEmail = `portal-manager-${suffix}@example.com`;
+  const employeeEmail = `portal-employee-${suffix}@example.com`;
+  const testPassword = 'TestPortal123!';
+  let managerStaffId = null;
+  let managerUsername = null;
+  let employeeStaffId = null;
+  let employeeUsername = null;
+  let allPassed = true;
+
+  // Helper: make a plain (non-obfuscated) staff portal request
+  async function staffPortalRequest(endpoint, options = {}, staffSessionId = null) {
+    const url = `${API_BASE_URL}${endpoint}`;
+    const headers = { 'Content-Type': 'application/json', ...options.headers };
+    if (staffSessionId) headers['Cookie'] = `staffSessionId=${staffSessionId}`;
+    try {
+      const response = await fetch(url, { ...options, headers });
+      let data;
+      try { data = await response.json(); } catch { data = null; }
+      return { status: response.status, ok: response.ok, data, headers: response.headers };
+    } catch (err) {
+      return { status: 0, ok: false, data: null };
+    }
+  }
+
+  try {
+    // Create manager staff via employer API
+    const mgrCreate = await makeObfuscatedRequest(
+      '/staff',
+      { name: 'Test Manager', email: managerEmail, role: 'Manager', hourlyRate: 20, employmentType: 'full-time' },
+      'POST'
+    );
+    if (!mgrCreate.ok || !mgrCreate.data?.staff) {
+      console.log(`  ${YELLOW}WARNING:${RESET} Could not create manager staff, skipping portal test`);
+      return true;
+    }
+    managerStaffId = mgrCreate.data.staff.id;
+    // Staff username is generated as "name.clockin_id" (not email) — fetch from DB for login
+    const mgrRow = await pool.query('SELECT username FROM staff WHERE id = $1', [managerStaffId]);
+    managerUsername = mgrRow.rows[0]?.username;
+
+    // Promote to manager
+    await makeObfuscatedRequest(`/staff/${managerStaffId}`, { accessRole: 'manager' }, 'PUT');
+
+    // Create employee staff
+    const empCreate = await makeObfuscatedRequest(
+      '/staff',
+      { name: 'Test Employee', email: employeeEmail, role: 'Staff', hourlyRate: 12, employmentType: 'part-time' },
+      'POST'
+    );
+    if (empCreate.ok && empCreate.data?.staff) {
+      employeeStaffId = empCreate.data.staff.id;
+      const empRow = await pool.query('SELECT username FROM staff WHERE id = $1', [employeeStaffId]);
+      employeeUsername = empRow.rows[0]?.username;
+    }
+
+    // Set password for both directly in DB (bypasses email token flow for testing)
+    const passwordHash = await bcrypt.hash(testPassword, 10);
+    await pool.query(
+      `UPDATE staff SET password_hash = $1, password_set = TRUE WHERE id = ANY($2::bigint[])`,
+      [passwordHash, [managerStaffId, employeeStaffId].filter(Boolean)]
+    );
+
+    // ---- Manager login flow ----
+    console.log('  [Manager login]');
+    const mgrLogin = await staffPortalRequest('/staff/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: managerUsername, password: testPassword }),
+    });
+    const mgrLoginOk =
+      mgrLogin.ok &&
+      mgrLogin.data?.staff?.accessRole === 'manager';
+    console.log('  Manager login:');
+    assertResult(
+      'Manager login',
+      { status: 200, accessRole: 'manager' },
+      { status: mgrLogin.status, accessRole: mgrLogin.data?.staff?.accessRole },
+      mgrLoginOk
+    );
+    allPassed = allPassed && mgrLoginOk;
+
+    // Extract staffSessionId from Set-Cookie
+    let mgrSessionId = null;
+    const mgrSetCookie = mgrLogin.headers.get('set-cookie') || '';
+    const mgrCookieMatch = mgrSetCookie.match(/staffSessionId=([^;]+)/);
+    if (mgrCookieMatch) mgrSessionId = mgrCookieMatch[1];
+
+    if (mgrSessionId) {
+      // Manager accesses /portal/team → 200
+      const teamResult = await staffPortalRequest('/staff/portal/team', { method: 'GET' }, mgrSessionId);
+      const teamOk = teamResult.ok && Array.isArray(teamResult.data?.team);
+      console.log('  Manager GET /portal/team:');
+      assertResult(
+        'Manager GET /portal/team',
+        { status: 200, hasTeamArray: true },
+        { status: teamResult.status, hasTeamArray: Array.isArray(teamResult.data?.team) },
+        teamOk
+      );
+      allPassed = allPassed && teamOk;
+
+      // Manager auth/me returns accessRole
+      const meResult = await staffPortalRequest('/staff/auth/me', { method: 'GET' }, mgrSessionId);
+      const meOk = meResult.ok && meResult.data?.staff?.accessRole === 'manager';
+      console.log('  Manager GET /staff/auth/me:');
+      assertResult(
+        'Manager /auth/me returns accessRole=manager',
+        { status: 200, accessRole: 'manager' },
+        { status: meResult.status, accessRole: meResult.data?.staff?.accessRole },
+        meOk
+      );
+      allPassed = allPassed && meOk;
+
+      // Manager logout
+      await staffPortalRequest('/staff/auth/logout', { method: 'POST' }, mgrSessionId);
+      console.log(`  Manager logout: ${GREEN}OK${RESET}`);
+    }
+
+    // ---- Employee login + portal denial ----
+    if (employeeStaffId) {
+      console.log('  [Employee portal denial]');
+      const empLogin = await staffPortalRequest('/staff/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username: employeeUsername, password: testPassword }),
+      });
+      const empLoginOk = empLogin.ok && empLogin.data?.staff?.accessRole === 'employee';
+      console.log('  Employee login:');
+      assertResult(
+        'Employee login',
+        { status: 200, accessRole: 'employee' },
+        { status: empLogin.status, accessRole: empLogin.data?.staff?.accessRole },
+        empLoginOk
+      );
+      allPassed = allPassed && empLoginOk;
+
+      let empSessionId = null;
+      const empSetCookie = empLogin.headers.get('set-cookie') || '';
+      const empCookieMatch = empSetCookie.match(/staffSessionId=([^;]+)/);
+      if (empCookieMatch) empSessionId = empCookieMatch[1];
+
+      if (empSessionId) {
+        // Employee trying /portal/team → 403
+        const empTeam = await staffPortalRequest('/staff/portal/team', { method: 'GET' }, empSessionId);
+        const empDeniedOk = empTeam.status === 403;
+        console.log('  Employee GET /portal/team (must be 403):');
+        assertResult(
+          'Employee denied /portal/team',
+          { status: 403 },
+          { status: empTeam.status },
+          empDeniedOk
+        );
+        allPassed = allPassed && empDeniedOk;
+
+        await staffPortalRequest('/staff/auth/logout', { method: 'POST' }, empSessionId);
+        console.log(`  Employee logout: ${GREEN}OK${RESET}`);
+      }
+    }
+
+    // Unauthenticated /portal/team → 401
+    const unauthTeam = await staffPortalRequest('/staff/portal/team', { method: 'GET' });
+    const unauthOk = unauthTeam.status === 401;
+    console.log('  Unauthenticated GET /portal/team (must be 401):');
+    assertResult(
+      'Unauthenticated /portal/team',
+      { status: 401 },
+      { status: unauthTeam.status },
+      unauthOk
+    );
+    allPassed = allPassed && unauthOk;
+  } finally {
+    // Cleanup — delete both test staff members immediately
+    for (const sid of [managerStaffId, employeeStaffId].filter(Boolean)) {
+      const del = await makeObfuscatedRequest(`/staff/${sid}`, {}, 'DELETE');
+      console.log(`  Delete staff ${sid} (cleanup): ${del.ok ? `${GREEN}OK${RESET}` : `${RED}FAIL${RESET}`}`);
+    }
+  }
+
+  return allPassed;
+}
+
 async function runAllTests() {
   console.log('========================================');
   console.log('COMPREHENSIVE API Endpoint Testing Suite');
@@ -2603,6 +2987,24 @@ async function runAllTests() {
     const updateStaffOk = await testUpdateStaff();
     results.tests.push({ name: 'Update Staff', passed: updateStaffOk });
     if (updateStaffOk) results.passed++;
+    else results.failed++;
+
+    // Company Structure (branches + departments)
+    const companyStructureOk = await testCompanyStructureFlow();
+    results.tests.push({ name: 'Company Structure CRUD (branch + dept)', passed: companyStructureOk });
+    if (companyStructureOk) results.passed++;
+    else results.failed++;
+
+    // Staff Access Role cycle
+    const accessRoleCycleOk = await testStaffAccessRoleCycle();
+    results.tests.push({ name: 'Staff Access Role Cycle (promote/demote/invalid)', passed: accessRoleCycleOk });
+    if (accessRoleCycleOk) results.passed++;
+    else results.failed++;
+
+    // Staff Portal login/team/logout + employee denial
+    const staffPortalOk = await testStaffPortalFlow();
+    results.tests.push({ name: 'Staff Portal Flow (login/team/logout + employee denial)', passed: staffPortalOk });
+    if (staffPortalOk) results.passed++;
     else results.failed++;
 
     // Shift endpoints

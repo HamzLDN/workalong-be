@@ -13,7 +13,7 @@ CREATE TABLE public.sessions (
     csrf_token text
 );
 
-COMMENT ON COLUMN public.sessions.csrf_token IS 'Rotating browser CSRF secret; replaced after each successful X-CSRF-Token validation. GET /api/auth/csrf-token returns current value without consuming it.';
+-- Column comment applied by add-session-csrf-token.sql (additive) so existing DBs without csrf_token are not blocked by COMMENT before ALTER.
 
 
 --

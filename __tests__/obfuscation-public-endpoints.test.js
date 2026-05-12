@@ -27,6 +27,30 @@ describe('isPublicEndpoint', () => {
     expect(isPublicEndpoint('/support/chat/messages')).toBe(true);
   });
 
+  it('treats staff auth login and logout as public (no employer session at that point)', () => {
+    expect(isPublicEndpoint('/api/staff/auth/login')).toBe(true);
+    expect(isPublicEndpoint('/staff/auth/login')).toBe(true);
+    expect(isPublicEndpoint('/api/staff/auth/logout')).toBe(true);
+    expect(isPublicEndpoint('/staff/auth/logout')).toBe(true);
+  });
+
+  it('treats staff set-password as public (token-based, no session)', () => {
+    expect(isPublicEndpoint('/api/staff/set-password')).toBe(true);
+    expect(isPublicEndpoint('/staff/set-password')).toBe(true);
+  });
+
+  it('treats staff portal routes as public (use staff session cookie, not employer obfuscation)', () => {
+    expect(isPublicEndpoint('/api/staff/portal/team')).toBe(true);
+    expect(isPublicEndpoint('/staff/portal/team')).toBe(true);
+    expect(isPublicEndpoint('/api/staff/portal/anything')).toBe(true);
+  });
+
+  it('does NOT treat arbitrary staff routes as public', () => {
+    expect(isPublicEndpoint('/api/staff')).toBe(false);
+    expect(isPublicEndpoint('/api/staff/1')).toBe(false);
+    expect(isPublicEndpoint('/api/staff/stats')).toBe(false);
+  });
+
   it('treats demo booking and contact as public (plain JSON, no signed transport)', () => {
     expect(isPublicEndpoint('/api/demo-booking')).toBe(true);
     expect(isPublicEndpoint('/demo-booking')).toBe(true);

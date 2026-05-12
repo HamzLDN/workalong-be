@@ -58,7 +58,9 @@ async function main() {
             OR email ILIKE 'security-test%'
          ORDER BY id`
       );
-      console.log('Using default test-account filter (@example.com, cookie-test%, security-test%).');
+      console.log(
+        'Using default test-account filter (@example.com, cookie-test%, security-test%).'
+      );
     } else {
       list = await client.query(
         `SELECT id, email, name FROM users WHERE LOWER(email) LIKE LOWER($1) ORDER BY id`,

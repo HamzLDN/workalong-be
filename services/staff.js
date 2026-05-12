@@ -372,11 +372,7 @@ export async function updateStaff(staffId, userId, data) {
     );
 
     const before = current.rows[0];
-    if (
-      departmentId !== undefined ||
-      branchId !== undefined ||
-      managerId !== undefined
-    ) {
+    if (departmentId !== undefined || branchId !== undefined || managerId !== undefined) {
       await client.query(
         `INSERT INTO staff_assignment_history
          (user_id, staff_id, from_department_id, to_department_id, from_branch_id, to_branch_id, from_manager_id, to_manager_id, reason)

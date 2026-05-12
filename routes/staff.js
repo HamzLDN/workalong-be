@@ -119,15 +119,15 @@ router.get('/portal/team', requireStaffAuth, async (req, res) => {
       [req.staffId]
     );
     const pendingEntries = await pool.query(
-      `SELECT te.id, te.clock_in, te.clock_out, te.hours_worked,
+      `SELECT te.id, te.clock_in_time AS clock_in, te.clock_out_time AS clock_out, te.hours_worked,
               te.leave_category, te.notes, te.approved_at,
               s.name AS staff_name, s.lastname AS staff_lastname
        FROM time_entries te
        JOIN staff s ON te.staff_id = s.id
        WHERE s.manager_id = $1
          AND te.approved_at IS NULL
-         AND te.clock_out IS NOT NULL
-       ORDER BY te.clock_in DESC
+         AND te.clock_out_time IS NOT NULL
+       ORDER BY te.clock_in_time DESC
        LIMIT 50`,
       [req.staffId]
     );

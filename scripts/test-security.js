@@ -2333,6 +2333,169 @@ async function testExtendedBusinessLogic() {
   }
 }
 
+// ============================================================
+// Company Structure & Staff Portal Security Tests
+// ============================================================
+async function testCompanyStructureAndPortalSecurity() {
+  console.log('\n========================================');
+  console.log('21. Company Structure & Staff Portal Security Tests');
+  console.log('========================================\n');
+
+  // Refresh CSRF tokens for both users — earlier tests may have exhausted them
+  const csrfA = await fetchSessionCsrfToken(userA.sessionId);
+  if (csrfA) userA.csrfToken = csrfA;
+  const csrfB = await fetchSessionCsrfToken(userB.sessionId);
+  if (csrfB) userB.csrfToken = csrfB;
+
+  // ---- Company Structure IDOR ----
+
+  // User A creates a branch
+  const branchA = await makeObfuscatedRequest(
+    '/company-structure/branches',
+    { name: `Sec Test Branch ${Date.now()}` },
+    'POST',
+    userA
+  );
+  if (branchA.ok && branchA.data?.branch) {
+    const branchId = branchA.data.branch.id;
+
+    // User B tries to update User A's branch
+    const updateXUser = await makeObfuscatedRequest(
+      `/company-structure/branches/${branchId}`,
+      { name: 'Hijacked Branch' },
+      'PUT',
+      userB
+    );
+    recordTest(
+      "Company Structure IDOR: User B cannot update User A's branch",
+      !updateXUser.ok || updateXUser.status === 404,
+      `Status: ${updateXUser.status}`
+    );
+
+    // User B tries to delete User A's branch
+    const deleteXUser = await makeObfuscatedRequest(
+      `/company-structure/branches/${branchId}`,
+      {},
+      'DELETE',
+      userB
+    );
+    recordTest(
+      "Company Structure IDOR: User B cannot delete User A's branch",
+      !deleteXUser.ok || deleteXUser.status === 404,
+      `Status: ${deleteXUser.status}`
+    );
+
+    // Cleanup — User A deletes their own branch
+    await makeObfuscatedRequest(`/company-structure/branches/${branchId}`, {}, 'DELETE', userA);
+  } else {
+    console.log(`  ${YELLOW}NOTE:${RESET} Could not create branch for IDOR test (status ${branchA.status}) — skipping cross-user branch checks`);
+  }
+
+  // User A creates a department (no branch required)
+  const deptA = await makeObfuscatedRequest(
+    '/company-structure/departments',
+    { name: `Sec Test Dept ${Date.now()}` },
+    'POST',
+    userA
+  );
+  if (deptA.ok && deptA.data?.department) {
+    const deptId = deptA.data.department.id;
+
+    // User B tries to update User A's department
+    const updateDeptXUser = await makeObfuscatedRequest(
+      `/company-structure/departments/${deptId}`,
+      { name: 'Hijacked Department' },
+      'PUT',
+      userB
+    );
+    recordTest(
+      "Company Structure IDOR: User B cannot update User A's department",
+      !updateDeptXUser.ok || updateDeptXUser.status === 404,
+      `Status: ${updateDeptXUser.status}`
+    );
+
+    // User B tries to delete User A's department
+    const deleteDeptXUser = await makeObfuscatedRequest(
+      `/company-structure/departments/${deptId}`,
+      {},
+      'DELETE',
+      userB
+    );
+    recordTest(
+      "Company Structure IDOR: User B cannot delete User A's department",
+      !deleteDeptXUser.ok || deleteDeptXUser.status === 404,
+      `Status: ${deleteDeptXUser.status}`
+    );
+
+    // Cleanup — User A deletes their own department
+    await makeObfuscatedRequest(`/company-structure/departments/${deptId}`, {}, 'DELETE', userA);
+  } else {
+    console.log(`  ${YELLOW}NOTE:${RESET} Could not create department for IDOR test (status ${deptA.status}) — skipping cross-user department checks`);
+  }
+
+  // ---- Staff Portal Access Control ----
+
+  // Unauthenticated request to staff portal should be 401
+  const unauthPortal = await makeRequest('/staff/portal/team', { method: 'GET' });
+  recordTest(
+    'Staff Portal: Unauthenticated /portal/team returns 401',
+    unauthPortal.status === 401,
+    `Status: ${unauthPortal.status}`
+  );
+
+  // Employer session cookie CANNOT access staff portal (different auth domains)
+  const employerCookiePortal = await makeRequest('/staff/portal/team', {
+    method: 'GET',
+    headers: {
+      Cookie: `sessionId=${userA.sessionId}`,
+      Authorization: `Bearer ${userA.sessionId}`,
+    },
+  });
+  recordTest(
+    'Staff Portal: Employer session cookie rejected by /portal/team (401)',
+    employerCookiePortal.status === 401,
+    `Status: ${employerCookiePortal.status}`
+  );
+
+  // Staff portal login with wrong password returns 401 (not a 500)
+  const badLogin = await makeRequest('/staff/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username: 'nonexistent@nowhere.invalid', password: 'badpassword' }),
+  });
+  recordTest(
+    'Staff Portal Login: Invalid credentials return 401 not 500',
+    badLogin.status === 401 || badLogin.status === 400,
+    `Status: ${badLogin.status}`
+  );
+
+  // Staff portal login without body fields returns 400
+  const emptyLogin = await makeRequest('/staff/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+  recordTest(
+    'Staff Portal Login: Missing credentials return 400',
+    emptyLogin.status === 400,
+    `Status: ${emptyLogin.status}`
+  );
+
+  // ---- Access Role Mass Assignment ----
+  // Employer cannot set an arbitrary invalid access role via staff update
+  if (userA.staffId) {
+    const badRole = await makeObfuscatedRequest(
+      `/staff/${userA.staffId}`,
+      { accessRole: 'superadmin' },
+      'PUT',
+      userA
+    );
+    recordTest(
+      'Staff Access Role: Invalid role value rejected (400)',
+      !badRole.ok && badRole.status === 400,
+      `Status: ${badRole.status}`
+    );
+  }
+}
+
 // Main test runner
 async function runSecurityTests() {
   console.log('\n========================================');
@@ -2391,6 +2554,7 @@ async function runSecurityTests() {
     await testExtendedInputValidation();
     await testExtendedSessionSecurity();
     await testExtendedBusinessLogic();
+    await testCompanyStructureAndPortalSecurity();
   } finally {
     await cleanupTestUsers();
   }

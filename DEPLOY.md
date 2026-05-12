@@ -8,11 +8,18 @@ Before deploying to production, ensure your main and mock databases have matchin
 # 1. Sync mock from main (if you've run migrations on main)
 ./docker/scripts/clone-db-to-mock.sh
 
-# 2. Compare schemas - must pass before deploy
+# 2. Compare schemas - must pass before deploy (core Workalong tables + shared extras below)
 npm run db:compare
 ```
 
-If schemas differ, apply migrations to the main DB first (`npm run migrate:time-entry-approval` etc.), then re-run `docker/scripts/clone-db-to-mock.sh` and `npm run db:compare`.
+Schema-only sync on mock:
+
+```bash
+DB_HOST=127.0.0.1 DB_PORT=5433 DB_USER=workalong DB_PASSWORD=… DB_NAME=users NODE_ENV=production npm run migrate:prod
+npm run db:mock:apply-extras
+```
+
+If schemas differ after that, sync data from main (`./docker/scripts/clone-db-to-mock.sh`) or apply missing DDL on main first, then repeat.
 
 ### Apply migrations to production
 
@@ -30,9 +37,19 @@ export DB_NAME=users
 NODE_ENV=production npm run migrate:prod
 ```
 
-This applies the same incremental migrations as your mock DB, in order: `subscription_discount_percent` on `users`, `approved_at`/`approved_by` on `time_entries`, `timezone` on `users` and `leave_category` on `time_entries`, **`device_links` (clock-in kiosk links)**, **`staff_face_profiles` (Face ID)**, etc. See `scripts/run-migrations-for-prod.js` for the full list. Migrations are idempotent (safe to re-run if already applied).
+This applies the same incremental migrations as your mock DB, in order: `subscription_discount_percent` on `users`, `approved_at`/`approved_by` on `time_entries`, `timezone` on `users` and `leave_category` on `time_entries`, **`device_links` (clock-in kiosk links)**, **`staff_face_profiles` (Face ID)**, sessions `csrf_token`, etc. See `scripts/run-migrations-for-prod.js` for the full list. Migrations are idempotent (safe to re-run if already applied).
 
-**Git push does not run SQL** — after deploy, run `npm run migrate:prod` against production (or run the same SQL files your mock used) so prod matches mock.
+**Push to `main`** runs GitHub Actions deploy, which builds the image and runs `npm run migrate:prod` against production Postgres before restarting the backend container (`Sync production database schema` in `.github/workflows/main.yml`). Pushes that only change `.sql` files now trigger this workflow (`**/*.sql` in workflow `paths`).
+
+### Mock database: match production layout
+
+Production may also have **admin panel** tables (`admin_passkeys`, `admin_chat_messages`, …), `app_settings`, and **`billing_reminder_log`** (created by the billing reminder helper). Those are not part of `migrate:prod`. After syncing the core schema on mock (`npm run migrate:prod` with `DB_HOST`/`DB_PORT` pointing at mock), run:
+
+```bash
+npm run db:mock:apply-extras
+```
+
+Then `npm run db:compare` should report main and mock schemas in sync (assuming both received the same extras).
 
 ---
 
