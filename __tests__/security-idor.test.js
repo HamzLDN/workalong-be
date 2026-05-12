@@ -92,9 +92,9 @@ describe('IDOR (Insecure Direct Object Reference) Security Tests', () => {
       mockConnectFn.mockResolvedValue(mockClient);
 
       mockClient.query
-        .mockResolvedValueOnce({})                         // BEGIN
-        .mockResolvedValueOnce(createMockDbResult([]))     // SELECT current — staff not owned by attacker
-        .mockResolvedValueOnce({});                        // ROLLBACK
+        .mockResolvedValueOnce({}) // BEGIN
+        .mockResolvedValueOnce(createMockDbResult([])) // SELECT current — staff not owned by attacker
+        .mockResolvedValueOnce({}); // ROLLBACK
 
       const result = await updateStaff(staffId, attackerUserId, { name: 'Hacked' });
 

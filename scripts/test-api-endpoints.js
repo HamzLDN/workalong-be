@@ -2482,12 +2482,16 @@ async function testCompanyStructureFlow() {
         { name: `Test Branch Updated ${suffix}` },
         'PUT'
       );
-      const updateBranchOk = updateBranch.ok && updateBranch.data?.branch?.name?.includes('Updated');
+      const updateBranchOk =
+        updateBranch.ok && updateBranch.data?.branch?.name?.includes('Updated');
       console.log('  Update Branch:');
       assertResult(
         'Update Branch',
         { status: 200, nameUpdated: true },
-        { status: updateBranch.status, nameUpdated: !!updateBranch.data?.branch?.name?.includes('Updated') },
+        {
+          status: updateBranch.status,
+          nameUpdated: !!updateBranch.data?.branch?.name?.includes('Updated'),
+        },
         updateBranchOk
       );
       allPassed = allPassed && updateBranchOk;
@@ -2513,14 +2517,26 @@ async function testCompanyStructureFlow() {
   } finally {
     // Cleanup — always delete even if tests fail, dept before branch
     if (deptId) {
-      const delDept = await makeObfuscatedRequest(`/company-structure/departments/${deptId}`, {}, 'DELETE');
+      const delDept = await makeObfuscatedRequest(
+        `/company-structure/departments/${deptId}`,
+        {},
+        'DELETE'
+      );
       const delDeptOk = delDept.ok;
-      console.log(`  Delete Department (cleanup): ${delDeptOk ? `${GREEN}OK${RESET}` : `${RED}FAIL${RESET}`}`);
+      console.log(
+        `  Delete Department (cleanup): ${delDeptOk ? `${GREEN}OK${RESET}` : `${RED}FAIL${RESET}`}`
+      );
     }
     if (branchId) {
-      const delBranch = await makeObfuscatedRequest(`/company-structure/branches/${branchId}`, {}, 'DELETE');
+      const delBranch = await makeObfuscatedRequest(
+        `/company-structure/branches/${branchId}`,
+        {},
+        'DELETE'
+      );
       const delBranchOk = delBranch.ok;
-      console.log(`  Delete Branch (cleanup): ${delBranchOk ? `${GREEN}OK${RESET}` : `${RED}FAIL${RESET}`}`);
+      console.log(
+        `  Delete Branch (cleanup): ${delBranchOk ? `${GREEN}OK${RESET}` : `${RED}FAIL${RESET}`}`
+      );
     }
   }
 
@@ -2552,8 +2568,7 @@ async function testStaffAccessRoleCycle() {
       { accessRole: 'manager' },
       'PUT'
     );
-    const promoteOk =
-      promoteResult.ok && promoteResult.data?.staff?.access_role === 'manager';
+    const promoteOk = promoteResult.ok && promoteResult.data?.staff?.access_role === 'manager';
     console.log('  Promote to manager:');
     assertResult(
       'Promote to manager',
@@ -2569,8 +2584,7 @@ async function testStaffAccessRoleCycle() {
       { accessRole: 'employee' },
       'PUT'
     );
-    const demoteOk =
-      demoteResult.ok && demoteResult.data?.staff?.access_role === 'employee';
+    const demoteOk = demoteResult.ok && demoteResult.data?.staff?.access_role === 'employee';
     console.log('  Demote back to employee:');
     assertResult(
       'Demote back to employee',
@@ -2599,7 +2613,9 @@ async function testStaffAccessRoleCycle() {
     // Cleanup — delete the test staff immediately
     const delResult = await makeObfuscatedRequest(`/staff/${newStaffId}`, {}, 'DELETE');
     const delOk = delResult.ok;
-    console.log(`  Delete test staff (cleanup): ${delOk ? `${GREEN}OK${RESET}` : `${RED}FAIL${RESET}`}`);
+    console.log(
+      `  Delete test staff (cleanup): ${delOk ? `${GREEN}OK${RESET}` : `${RED}FAIL${RESET}`}`
+    );
   }
 
   return allPassed;
@@ -2635,7 +2651,11 @@ async function testStaffPortalFlow() {
     try {
       const response = await fetch(url, { ...options, headers });
       let data;
-      try { data = await response.json(); } catch { data = null; }
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
       return { status: response.status, ok: response.ok, data, headers: response.headers };
     } catch (err) {
       return { status: 0, ok: false, data: null };
@@ -2646,11 +2666,19 @@ async function testStaffPortalFlow() {
     // Create manager staff via employer API
     const mgrCreate = await makeObfuscatedRequest(
       '/staff',
-      { name: 'Test Manager', email: managerEmail, role: 'Manager', hourlyRate: 20, employmentType: 'full-time' },
+      {
+        name: 'Test Manager',
+        email: managerEmail,
+        role: 'Manager',
+        hourlyRate: 20,
+        employmentType: 'full-time',
+      },
       'POST'
     );
     if (!mgrCreate.ok || !mgrCreate.data?.staff) {
-      console.log(`  ${YELLOW}WARNING:${RESET} Could not create manager staff, skipping portal test`);
+      console.log(
+        `  ${YELLOW}WARNING:${RESET} Could not create manager staff, skipping portal test`
+      );
       return true;
     }
     managerStaffId = mgrCreate.data.staff.id;
@@ -2664,12 +2692,20 @@ async function testStaffPortalFlow() {
     // Create employee staff
     const empCreate = await makeObfuscatedRequest(
       '/staff',
-      { name: 'Test Employee', email: employeeEmail, role: 'Staff', hourlyRate: 12, employmentType: 'part-time' },
+      {
+        name: 'Test Employee',
+        email: employeeEmail,
+        role: 'Staff',
+        hourlyRate: 12,
+        employmentType: 'part-time',
+      },
       'POST'
     );
     if (empCreate.ok && empCreate.data?.staff) {
       employeeStaffId = empCreate.data.staff.id;
-      const empRow = await pool.query('SELECT username FROM staff WHERE id = $1', [employeeStaffId]);
+      const empRow = await pool.query('SELECT username FROM staff WHERE id = $1', [
+        employeeStaffId,
+      ]);
       employeeUsername = empRow.rows[0]?.username;
     }
 
@@ -2686,9 +2722,7 @@ async function testStaffPortalFlow() {
       method: 'POST',
       body: JSON.stringify({ username: managerUsername, password: testPassword }),
     });
-    const mgrLoginOk =
-      mgrLogin.ok &&
-      mgrLogin.data?.staff?.accessRole === 'manager';
+    const mgrLoginOk = mgrLogin.ok && mgrLogin.data?.staff?.accessRole === 'manager';
     console.log('  Manager login:');
     assertResult(
       'Manager login',
@@ -2706,7 +2740,11 @@ async function testStaffPortalFlow() {
 
     if (mgrSessionId) {
       // Manager accesses /portal/team → 200
-      const teamResult = await staffPortalRequest('/staff/portal/team', { method: 'GET' }, mgrSessionId);
+      const teamResult = await staffPortalRequest(
+        '/staff/portal/team',
+        { method: 'GET' },
+        mgrSessionId
+      );
       const teamOk = teamResult.ok && Array.isArray(teamResult.data?.team);
       console.log('  Manager GET /portal/team:');
       assertResult(
@@ -2758,7 +2796,11 @@ async function testStaffPortalFlow() {
 
       if (empSessionId) {
         // Employee trying /portal/team → 403
-        const empTeam = await staffPortalRequest('/staff/portal/team', { method: 'GET' }, empSessionId);
+        const empTeam = await staffPortalRequest(
+          '/staff/portal/team',
+          { method: 'GET' },
+          empSessionId
+        );
         const empDeniedOk = empTeam.status === 403;
         console.log('  Employee GET /portal/team (must be 403):');
         assertResult(
@@ -2789,7 +2831,9 @@ async function testStaffPortalFlow() {
     // Cleanup — delete both test staff members immediately
     for (const sid of [managerStaffId, employeeStaffId].filter(Boolean)) {
       const del = await makeObfuscatedRequest(`/staff/${sid}`, {}, 'DELETE');
-      console.log(`  Delete staff ${sid} (cleanup): ${del.ok ? `${GREEN}OK${RESET}` : `${RED}FAIL${RESET}`}`);
+      console.log(
+        `  Delete staff ${sid} (cleanup): ${del.ok ? `${GREEN}OK${RESET}` : `${RED}FAIL${RESET}`}`
+      );
     }
   }
 
@@ -2991,19 +3035,28 @@ async function runAllTests() {
 
     // Company Structure (branches + departments)
     const companyStructureOk = await testCompanyStructureFlow();
-    results.tests.push({ name: 'Company Structure CRUD (branch + dept)', passed: companyStructureOk });
+    results.tests.push({
+      name: 'Company Structure CRUD (branch + dept)',
+      passed: companyStructureOk,
+    });
     if (companyStructureOk) results.passed++;
     else results.failed++;
 
     // Staff Access Role cycle
     const accessRoleCycleOk = await testStaffAccessRoleCycle();
-    results.tests.push({ name: 'Staff Access Role Cycle (promote/demote/invalid)', passed: accessRoleCycleOk });
+    results.tests.push({
+      name: 'Staff Access Role Cycle (promote/demote/invalid)',
+      passed: accessRoleCycleOk,
+    });
     if (accessRoleCycleOk) results.passed++;
     else results.failed++;
 
     // Staff Portal login/team/logout + employee denial
     const staffPortalOk = await testStaffPortalFlow();
-    results.tests.push({ name: 'Staff Portal Flow (login/team/logout + employee denial)', passed: staffPortalOk });
+    results.tests.push({
+      name: 'Staff Portal Flow (login/team/logout + employee denial)',
+      passed: staffPortalOk,
+    });
     if (staffPortalOk) results.passed++;
     else results.failed++;
 

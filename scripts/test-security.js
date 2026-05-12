@@ -2388,7 +2388,9 @@ async function testCompanyStructureAndPortalSecurity() {
     // Cleanup — User A deletes their own branch
     await makeObfuscatedRequest(`/company-structure/branches/${branchId}`, {}, 'DELETE', userA);
   } else {
-    console.log(`  ${YELLOW}NOTE:${RESET} Could not create branch for IDOR test (status ${branchA.status}) — skipping cross-user branch checks`);
+    console.log(
+      `  ${YELLOW}NOTE:${RESET} Could not create branch for IDOR test (status ${branchA.status}) — skipping cross-user branch checks`
+    );
   }
 
   // User A creates a department (no branch required)
@@ -2430,7 +2432,9 @@ async function testCompanyStructureAndPortalSecurity() {
     // Cleanup — User A deletes their own department
     await makeObfuscatedRequest(`/company-structure/departments/${deptId}`, {}, 'DELETE', userA);
   } else {
-    console.log(`  ${YELLOW}NOTE:${RESET} Could not create department for IDOR test (status ${deptA.status}) — skipping cross-user department checks`);
+    console.log(
+      `  ${YELLOW}NOTE:${RESET} Could not create department for IDOR test (status ${deptA.status}) — skipping cross-user department checks`
+    );
   }
 
   // ---- Staff Portal Access Control ----

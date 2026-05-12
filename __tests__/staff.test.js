@@ -144,10 +144,10 @@ describe('Staff Functions', () => {
       mockConnectFn.mockResolvedValue(mockClient);
 
       mockClient.query
-        .mockResolvedValueOnce({})                                // BEGIN
-        .mockResolvedValueOnce(createMockDbResult([mockStaff]))   // SELECT current (ownership check)
-        .mockResolvedValueOnce(createMockDbResult([mockStaff]))   // UPDATE staff RETURNING
-        .mockResolvedValueOnce({});                               // COMMIT
+        .mockResolvedValueOnce({}) // BEGIN
+        .mockResolvedValueOnce(createMockDbResult([mockStaff])) // SELECT current (ownership check)
+        .mockResolvedValueOnce(createMockDbResult([mockStaff])) // UPDATE staff RETURNING
+        .mockResolvedValueOnce({}); // COMMIT
 
       // pool.query is used for the assignment-history INSERT (if any) and final SELECT
       mockQueryFn.mockResolvedValue(createMockDbResult([mockStaff]));
