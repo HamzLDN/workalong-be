@@ -138,6 +138,103 @@ router.get('/portal/team', requireStaffAuth, async (req, res) => {
   }
 });
 
+// 3 minutes expressed as fractional hours (threshold for overtime approval)
+const OVERTIME_THRESHOLD_HOURS = 3 / 60;
+
+router.get('/portal/time-entries', requireStaffAuth, async (req, res) => {
+  try {
+    if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
+      return res.status(403).json({ error: 'Manager or payroll admin access required' });
+    }
+    const entries = await pool.query(
+      `SELECT
+         te.id,
+         te.staff_id,
+         te.date,
+         te.clock_in_time,
+         te.clock_out_time,
+         te.hours_worked,
+         te.overtime_hours,
+         te.notes,
+         te.leave_category,
+         te.entry_type,
+         te.approved_at,
+         te.shift_id,
+         sh.hours          AS scheduled_hours,
+         sh.start_time     AS scheduled_start,
+         ROUND((te.hours_worked - COALESCE(sh.hours, te.hours_worked))::numeric, 4)
+                           AS extra_hours,
+         s.name            AS staff_name,
+         s.lastname        AS staff_lastname,
+         s.role            AS staff_role
+       FROM time_entries te
+       JOIN staff s ON te.staff_id = s.id
+       LEFT JOIN shifts sh ON te.shift_id = sh.id
+       WHERE s.manager_id = $1
+         AND te.clock_out_time IS NOT NULL
+       ORDER BY te.clock_in_time DESC
+       LIMIT 200`,
+      [req.staffId]
+    );
+    res.json({ entries: entries.rows });
+  } catch (error) {
+    console.error('Portal time entries error:', error);
+    res.status(500).json({ error: 'Failed to load time entries' });
+  }
+});
+
+router.post('/portal/time-entries/:id/approve', requireStaffAuth, async (req, res) => {
+  try {
+    if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
+      return res.status(403).json({ error: 'Manager or payroll admin access required' });
+    }
+    const entryId = parseInt(req.params.id, 10);
+    if (isNaN(entryId)) return res.status(400).json({ error: 'Invalid entry ID' });
+
+    // Verify this entry belongs to a staff member managed by the requesting manager
+    const check = await pool.query(
+      `SELECT te.id, te.hours_worked, te.approved_at, sh.hours AS scheduled_hours
+       FROM time_entries te
+       JOIN staff s ON te.staff_id = s.id
+       LEFT JOIN shifts sh ON te.shift_id = sh.id
+       WHERE te.id = $1
+         AND s.manager_id = $2
+         AND te.clock_out_time IS NOT NULL`,
+      [entryId, req.staffId]
+    );
+    if (check.rows.length === 0) {
+      return res.status(404).json({ error: 'Time entry not found or not in your team' });
+    }
+    const entry = check.rows[0];
+    if (entry.approved_at) {
+      return res.status(400).json({ error: 'Time entry is already approved' });
+    }
+
+    // Only allow approval when actual hours exceed scheduled by more than 3 minutes
+    const extraHours = entry.scheduled_hours != null
+      ? parseFloat(entry.hours_worked) - parseFloat(entry.scheduled_hours)
+      : 0;
+    if (entry.scheduled_hours != null && extraHours <= OVERTIME_THRESHOLD_HOURS) {
+      return res.status(400).json({
+        error: 'No overtime to approve — extra time does not exceed 3 minutes',
+      });
+    }
+
+    // Approve using the company user ID (manager acts on behalf of the employer)
+    const updated = await pool.query(
+      `UPDATE time_entries
+       SET approved_at = NOW(), approved_by = $1
+       WHERE id = $2
+       RETURNING id, approved_at, hours_worked`,
+      [req.staff.companyUserId, entryId]
+    );
+    res.json({ message: 'Time entry approved', entry: updated.rows[0] });
+  } catch (error) {
+    console.error('Portal approve time entry error:', error);
+    res.status(500).json({ error: 'Failed to approve time entry' });
+  }
+});
+
 router.post('/auth/logout', requireStaffAuth, async (req, res) => {
   try {
     const sessionId =
