@@ -34,6 +34,9 @@ router.post('/auth/login', async (req, res) => {
     if (!staff) {
       return res.status(401).json({ error: 'Invalid username or password' });
     }
+    if (staff.status !== 'active') {
+      return res.status(403).json({ error: 'This staff account is not active' });
+    }
     const isValid = await verifyStaffPassword(password, staff.password_hash);
     if (!isValid) {
       return res.status(401).json({ error: 'Invalid username or password' });
@@ -56,6 +59,7 @@ router.post('/auth/login', async (req, res) => {
         name: staff.name,
         email: staff.email,
         role: staff.role,
+        accessRole: staff.access_role || 'employee',
         companyName: staff.company_name,
       },
       session: { id: sessionId, expiresAt },
@@ -87,6 +91,7 @@ router.get('/auth/me', requireStaffAuth, async (req, res) => {
         name: req.staff.name,
         email: req.staff.email,
         role: req.staff.role,
+        accessRole: req.staff.accessRole,
         companyName: req.staff.companyName,
       },
       companyLocation: { latitude, longitude },
@@ -94,6 +99,42 @@ router.get('/auth/me', requireStaffAuth, async (req, res) => {
   } catch (error) {
     console.error('Get staff error:', error);
     res.status(500).json({ error: 'An error occurred' });
+  }
+});
+
+router.get('/portal/team', requireStaffAuth, async (req, res) => {
+  try {
+    if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
+      return res.status(403).json({ error: 'Manager or payroll admin access required' });
+    }
+    const result = await pool.query(
+      `SELECT s.id, s.name, s.lastname, s.role, s.access_role, s.status,
+              s.employment_type, s.hourly_rate,
+              d.name AS department_name, b.name AS branch_name
+       FROM staff s
+       LEFT JOIN departments d ON s.department_id = d.id
+       LEFT JOIN branches b ON s.branch_id = b.id
+       WHERE s.manager_id = $1 AND s.user_id = (SELECT user_id FROM staff WHERE id = $1)
+       ORDER BY s.name`,
+      [req.staffId]
+    );
+    const pendingEntries = await pool.query(
+      `SELECT te.id, te.clock_in, te.clock_out, te.hours_worked,
+              te.leave_category, te.notes, te.approved_at,
+              s.name AS staff_name, s.lastname AS staff_lastname
+       FROM time_entries te
+       JOIN staff s ON te.staff_id = s.id
+       WHERE s.manager_id = $1
+         AND te.approved_at IS NULL
+         AND te.clock_out IS NOT NULL
+       ORDER BY te.clock_in DESC
+       LIMIT 50`,
+      [req.staffId]
+    );
+    res.json({ team: result.rows, pendingApprovals: pendingEntries.rows });
+  } catch (error) {
+    console.error('Portal team error:', error);
+    res.status(500).json({ error: 'Failed to load portal data' });
   }
 });
 
@@ -751,7 +792,17 @@ router.get('/:id', requireAuth, async (req, res) => {
  */
 router.post('/', requireAuth, async (req, res) => {
   try {
-    const { name, email, role, hourlyRate, employmentType } = req.body;
+    const {
+      name,
+      email,
+      role,
+      hourlyRate,
+      employmentType,
+      departmentId,
+      branchId,
+      managerId,
+      accessRole,
+    } = req.body;
     if (!name || !role || !hourlyRate) {
       return res.status(400).json({ error: 'Name, role, and hourly rate are required' });
     }
@@ -783,7 +834,17 @@ router.post('/', requireAuth, async (req, res) => {
         upgradeUrl: '/plans',
       });
     }
-    const staff = await createStaff(req.userId, { name, email, role, hourlyRate, employmentType });
+    const staff = await createStaff(req.userId, {
+      name,
+      email,
+      role,
+      hourlyRate,
+      employmentType,
+      departmentId,
+      branchId,
+      managerId,
+      accessRole,
+    });
     logStaffActivity(req.userId, staff.id, name, 'created').catch((err) =>
       console.error('Failed to log activity:', err)
     );
@@ -795,6 +856,13 @@ router.post('/', requireAuth, async (req, res) => {
     });
   } catch (error) {
     console.error('Create staff error:', error);
+    if (
+      error.message?.includes('not found') ||
+      error.message?.includes('Invalid') ||
+      error.message?.includes('cannot manage')
+    ) {
+      return res.status(400).json({ error: error.message });
+    }
     res.status(500).json({ error: 'Failed to create staff member' });
   }
 });
@@ -821,7 +889,19 @@ router.delete('/:id', requireAuth, async (req, res) => {
 
 router.put('/:id', requireAuth, async (req, res) => {
   try {
-    const { name, email, role, hourlyRate, employmentType, status } = req.body;
+    const {
+      name,
+      email,
+      role,
+      hourlyRate,
+      employmentType,
+      status,
+      departmentId,
+      branchId,
+      managerId,
+      accessRole,
+      assignmentReason,
+    } = req.body;
     const staff = await updateStaff(req.params.id, req.userId, {
       name,
       email,
@@ -829,6 +909,11 @@ router.put('/:id', requireAuth, async (req, res) => {
       hourlyRate,
       employmentType,
       status,
+      departmentId,
+      branchId,
+      managerId,
+      accessRole,
+      assignmentReason,
     });
     if (!staff) return res.status(404).json({ error: 'Staff member not found' });
     logStaffActivity(req.userId, req.params.id, name, 'updated').catch((err) =>
@@ -837,6 +922,13 @@ router.put('/:id', requireAuth, async (req, res) => {
     res.json({ message: 'Staff member updated successfully', staff });
   } catch (error) {
     console.error('Update staff error:', error);
+    if (
+      error.message?.includes('not found') ||
+      error.message?.includes('Invalid') ||
+      error.message?.includes('cannot manage')
+    ) {
+      return res.status(400).json({ error: error.message });
+    }
     res.status(500).json({ error: 'Failed to update staff member' });
   }
 });

@@ -143,6 +143,7 @@ export async function requireStaffAuth(req, res, next) {
       name: session.name,
       email: session.email,
       role: session.role,
+      accessRole: session.access_role || 'employee',
       companyUserId: session.company_user_id,
       companyName: session.company_name,
     };

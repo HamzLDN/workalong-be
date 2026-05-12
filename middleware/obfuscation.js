@@ -223,6 +223,13 @@ const PUBLIC_ENDPOINTS = [
   // Kiosk clocking flow (link-token + device-fingerprint based; no session)
   '/clockin/clock-action',
   '/api/clockin/clock-action',
+  // Staff portal auth (no employer session; uses staff session cookie)
+  '/staff/auth/login',
+  '/api/staff/auth/login',
+  '/staff/auth/logout',
+  '/api/staff/auth/logout',
+  '/staff/set-password',
+  '/api/staff/set-password',
 ];
 
 const PUBLIC_ENDPOINT_PREFIXES = [
@@ -230,6 +237,9 @@ const PUBLIC_ENDPOINT_PREFIXES = [
   '/api/clockin/verify-link/',
   '/clockin/status/',
   '/api/clockin/status/',
+  // Staff portal routes use staff session cookie for auth, not employer obfuscation
+  '/staff/portal/',
+  '/api/staff/portal/',
   // Support chat is served by admin-panel-api (port 5055). If a request hits this backend by mistake,
   // skip obfuscation so the request fails with a normal 404 instead of "transport required".
   '/api/support',
@@ -255,6 +265,9 @@ const PUBLIC_ENDPOINT_SUFFIXES = [
   '/payment/webhook',
   '/payment/config',
   '/payment/verify-session',
+  '/staff/auth/login',
+  '/staff/auth/logout',
+  '/staff/set-password',
 ];
 
 /** Exported for tests — public routes skip transport/signature (see verifyObfuscatedRequest). */

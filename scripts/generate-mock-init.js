@@ -31,6 +31,7 @@ const PRIORITY_ORDER = [
   'ip_whitelists.sql',
   'request_signing_keys.sql',
   '00_functions_and_triggers.sql',
+  'add-company-structure.sql',
 ];
 
 function listSchemaFiles() {

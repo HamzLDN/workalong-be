@@ -7,12 +7,18 @@ import { sendStaffPasswordSetupEmail } from '../lib/email.js';
 export async function getStaff(userId) {
   const result = await pool.query(
     `SELECT 
-       id, user_id, name, email, role, hourly_rate, employment_type, 
-       status, created_at, updated_at, suspicious_pattern_count, 
-       last_pattern_check, username, password_set, clockin_id
-     FROM staff 
-     WHERE user_id = $1 
-     ORDER BY created_at DESC`,
+       s.id, s.user_id, s.name, s.email, s.role, s.hourly_rate, s.employment_type, 
+       s.status, s.access_role, s.created_at, s.updated_at, s.suspicious_pattern_count, 
+       s.last_pattern_check, s.username, s.password_set, s.clockin_id,
+       s.department_id, d.name AS department_name,
+       s.branch_id, b.name AS branch_name,
+       s.manager_id, m.name AS manager_name
+     FROM staff s
+     LEFT JOIN departments d ON d.id = s.department_id
+     LEFT JOIN branches b ON b.id = s.branch_id
+     LEFT JOIN staff m ON m.id = s.manager_id
+     WHERE s.user_id = $1 
+     ORDER BY s.created_at DESC`,
     [userId]
   );
   return result.rows;
@@ -41,12 +47,39 @@ function generatePasswordToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
+function parseOptionalAssignmentId(value, fieldName) {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  const id = parseInt(value, 10);
+  if (Number.isNaN(id)) {
+    throw new Error(`Invalid ${fieldName}`);
+  }
+  return id;
+}
+
+async function assertAssignmentOwnedByUser(client, table, id, userId, label) {
+  if (id == null) return;
+  const result = await client.query(`SELECT id FROM ${table} WHERE id = $1 AND user_id = $2`, [
+    id,
+    userId,
+  ]);
+  if (result.rows.length === 0) {
+    throw new Error(`${label} not found`);
+  }
+}
+
 export async function createStaff(userId, data) {
-  const { name, email, role, hourlyRate, employmentType } = data;
+  const { name, email, role, hourlyRate, employmentType, accessRole = 'employee' } = data;
+  const departmentId = parseOptionalAssignmentId(data.departmentId, 'department ID');
+  const branchId = parseOptionalAssignmentId(data.branchId, 'branch ID');
+  const managerId = parseOptionalAssignmentId(data.managerId, 'manager ID');
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
+    await assertAssignmentOwnedByUser(client, 'departments', departmentId, userId, 'Department');
+    await assertAssignmentOwnedByUser(client, 'branches', branchId, userId, 'Branch');
+    await assertAssignmentOwnedByUser(client, 'staff', managerId, userId, 'Manager');
 
     // Generate unique 6-digit suffix for username (used for clock-in - last 6 digits of username)
     let code6;
@@ -78,8 +111,8 @@ export async function createStaff(userId, data) {
     const sanitizedRole = role ? sanitizeString(role) : role;
 
     const result = await client.query(
-      `INSERT INTO staff (user_id, name, email, role, hourly_rate, employment_type, username, password_hash, password_set, clockin_id) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, $9) 
+      `INSERT INTO staff (user_id, name, email, role, hourly_rate, employment_type, username, password_hash, password_set, clockin_id, department_id, branch_id, manager_id, access_role) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, $9, $10, $11, $12, $13) 
        RETURNING *`,
       [
         userId,
@@ -91,6 +124,10 @@ export async function createStaff(userId, data) {
         username,
         passwordHash,
         code6,
+        departmentId,
+        branchId,
+        managerId,
+        ['employee', 'manager', 'payroll_admin'].includes(accessRole) ? accessRole : 'employee',
       ]
     );
     const staffId = result.rows[0].id;
@@ -262,36 +299,110 @@ export async function setPasswordWithToken(token, newPassword) {
 
 // Update staff member
 export async function updateStaff(staffId, userId, data) {
-  const { name, email, role, hourlyRate, employmentType, status } = data;
+  const { name, email, role, hourlyRate, employmentType, status, accessRole } = data;
+  const departmentId = parseOptionalAssignmentId(data.departmentId, 'department ID');
+  const branchId = parseOptionalAssignmentId(data.branchId, 'branch ID');
+  const managerId = parseOptionalAssignmentId(data.managerId, 'manager ID');
 
   // Sanitize string inputs to remove null bytes
   const sanitizedName = name !== undefined ? (name ? sanitizeString(name) : name) : undefined;
   const sanitizedEmail = email !== undefined ? (email ? sanitizeString(email) : email) : undefined;
   const sanitizedRole = role !== undefined ? (role ? sanitizeString(role) : role) : undefined;
 
-  const result = await pool.query(
-    `UPDATE staff 
-     SET name = COALESCE($1, name),
-         email = COALESCE($2, email),
-         role = COALESCE($3, role),
-         hourly_rate = COALESCE($4, hourly_rate),
-         employment_type = COALESCE($5, employment_type),
-         status = COALESCE($6, status)
-     WHERE id = $7 AND user_id = $8
-     RETURNING *`,
-    [
-      sanitizedName,
-      sanitizedEmail,
-      sanitizedRole,
-      hourlyRate,
-      employmentType,
-      status,
-      staffId,
-      userId,
-    ]
-  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  return result.rows[0];
+    const current = await client.query(
+      'SELECT id, department_id, branch_id, manager_id FROM staff WHERE id = $1 AND user_id = $2',
+      [staffId, userId]
+    );
+    if (current.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+
+    await assertAssignmentOwnedByUser(client, 'departments', departmentId, userId, 'Department');
+    await assertAssignmentOwnedByUser(client, 'branches', branchId, userId, 'Branch');
+    await assertAssignmentOwnedByUser(client, 'staff', managerId, userId, 'Manager');
+
+    const staffIdNum = parseInt(staffId, 10);
+    if (managerId != null && managerId === staffIdNum) {
+      throw new Error('A staff member cannot manage themselves');
+    }
+
+    const updates = [];
+    const values = [];
+    let param = 1;
+    const addUpdate = (column, value) => {
+      updates.push(`${column} = $${param++}`);
+      values.push(value);
+    };
+
+    if (sanitizedName !== undefined) addUpdate('name', sanitizedName);
+    if (sanitizedEmail !== undefined) addUpdate('email', sanitizedEmail);
+    if (sanitizedRole !== undefined) addUpdate('role', sanitizedRole);
+    if (hourlyRate !== undefined) addUpdate('hourly_rate', hourlyRate);
+    if (employmentType !== undefined) addUpdate('employment_type', employmentType);
+    if (status !== undefined) addUpdate('status', status);
+    if (accessRole !== undefined) {
+      if (!['employee', 'manager', 'payroll_admin'].includes(accessRole)) {
+        throw new Error('Invalid access role');
+      }
+      addUpdate('access_role', accessRole);
+    }
+    if (departmentId !== undefined) addUpdate('department_id', departmentId);
+    if (branchId !== undefined) addUpdate('branch_id', branchId);
+    if (managerId !== undefined) addUpdate('manager_id', managerId);
+
+    if (updates.length === 0) {
+      await client.query('ROLLBACK');
+      return current.rows[0];
+    }
+
+    addUpdate('updated_at', new Date());
+    values.push(staffId, userId);
+
+    const result = await client.query(
+      `UPDATE staff 
+       SET ${updates.join(', ')}
+       WHERE id = $${param++} AND user_id = $${param}
+       RETURNING *`,
+      values
+    );
+
+    const before = current.rows[0];
+    if (
+      departmentId !== undefined ||
+      branchId !== undefined ||
+      managerId !== undefined
+    ) {
+      await client.query(
+        `INSERT INTO staff_assignment_history
+         (user_id, staff_id, from_department_id, to_department_id, from_branch_id, to_branch_id, from_manager_id, to_manager_id, reason)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          userId,
+          staffId,
+          before.department_id,
+          departmentId === undefined ? before.department_id : departmentId,
+          before.branch_id,
+          branchId === undefined ? before.branch_id : branchId,
+          before.manager_id,
+          managerId === undefined ? before.manager_id : managerId,
+          data.assignmentReason || null,
+        ]
+      );
+    }
+
+    await client.query('COMMIT');
+    return result.rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 // Delete staff member
@@ -516,7 +627,7 @@ export async function getStaffStats(userId, clientDate = null) {
   };
 }
 
-const LEAVE_CATEGORIES = new Set(['none', 'paid_leave', 'unpaid_leave']);
+const LEAVE_CATEGORIES = new Set(['none', 'paid_leave', 'unpaid_leave', 'sick_leave']);
 
 export async function createTimeEntry(userId, data) {
   const { staffId, date, hoursWorked, overtimeHours, notes, leaveCategory } = data;
@@ -862,7 +973,10 @@ export async function getMonthlyEarningsChart(userId, year, month) {
 export async function updateTimeEntry(userId, timeEntryId, data) {
   const { staffId, date, hoursWorked, overtimeHours, notes, leaveCategory } = data;
   const lc = LEAVE_CATEGORIES.has(leaveCategory) ? leaveCategory : 'none';
-  const ot = lc === 'paid_leave' || lc === 'unpaid_leave' ? 0 : parseFloat(overtimeHours || 0) || 0;
+  const ot =
+    lc === 'paid_leave' || lc === 'unpaid_leave' || lc === 'sick_leave'
+      ? 0
+      : parseFloat(overtimeHours || 0) || 0;
 
   const r = await pool.query(
     `UPDATE time_entries

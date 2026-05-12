@@ -1,6 +1,7 @@
 /**
- * Additively sync the production DB schema to match `database-schema/`.
+ * Additively sync the configured DB schema to match `database-schema/`.
  *
+ * The target database is controlled only by DB_* environment variables.
  * This is intentionally non-destructive:
  * - creates missing tables/sequences/indexes/constraints
  * - applies additive migrations for newer columns/tables
@@ -47,6 +48,11 @@ const ADDITIVE_MIGRATIONS = [
     dir: __dirname,
   },
   {
+    name: 'sessions csrf_token',
+    file: 'add-session-csrf-token.sql',
+    dir: SCHEMA_DIR,
+  },
+  {
     name: 'time_entries approved_at/approved_by',
     file: 'add-time-entry-approval.sql',
     dir: SCHEMA_DIR,
@@ -69,6 +75,16 @@ const ADDITIVE_MIGRATIONS = [
   {
     name: 'staff_face_profiles.face_embeddings (Face API descriptors)',
     file: 'add-face-embeddings-column.sql',
+    dir: SCHEMA_DIR,
+  },
+  {
+    name: 'payroll hub (sick_leave + pension/leave prefs on users)',
+    file: 'add-payroll-hub-extension.sql',
+    dir: SCHEMA_DIR,
+  },
+  {
+    name: 'company structure (branches, departments, staff assignments)',
+    file: 'add-company-structure.sql',
     dir: SCHEMA_DIR,
   },
 ];
@@ -196,12 +212,21 @@ async function runAdditiveMigrations() {
 }
 
 async function syncSchema() {
+  if (!process.env.DB_PORT) {
+    console.error(
+      '❌  DB_PORT is not set.\n' +
+      '    To sync the mock DB run:  npm run db:mock:sync\n' +
+      '    For production, set DB_PORT explicitly before running this script.'
+    );
+    process.exit(1);
+  }
+
   const dbHost = process.env.DB_HOST || 'localhost';
   const isLocal = ['localhost', '127.0.0.1', '0.0.0.0'].includes(dbHost);
 
   console.log('Syncing schema against database:');
   console.log(`  DB_HOST=${dbHost}`);
-  console.log(`  DB_PORT=${process.env.DB_PORT || 5432}`);
+  console.log(`  DB_PORT=${process.env.DB_PORT}`);
   console.log(`  DB_NAME=${process.env.DB_NAME || 'users'}`);
   if (!isLocal) {
     console.log('\n⚠️  Target is not localhost - ensure this is intended for production.');

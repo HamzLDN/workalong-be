@@ -33,12 +33,12 @@ export async function createStaffSession(staffId, ipAddress, userAgent) {
 
 export async function getStaffSession(sessionId) {
   const result = await pool.query(
-    `SELECT ss.*, s.id as staff_id, s.name, s.email, s.role, s.user_id as company_user_id,
-            s.hourly_rate, s.employment_type, u.name as company_name
+    `SELECT ss.*, s.id as staff_id, s.name, s.email, s.role, s.access_role,
+            s.user_id as company_user_id, s.hourly_rate, s.employment_type, u.name as company_name
      FROM staff_sessions ss 
      JOIN staff s ON ss.staff_id = s.id 
      JOIN users u ON s.user_id = u.id
-     WHERE ss.id = $1 AND ss.expires_at > NOW()`,
+     WHERE ss.id = $1 AND ss.expires_at > NOW() AND s.status = 'active'`,
     [sessionId]
   );
 
