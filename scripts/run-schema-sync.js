@@ -87,22 +87,90 @@ const ADDITIVE_MIGRATIONS = [
   },
 ];
 
-function splitSqlStatements(sql) {
-  const statements = [];
-  let buffer = [];
+/**
+ * Split SQL on top-level ';' boundaries (handles single-quoted strings, line
+ * comments, block comments, and dollar-quoted plpgsql/function bodies).
+ * Needed so base DDL and pg_dump-derived files execute one statement per
+ * pg query — node-postgres SimpleQuery multi-statement payloads are unreliable on some setups.
+ */
+function splitPgSqlStatements(sql) {
+  const stmts = [];
+  let buf = '';
+  let i = 0;
+  const n = sql.length;
 
-  for (const line of sql.split(/\r?\n/)) {
-    buffer.push(line);
-    if (line.trim().endsWith(';')) {
-      const statement = buffer.join('\n').trim();
-      if (statement) statements.push(statement);
-      buffer = [];
+  while (i < n) {
+    const ch = sql[i];
+    const ch2 = sql[i + 1];
+
+    if (ch === '/' && ch2 === '*') {
+      let j = i + 2;
+      while (j < n && !(sql[j] === '*' && sql[j + 1] === '/')) j += 1;
+      const end = Math.min(j + 2, n);
+      buf += sql.slice(i, end);
+      i = end;
+      continue;
     }
+
+    if (ch === '-' && ch2 === '-') {
+      while (i < n && sql[i] !== '\n') {
+        buf += sql[i];
+        i += 1;
+      }
+      continue;
+    }
+
+    if (ch === "'") {
+      buf += "'";
+      i += 1;
+      while (i < n) {
+        if (sql[i] === "'" && sql[i + 1] === "'") {
+          buf += "''";
+          i += 2;
+        } else if (sql[i] === "'") {
+          buf += "'";
+          i += 1;
+          break;
+        } else {
+          buf += sql[i];
+          i += 1;
+        }
+      }
+      continue;
+    }
+
+    if (ch === '$') {
+      let j = i + 1;
+      while (j < n && /[a-zA-Z0-9_]/.test(sql[j])) j += 1;
+      if (j < n && sql[j] === '$') {
+        const tag = sql.slice(i + 1, j);
+        const delim = `$${tag}$`;
+        const closeIdx = sql.indexOf(delim, j + 1);
+        if (closeIdx === -1) {
+          throw new Error('Unterminated dollar-quoted literal in schema SQL.');
+        }
+        buf += sql.slice(i, closeIdx + delim.length);
+        i = closeIdx + delim.length;
+        continue;
+      }
+    }
+
+    if (ch === ';') {
+      buf += ';';
+      i += 1;
+      const trimmed = buf.trim();
+      if (trimmed.length) stmts.push(trimmed);
+      buf = '';
+      continue;
+    }
+
+    buf += ch;
+    i += 1;
   }
 
-  const tail = buffer.join('\n').trim();
-  if (tail) statements.push(tail);
-  return statements;
+  const tail = buf.trim();
+  if (tail.length) stmts.push(tail);
+  return stmts;
 }
 
 function isIgnorableSchemaError(err) {
@@ -126,7 +194,7 @@ function isRetryableDependencyError(err) {
 async function applyStatementBatch(name, sql, { allowRetryableDependencies = false } = {}) {
   let deferred = false;
 
-  for (const statement of splitSqlStatements(sql)) {
+  for (const statement of splitPgSqlStatements(sql)) {
     try {
       await pool.query(statement);
     } catch (err) {
@@ -151,7 +219,10 @@ async function applyFunctionsFile() {
     .replace(/^CREATE FUNCTION /gm, 'CREATE OR REPLACE FUNCTION ');
 
   console.log('📦 Syncing shared functions...');
-  await pool.query(sql);
+  const statements = splitPgSqlStatements(sql);
+  for (const statement of statements) {
+    await pool.query(statement);
+  }
   console.log('✅ Shared functions synced');
 }
 
