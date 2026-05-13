@@ -4,7 +4,7 @@
  * The target database is controlled only by DB_* environment variables.
  * This is intentionally non-destructive:
  * - creates missing tables/sequences/indexes/constraints
- * - applies additive migrations for newer columns/tables
+ * - applies additive migrations for newer columns/tables (listed + any `add*.sql` in database-schema/ not in the list)
  * - does not drop tables/columns or wipe data
  */
 import { pool } from '../lib/db.js';
@@ -43,9 +43,9 @@ const BASE_SCHEMA_FILES = [
 
 const ADDITIVE_MIGRATIONS = [
   {
-    name: 'subscription_discount_percent',
-    file: 'add-discount-percent-column.sql',
-    dir: __dirname,
+    name: 'users (discount, timezone, payroll prefs, head_office, manager_permissions)',
+    file: 'add-users.sql',
+    dir: SCHEMA_DIR,
   },
   {
     name: 'sessions csrf_token',
@@ -53,13 +53,8 @@ const ADDITIVE_MIGRATIONS = [
     dir: SCHEMA_DIR,
   },
   {
-    name: 'time_entries approved_at/approved_by',
-    file: 'add-time-entry-approval.sql',
-    dir: SCHEMA_DIR,
-  },
-  {
-    name: 'users timezone + time_entries leave_category',
-    file: 'add-leave-category-and-timezone.sql',
+    name: 'time_entries (leave_category, approvals, sick_leave check)',
+    file: 'add-time-entries.sql',
     dir: SCHEMA_DIR,
   },
   {
@@ -78,13 +73,13 @@ const ADDITIVE_MIGRATIONS = [
     dir: SCHEMA_DIR,
   },
   {
-    name: 'payroll hub (sick_leave + pension/leave prefs on users)',
-    file: 'add-payroll-hub-extension.sql',
+    name: 'company structure (branches, departments, staff assignments)',
+    file: 'add-company-structure.sql',
     dir: SCHEMA_DIR,
   },
   {
-    name: 'company structure (branches, departments, staff assignments)',
-    file: 'add-company-structure.sql',
+    name: 'shifts created_by user/staff',
+    file: 'add-shift-creator-columns.sql',
     dir: SCHEMA_DIR,
   },
 ];
@@ -211,6 +206,44 @@ async function runAdditiveMigrations() {
   }
 }
 
+/** Pick up new database-schema/add*.sql migrations without editing ADDITIVE_MIGRATIONS. */
+async function applyRemainingSchemaAdditiveSqlFiles() {
+  const trackedFromSchemaDir = new Set(
+    ADDITIVE_MIGRATIONS.filter((m) => m.dir === SCHEMA_DIR).map((m) => m.file)
+  );
+
+  const extras = fs
+    .readdirSync(SCHEMA_DIR)
+    .filter(
+      (name) =>
+        name.endsWith('.sql') &&
+        name !== 'mock-init.sql' &&
+        (name.startsWith('add-') || name.startsWith('add_'))
+    )
+    .filter((name) => !trackedFromSchemaDir.has(name))
+    .sort((a, b) => a.localeCompare(b));
+
+  if (extras.length === 0) return;
+
+  console.log('\n📂 Applying remaining additive SQL files from database-schema/…');
+
+  for (const file of extras) {
+    const sqlPath = path.join(SCHEMA_DIR, file);
+    console.log(`📦 Applying ${file}…`);
+    const sql = fs.readFileSync(sqlPath, 'utf8');
+    try {
+      await pool.query(sql);
+    } catch (err) {
+      if (isIgnorableSchemaError(err)) {
+        console.log(`⏭️  ${file} already applied (${err.code || 'n/a'})`);
+        continue;
+      }
+      throw new Error(`${file} failed (${err.code || 'no-code'}): ${err.message}`);
+    }
+    console.log(`✅ ${file}`);
+  }
+}
+
 async function syncSchema() {
   if (!process.env.DB_PORT) {
     console.error(
@@ -236,6 +269,7 @@ async function syncSchema() {
   await applyFunctionsFile();
   await syncBaseSchema();
   await runAdditiveMigrations();
+  await applyRemainingSchemaAdditiveSqlFiles();
 
   console.log('\n✅ Schema sync completed.');
   await pool.end();

@@ -1,6 +1,7 @@
 import { pool } from '../lib/db.js';
 import { sanitizeString } from '../lib/sanitize.js';
 import { hashPassword } from './auth.js';
+import { deriveClockPeriodOvertimePayrollHint } from './shifts.js';
 import crypto from 'crypto';
 import { sendStaffPasswordSetupEmail } from '../lib/email.js';
 
@@ -525,15 +526,12 @@ export async function getStaffStats(userId, clientDate = null) {
     attendanceHoursByStaff[r.staff_id] = parseFloat(r.hours || 0);
   });
 
-  // Monthly payroll: clock_in_out + approved_shift + manual (same sources as hours, cap for payroll)
+  // Monthly payroll: same sources as hours; clock_in_out pays actual approved clock duration × rate (matches Hours This Month)
   const payrollResult = await pool.query(
     `WITH from_clocked AS (
        SELECT te.staff_id, te.date, te.shift_id, COALESCE(s.hours, 24)::numeric as shift_hours,
               SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric as raw_hours,
-              LEAST(
-                SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric,
-                COALESCE(s.hours, 24)::numeric
-              ) as pay_hours
+              SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric as pay_hours
        FROM time_entries te
        LEFT JOIN shifts s ON s.id = te.shift_id
        WHERE te.user_id = $1 AND te.date >= $2 AND te.date <= $3
@@ -639,15 +637,18 @@ export async function createTimeEntry(userId, data) {
   return result.rows[0];
 }
 
-/** Get clock_in_out time entries pending approval (shifts in review_hours, approved_at IS NULL). */
+/** Get clock_in_out time entries pending head office confirmation (approved_at IS NULL). */
 export async function getPendingTimeEntries(userId, filters = {}) {
   let query = `
     SELECT te.id, te.staff_id, te.date, te.clock_in_time, te.clock_out_time,
            te.hours_worked, te.shift_id, te.entry_type,
+           te.staff_approved_at, te.staff_approved_by,
+           NULLIF(TRIM(CONCAT(sm.name, ' ', COALESCE(sm.lastname, ''))), '') AS staff_approved_by_name,
            EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0 as period_hours,
            s.name as staff_name, sh.start_time, sh.hours as shift_hours, sh.status as shift_status
     FROM time_entries te
     JOIN staff s ON te.staff_id = s.id
+    LEFT JOIN staff sm ON sm.id = te.staff_approved_by
     LEFT JOIN shifts sh ON te.shift_id = sh.id
     WHERE te.user_id = $1
       AND te.entry_type = 'clock_in_out'
@@ -687,26 +688,56 @@ export async function approveTimeEntry(timeEntryId, userId) {
      WHERE id = $2 AND user_id = $1
        AND entry_type = 'clock_in_out'
        AND clock_in_time IS NOT NULL AND clock_out_time IS NOT NULL
-     RETURNING id, staff_id, date, clock_in_time, clock_out_time, hours_worked, approved_at`,
+     RETURNING id, staff_id, shift_id, date, clock_in_time, clock_out_time, hours_worked,
+               overtime_hours, notes,
+               approved_at, approved_by, staff_approved_at, staff_approved_by,
+               (SELECT hours FROM shifts WHERE id = time_entries.shift_id) AS shift_scheduled_hours`,
     [userId, timeEntryId]
   );
   if (r.rows.length === 0) {
     throw new Error('Time entry not found or cannot be approved');
   }
-  return r.rows[0];
+  const row = r.rows[0];
+  const [nameRes, staffRec] = await Promise.all([
+    pool.query(
+      `SELECT COALESCE(NULLIF(TRIM(name), ''), email) AS approved_by_user_name FROM users WHERE id = $1`,
+      [userId]
+    ),
+    row.staff_approved_by
+      ? pool.query(
+          `SELECT NULLIF(TRIM(CONCAT(name, ' ', COALESCE(lastname, ''))), '') AS n
+           FROM staff WHERE id = $1`,
+          [row.staff_approved_by]
+        )
+      : Promise.resolve({ rows: [{}] }),
+  ]);
+  const overtime_payroll_hint = deriveClockPeriodOvertimePayrollHint(row);
+  return {
+    ...row,
+    approved_by_user_name: nameRes.rows[0]?.approved_by_user_name ?? null,
+    staff_approved_by_name: staffRec.rows[0]?.n ?? null,
+    overtime_payroll_hint,
+  };
 }
 
 export async function unapproveTimeEntry(timeEntryId, userId) {
   const r = await pool.query(
     `UPDATE time_entries SET approved_at = NULL, approved_by = NULL
      WHERE id = $2 AND user_id = $1 AND entry_type = 'clock_in_out'
-     RETURNING id`,
+     RETURNING id, staff_id, shift_id, date, clock_in_time, clock_out_time, hours_worked,
+               overtime_hours, notes, approved_at, approved_by, staff_approved_at, staff_approved_by,
+               (SELECT hours FROM shifts WHERE id = time_entries.shift_id) AS shift_scheduled_hours`,
     [userId, timeEntryId]
   );
   if (r.rows.length === 0) {
     throw new Error('Time entry not found or cannot be unapproved');
   }
-  return r.rows[0];
+  const row = r.rows[0];
+  const overtime_payroll_hint = deriveClockPeriodOvertimePayrollHint(row);
+  return {
+    ...row,
+    overtime_payroll_hint,
+  };
 }
 
 export async function getTimeEntries(userId, filters = {}) {
@@ -755,10 +786,7 @@ export async function getPayrollForPeriod(userId, startDate, endDate) {
     `WITH from_clocked AS (
        SELECT te.staff_id, te.date, te.shift_id, COALESCE(sh.hours, 24)::numeric as shift_hours,
               SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric as raw_hours,
-              LEAST(
-                SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric,
-                COALESCE(sh.hours, 24)::numeric
-              ) as pay_hours
+              SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric as pay_hours
        FROM time_entries te
        LEFT JOIN shifts sh ON sh.id = te.shift_id
        WHERE te.user_id = $1 AND te.date BETWEEN $2 AND $3
@@ -860,10 +888,7 @@ export async function getMonthlyEarningsChart(userId, year, month) {
     `WITH from_clocked AS (
        SELECT te.staff_id, te.date, te.shift_id, COALESCE(sh.hours, 24)::numeric as shift_hours,
               SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric as raw_hours,
-              LEAST(
-                SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric,
-                COALESCE(sh.hours, 24)::numeric
-              ) as pay_hours
+              SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric as pay_hours
        FROM time_entries te
        LEFT JOIN shifts sh ON sh.id = te.shift_id
        WHERE te.user_id = $1 AND te.date >= $2 AND te.date <= $3
@@ -1217,10 +1242,7 @@ export async function getBudgetStats(userId, clientDate = null) {
       `WITH from_clocked AS (
          SELECT te.staff_id, te.date, te.shift_id, COALESCE(s.hours, 24)::numeric as shift_hours,
                 SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric as raw_hours,
-                LEAST(
-                  SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric,
-                  COALESCE(s.hours, 24)::numeric
-                ) as pay_hours
+                SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0)::numeric as pay_hours
          FROM time_entries te
          LEFT JOIN shifts s ON s.id = te.shift_id
          WHERE te.user_id = $1 AND te.date >= $2 AND te.date <= $3

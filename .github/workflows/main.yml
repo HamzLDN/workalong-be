@@ -101,6 +101,10 @@ jobs:
     name: Integration Tests (API + Security)
     runs-on: self-hosted  # Needs DB and server access
     needs: [unit-test]
+    env:
+      # integration: mock only (overrides .env DB_HOST/DB_PORT)
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5433
 
     steps:
       - name: Checkout code
@@ -115,9 +119,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Recreate mock Postgres from git (empty volume → init scripts only)
+        run: |
+          docker rm -f workalong-postgres-mock 2>/dev/null || true
+          docker volume rm workalong-backend_postgres_data_mock 2>/dev/null || true
+          npm run db:mock:init
+          docker compose -f docker-compose.mock.yml up -d
+          for i in $(seq 1 45); do
+            if docker exec workalong-postgres-mock pg_isready -U workalong -d users >/dev/null 2>&1; then
+              echo "✅ Postgres ready (schema from checkout only — missing DDL in repo fails tests here)"
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs workalong-postgres-mock --tail 80 2>&1 || true
+          exit 1
+
       - name: Setup environment file for server
         run: |
-          echo "Setting up .env file for backend server..."
+          echo "Using .env + job DB_HOST/DB_PORT (mock)"
           # Copy .env from the actual backend directory to the workspace
           if [ -f "/root/workalong-backend/.env" ]; then
             echo "Copying .env from /root/workalong-backend/ to workspace"
@@ -134,15 +154,12 @@ jobs:
         run: |
           echo "Verifying database connectivity..."
           if [ -f ".env" ]; then
-            # Source .env to get DB variables (safely)
             set -a
             source .env 2>/dev/null || true
             set +a
-            
-            # Check if PostgreSQL is accessible (in dev mode, port is 5433)
-            DB_PORT=${DB_PORT:-5433}
-            DB_HOST=${DB_HOST:-localhost}
-            echo "Attempting to connect to database at $DB_HOST:$DB_PORT..."
+            export DB_HOST=127.0.0.1
+            export DB_PORT=5433
+            echo "Attempting to connect to mock database at $DB_HOST:$DB_PORT..."
             
             # Try to connect using psql if available, or just check if port is open
             if command -v psql >/dev/null 2>&1; then

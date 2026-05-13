@@ -28,11 +28,11 @@
 \i /docker-entrypoint-initdb.d/schema/request_signing_keys.sql
 \i /docker-entrypoint-initdb.d/schema/00_functions_and_triggers.sql
 \i /docker-entrypoint-initdb.d/schema/add-company-structure.sql
+\i /docker-entrypoint-initdb.d/schema/add-users.sql
+\i /docker-entrypoint-initdb.d/schema/add-time-entries.sql
 \i /docker-entrypoint-initdb.d/schema/add_staff_lastname.sql
 \i /docker-entrypoint-initdb.d/schema/add-device-links.sql
 \i /docker-entrypoint-initdb.d/schema/add-face-embeddings-column.sql
-\i /docker-entrypoint-initdb.d/schema/add-leave-category-and-timezone.sql
-\i /docker-entrypoint-initdb.d/schema/add-payroll-hub-extension.sql
 \i /docker-entrypoint-initdb.d/schema/add-session-csrf-token.sql
+\i /docker-entrypoint-initdb.d/schema/add-shift-creator-columns.sql
 \i /docker-entrypoint-initdb.d/schema/add-staff-face-profiles.sql
-\i /docker-entrypoint-initdb.d/schema/add-time-entry-approval.sql

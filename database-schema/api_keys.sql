@@ -1,8 +1,3 @@
-
---
--- Name: api_keys; Type: TABLE; Schema: public; Owner: -
---
-
 CREATE TABLE public.api_keys (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     user_id integer NOT NULL,
@@ -20,69 +15,22 @@ CREATE TABLE public.api_keys (
     updated_at timestamp without time zone DEFAULT now()
 );
 
-
---
--- Name: api_keys api_keys_api_key_hash_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
 ALTER TABLE ONLY public.api_keys
     ADD CONSTRAINT api_keys_api_key_hash_key UNIQUE (api_key_hash);
-
-
---
--- Name: api_keys api_keys_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
 
 ALTER TABLE ONLY public.api_keys
     ADD CONSTRAINT api_keys_pkey PRIMARY KEY (id);
 
-
---
--- Name: api_keys unique_user_key_name; Type: CONSTRAINT; Schema: public; Owner: -
---
-
 ALTER TABLE ONLY public.api_keys
     ADD CONSTRAINT unique_user_key_name UNIQUE (user_id, key_name);
 
-
---
--- Name: idx_api_keys_active; Type: INDEX; Schema: public; Owner: -
---
-
 CREATE INDEX idx_api_keys_active ON public.api_keys USING btree (is_active) WHERE (is_active = true);
-
-
---
--- Name: idx_api_keys_expires; Type: INDEX; Schema: public; Owner: -
---
 
 CREATE INDEX idx_api_keys_expires ON public.api_keys USING btree (expires_at) WHERE (expires_at IS NOT NULL);
 
-
---
--- Name: idx_api_keys_hash; Type: INDEX; Schema: public; Owner: -
---
-
 CREATE INDEX idx_api_keys_hash ON public.api_keys USING btree (api_key_hash);
-
-
---
--- Name: idx_api_keys_user_id; Type: INDEX; Schema: public; Owner: -
---
 
 CREATE INDEX idx_api_keys_user_id ON public.api_keys USING btree (user_id);
 
-
---
--- Name: api_keys api_keys_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
 ALTER TABLE ONLY public.api_keys
     ADD CONSTRAINT api_keys_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
-
-
---
--- PostgreSQL database dump complete
---
-
-

@@ -5,8 +5,8 @@
 | Artifact | Role |
 |----------|------|
 | `database-schema/*.sql` | Base `CREATE TABLE`, constraints, indexes, triggers |
-| `database-schema/add-time-entry-approval.sql` | `time_entries.approved_at`, `approved_by` → `users(id)` |
-| `scripts/add-discount-percent-column.sql` | `users.subscription_discount_percent` |
+| `database-schema/add-users.sql` | Extra `users` columns |
+| `database-schema/add-time-entries.sql` | Extra `time_entries` columns/constraints |
 
 **Notes**
 

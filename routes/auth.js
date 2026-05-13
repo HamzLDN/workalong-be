@@ -45,19 +45,48 @@ router.get('/public-csrf-token', (req, res) => {
   }
 });
 
+function normalizeEmployerUserRow(row) {
+  if (!row) return;
+  if (row.head_office_access == null) row.head_office_access = true;
+}
+
+/** JSON shape for /auth/me and sign-in responses (employer user). */
+function employerUserJson(user) {
+  if (!user) return null;
+  normalizeEmployerUserRow(user);
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    isVerified: user.is_verified,
+    subscriptionStatus: user.subscription_status,
+    subscriptionPlan: user.subscription_plan,
+    subscriptionStaffLimit: user.subscription_staff_limit != null ? user.subscription_staff_limit : null,
+    timezone: user.timezone || null,
+    createdAt: user.created_at || null,
+    subscriptionStartDate: user.subscription_start_date || null,
+    annualLeaveHoursTarget: parseFloat(user.annual_leave_hours_target ?? 150) || 150,
+    pensionEmployeePercent: parseFloat(user.pension_employee_percent ?? 5) || 5,
+    pensionEmployerPercent: parseFloat(user.pension_employer_percent ?? 3) || 3,
+    headOfficeAccess: user.head_office_access !== false,
+  };
+}
+
 async function getUserWithSubscription(userId) {
   try {
     const r = await pool.query(
       `SELECT id, email, name, is_verified, subscription_status, subscription_plan,
               subscription_staff_limit, timezone,
               created_at, subscription_start_date,
-              annual_leave_hours_target, pension_employee_percent, pension_employer_percent
+              annual_leave_hours_target, pension_employee_percent, pension_employer_percent,
+              head_office_access
        FROM users WHERE id = $1`,
       [userId]
     );
     const row = r.rows[0];
     if (!row) return null;
     if (row.subscription_staff_limit == null) row.subscription_staff_limit = null;
+    normalizeEmployerUserRow(row);
     return row;
   } catch (colErr) {
     if (colErr.code !== '42703') throw colErr;
@@ -74,6 +103,7 @@ async function getUserWithSubscription(userId) {
         row.annual_leave_hours_target = 150;
         row.pension_employee_percent = 5;
         row.pension_employer_percent = 3;
+        normalizeEmployerUserRow(row);
       }
       return row;
     } catch (e2) {
@@ -91,6 +121,7 @@ async function getUserWithSubscription(userId) {
           row.annual_leave_hours_target = 150;
           row.pension_employee_percent = 5;
           row.pension_employer_percent = 3;
+          normalizeEmployerUserRow(row);
         }
         return row;
       }
@@ -333,16 +364,7 @@ router.post(
       const fullUser = await getUserWithSubscription(user.id);
       res.json({
         message: 'Signed in successfully',
-        user: {
-          id: fullUser.id,
-          email: fullUser.email,
-          name: fullUser.name,
-          isVerified: fullUser.is_verified,
-          subscriptionStatus: fullUser.subscription_status,
-          subscriptionPlan: fullUser.subscription_plan,
-          subscriptionStaffLimit:
-            fullUser.subscription_staff_limit != null ? fullUser.subscription_staff_limit : null,
-        },
+        user: employerUserJson(fullUser),
         session: { id: sessionId, expiresAt },
         requires2FA: false,
       });
@@ -420,16 +442,7 @@ router.post('/verify-code', async (req, res) => {
     }
     res.json({
       message: 'Signed in successfully',
-      user: {
-        id: fullUser.id,
-        email: fullUser.email,
-        name: fullUser.name,
-        isVerified: fullUser.is_verified,
-        subscriptionStatus: fullUser.subscription_status,
-        subscriptionPlan: fullUser.subscription_plan,
-        subscriptionStaffLimit:
-          fullUser.subscription_staff_limit != null ? fullUser.subscription_staff_limit : null,
-      },
+      user: employerUserJson(fullUser),
       session: { id: sessionId, expiresAt },
     });
   } catch (error) {
@@ -475,16 +488,7 @@ router.post('/verify-totp', async (req, res) => {
     const fullUser = await getUserWithSubscription(user.id);
     res.json({
       message: 'Signed in successfully',
-      user: {
-        id: fullUser.id,
-        email: fullUser.email,
-        name: fullUser.name,
-        isVerified: fullUser.is_verified,
-        subscriptionStatus: fullUser.subscription_status,
-        subscriptionPlan: fullUser.subscription_plan,
-        subscriptionStaffLimit:
-          fullUser.subscription_staff_limit != null ? fullUser.subscription_staff_limit : null,
-      },
+      user: employerUserJson(fullUser),
       session: { id: sessionId, expiresAt },
     });
   } catch (error) {
@@ -778,22 +782,7 @@ router.get('/me', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
     res.json({
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        isVerified: user.is_verified,
-        subscriptionStatus: user.subscription_status,
-        subscriptionPlan: user.subscription_plan,
-        subscriptionStaffLimit:
-          user.subscription_staff_limit != null ? user.subscription_staff_limit : null,
-        timezone: user.timezone || null,
-        createdAt: user.created_at || null,
-        subscriptionStartDate: user.subscription_start_date || null,
-        annualLeaveHoursTarget: parseFloat(user.annual_leave_hours_target ?? 150) || 150,
-        pensionEmployeePercent: parseFloat(user.pension_employee_percent ?? 5) || 5,
-        pensionEmployerPercent: parseFloat(user.pension_employer_percent ?? 3) || 3,
-      },
+      user: employerUserJson(user),
     });
   } catch (error) {
     console.error('Get user error:', error);

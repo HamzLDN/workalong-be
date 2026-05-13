@@ -1,8 +1,3 @@
-
---
--- Name: shift_swap_requests; Type: TABLE; Schema: public; Owner: -
---
-
 CREATE TABLE public.shift_swap_requests (
     id bigint NOT NULL,
     requester_shift_id bigint NOT NULL,
@@ -17,11 +12,6 @@ CREATE TABLE public.shift_swap_requests (
     CONSTRAINT shift_swap_requests_status_check CHECK (((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('accepted'::character varying)::text, ('rejected'::character varying)::text, ('cancelled'::character varying)::text])))
 );
 
-
---
--- Name: shift_swap_requests_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
 CREATE SEQUENCE public.shift_swap_requests_id_seq
     START WITH 1
     INCREMENT BY 1
@@ -29,105 +19,33 @@ CREATE SEQUENCE public.shift_swap_requests_id_seq
     NO MAXVALUE
     CACHE 1;
 
-
---
--- Name: shift_swap_requests_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
 ALTER SEQUENCE public.shift_swap_requests_id_seq OWNED BY public.shift_swap_requests.id;
 
-
---
--- Name: shift_swap_requests id; Type: DEFAULT; Schema: public; Owner: -
---
-
 ALTER TABLE ONLY public.shift_swap_requests ALTER COLUMN id SET DEFAULT nextval('public.shift_swap_requests_id_seq'::regclass);
-
-
---
--- Name: shift_swap_requests shift_swap_requests_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
 
 ALTER TABLE ONLY public.shift_swap_requests
     ADD CONSTRAINT shift_swap_requests_pkey PRIMARY KEY (id);
 
-
---
--- Name: idx_shift_swap_requests_requested_shift; Type: INDEX; Schema: public; Owner: -
---
-
 CREATE INDEX idx_shift_swap_requests_requested_shift ON public.shift_swap_requests USING btree (requested_shift_id);
-
-
---
--- Name: idx_shift_swap_requests_requested_staff; Type: INDEX; Schema: public; Owner: -
---
 
 CREATE INDEX idx_shift_swap_requests_requested_staff ON public.shift_swap_requests USING btree (requested_staff_id);
 
-
---
--- Name: idx_shift_swap_requests_requester_shift; Type: INDEX; Schema: public; Owner: -
---
-
 CREATE INDEX idx_shift_swap_requests_requester_shift ON public.shift_swap_requests USING btree (requester_shift_id);
-
-
---
--- Name: idx_shift_swap_requests_requester_staff; Type: INDEX; Schema: public; Owner: -
---
 
 CREATE INDEX idx_shift_swap_requests_requester_staff ON public.shift_swap_requests USING btree (requester_staff_id);
 
-
---
--- Name: idx_shift_swap_requests_status; Type: INDEX; Schema: public; Owner: -
---
-
 CREATE INDEX idx_shift_swap_requests_status ON public.shift_swap_requests USING btree (status);
 
-
---
--- Name: shift_swap_requests shift_swap_requests_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
-
 CREATE TRIGGER shift_swap_requests_updated_at BEFORE UPDATE ON public.shift_swap_requests FOR EACH ROW EXECUTE FUNCTION public.update_shift_swap_requests_updated_at();
-
-
---
--- Name: shift_swap_requests shift_swap_requests_requested_shift_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
 
 ALTER TABLE ONLY public.shift_swap_requests
     ADD CONSTRAINT shift_swap_requests_requested_shift_id_fkey FOREIGN KEY (requested_shift_id) REFERENCES public.shifts(id) ON DELETE CASCADE;
 
-
---
--- Name: shift_swap_requests shift_swap_requests_requested_staff_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
 ALTER TABLE ONLY public.shift_swap_requests
     ADD CONSTRAINT shift_swap_requests_requested_staff_id_fkey FOREIGN KEY (requested_staff_id) REFERENCES public.staff(id) ON DELETE CASCADE;
-
-
---
--- Name: shift_swap_requests shift_swap_requests_requester_shift_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
 
 ALTER TABLE ONLY public.shift_swap_requests
     ADD CONSTRAINT shift_swap_requests_requester_shift_id_fkey FOREIGN KEY (requester_shift_id) REFERENCES public.shifts(id) ON DELETE CASCADE;
 
-
---
--- Name: shift_swap_requests shift_swap_requests_requester_staff_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
 ALTER TABLE ONLY public.shift_swap_requests
     ADD CONSTRAINT shift_swap_requests_requester_staff_id_fkey FOREIGN KEY (requester_staff_id) REFERENCES public.staff(id) ON DELETE CASCADE;
-
-
---
--- PostgreSQL database dump complete
---
-
-

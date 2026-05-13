@@ -170,6 +170,7 @@ export async function authenticateStaffOrUser(req, res) {
         name: staffSession.name,
         email: staffSession.email,
         role: staffSession.role,
+        accessRole: staffSession.access_role || 'employee',
         companyUserId: staffSession.company_user_id,
         companyName: staffSession.company_name,
       };

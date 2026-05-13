@@ -74,9 +74,9 @@ describe('Shifts Functions', () => {
       });
       mockQueryFn
         .mockResolvedValueOnce(createMockDbResult([overnightShift]))
-        .mockResolvedValueOnce({ rowCount: 1 }) // UPDATE (late) - mock doesn't update DB
-        .mockResolvedValueOnce(createMockDbResult([{ id: 1, status: 'late' }])) // SELECT status re-fetch
-        .mockResolvedValueOnce(createMockDbResult([])); // time_entries for clock periods
+        .mockResolvedValueOnce(createMockDbResult([])) // clock periods query
+        .mockResolvedValueOnce({ rowCount: 1 }) // UPDATE (late)
+        .mockResolvedValueOnce(createMockDbResult([{ id: 1, status: 'late' }])); // status re-fetch
 
       jest.useFakeTimers();
       jest.setSystemTime(new Date('2026-02-05T18:00:00')); // 18:00, 45 min after 17:15 start; shift ends 01:15 next day
@@ -97,7 +97,9 @@ describe('Shifts Functions', () => {
 
     it('should get all shifts for a user', async () => {
       const mockShifts = [createMockShift({ id: 1 }), createMockShift({ id: 2 })];
-      mockQueryFn.mockResolvedValue(createMockDbResult(mockShifts));
+      mockQueryFn
+        .mockResolvedValueOnce(createMockDbResult(mockShifts))
+        .mockResolvedValueOnce(createMockDbResult([]));
 
       const result = await getShifts(1);
 
@@ -107,7 +109,9 @@ describe('Shifts Functions', () => {
 
     it('should filter by startDate', async () => {
       const mockShifts = [createMockShift()];
-      mockQueryFn.mockResolvedValue(createMockDbResult(mockShifts));
+      mockQueryFn
+        .mockResolvedValueOnce(createMockDbResult(mockShifts))
+        .mockResolvedValueOnce(createMockDbResult([]));
 
       await getShifts(1, { startDate: '2026-02-01' });
 
@@ -119,7 +123,9 @@ describe('Shifts Functions', () => {
 
     it('should filter by endDate', async () => {
       const mockShifts = [createMockShift()];
-      mockQueryFn.mockResolvedValue(createMockDbResult(mockShifts));
+      mockQueryFn
+        .mockResolvedValueOnce(createMockDbResult(mockShifts))
+        .mockResolvedValueOnce(createMockDbResult([]));
 
       await getShifts(1, { endDate: '2026-02-28' });
 
@@ -131,7 +137,9 @@ describe('Shifts Functions', () => {
 
     it('should filter by staffId', async () => {
       const mockShifts = [createMockShift()];
-      mockQueryFn.mockResolvedValue(createMockDbResult(mockShifts));
+      mockQueryFn
+        .mockResolvedValueOnce(createMockDbResult(mockShifts))
+        .mockResolvedValueOnce(createMockDbResult([]));
 
       await getShifts(1, { staffId: 5 });
 
@@ -143,7 +151,9 @@ describe('Shifts Functions', () => {
 
     it('should filter by status', async () => {
       const mockShifts = [createMockShift({ status: 'scheduled' })];
-      mockQueryFn.mockResolvedValue(createMockDbResult(mockShifts));
+      mockQueryFn
+        .mockResolvedValueOnce(createMockDbResult(mockShifts))
+        .mockResolvedValueOnce(createMockDbResult([]));
 
       await getShifts(1, { status: 'scheduled' });
 
@@ -215,9 +225,7 @@ describe('Shifts Functions', () => {
       const result = await getShiftById(1, 1);
 
       expect(mockQueryFn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          'SELECT s.*, s.shift_date::text as shift_date, st.name as staff_name'
-        ),
+        expect.stringContaining('created_by_label'),
         [1, 1]
       );
       expect(result).toBeDefined();

@@ -37,7 +37,7 @@ export DB_NAME=users
 NODE_ENV=production npm run migrate:prod
 ```
 
-This applies the same incremental migrations as your mock DB, in order: `subscription_discount_percent` on `users`, `approved_at`/`approved_by` on `time_entries`, `timezone` on `users` and `leave_category` on `time_entries`, **`device_links` (clock-in kiosk links)**, **`staff_face_profiles` (Face ID)**, sessions `csrf_token`, etc. See `scripts/run-migrations-for-prod.js` for the full list. Migrations are idempotent (safe to re-run if already applied).
+This applies the same incremental migrations as your mock DB, in order: `subscription_discount_percent` on `users`, `approved_at`/`approved_by` on `time_entries`, `timezone` on `users` and `leave_category` on `time_entries`, **`device_links` (clock-in kiosk links)**, **`staff_face_profiles` (Face ID)**, sessions `csrf_token`, etc. See `scripts/run-schema-sync.js` (`ADDITIVE_MIGRATIONS` and auto-picked `add*.sql` in `database-schema/`) for the full list. Migrations are idempotent (safe to re-run if already applied).
 
 **Push to `main`** runs GitHub Actions deploy, which builds the image and runs `npm run migrate:prod` against production Postgres before restarting the backend container (`Sync production database schema` in `.github/workflows/main.yml`). Pushes that only change `.sql` files now trigger this workflow (`**/*.sql` in workflow `paths`).
 

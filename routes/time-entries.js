@@ -49,8 +49,8 @@ router.post('/time-entries/:id/approve', requireAuth, async (req, res) => {
 
 router.post('/time-entries/:id/unapprove', requireAuth, async (req, res) => {
   try {
-    await unapproveTimeEntry(req.params.id, req.userId);
-    res.json({ message: 'Time entry unapproved' });
+    const entry = await unapproveTimeEntry(req.params.id, req.userId);
+    res.json({ message: 'Time entry unapproved', entry });
   } catch (error) {
     console.error('Unapprove time entry error:', error);
     res.status(400).json({ error: error.message || 'Failed to unapprove time entry' });

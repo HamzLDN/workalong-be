@@ -17,10 +17,19 @@ import {
   setPasswordWithToken,
   resetStaffPassword,
 } from '../services/staff.js';
-import { logStaffActivity } from '../lib/activity.js';
+import { logStaffActivity, getPortalTeamActivities, logShiftActivity } from '../lib/activity.js';
+import { sanitizeString } from '../lib/sanitize.js';
+import {
+  calculateEndTime,
+  checkShiftConflict,
+  createShift,
+  deleteShift,
+  getShifts,
+  INVALID_STAFF_ID,
+} from '../services/shifts.js';
 import { requireAuth, requireStaffAuth } from '../middleware/auth.js';
 import { checkGeofence } from '../lib/geofence.js';
-import { calculateEndTime } from '../services/shifts.js';
+import { mergePermissions } from '../lib/managerPermissions.js';
 
 const router = express.Router();
 
@@ -146,6 +155,40 @@ router.get('/portal/time-entries', requireStaffAuth, async (req, res) => {
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
       return res.status(403).json({ error: 'Manager or payroll admin access required' });
     }
+    const permResult = await pool.query(
+      'SELECT manager_permissions FROM users WHERE id = $1',
+      [req.staff.companyUserId]
+    );
+    const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
+
+    const category = String(req.query.category || 'all').toLowerCase();
+    if (category === 'hours' && !perms.hours?.read) {
+      return res.status(403).json({ error: 'Hours access not permitted' });
+    }
+    if (category === 'leave' && !perms.leave?.read) {
+      return res.status(403).json({ error: 'Leave access not permitted' });
+    }
+    if (
+      category === 'all' &&
+      !perms.hours?.read &&
+      !perms.leave?.read
+    ) {
+      return res.status(403).json({ error: 'Hours or leave access required' });
+    }
+
+    let scopeSql = '';
+    if (category === 'hours') {
+      scopeSql = `AND (te.leave_category IS NULL OR te.leave_category NOT IN ('paid_leave', 'unpaid_leave', 'sick_leave'))`;
+    } else if (category === 'leave') {
+      scopeSql = `AND te.leave_category IN ('paid_leave', 'unpaid_leave', 'sick_leave')`;
+    } else if (category === 'all') {
+      if (perms.hours?.read && !perms.leave?.read) {
+        scopeSql = `AND (te.leave_category IS NULL OR te.leave_category NOT IN ('paid_leave', 'unpaid_leave', 'sick_leave'))`;
+      } else if (!perms.hours?.read && perms.leave?.read) {
+        scopeSql = `AND te.leave_category IN ('paid_leave', 'unpaid_leave', 'sick_leave')`;
+      }
+    }
+
     const entries = await pool.query(
       `SELECT
          te.id,
@@ -159,6 +202,9 @@ router.get('/portal/time-entries', requireStaffAuth, async (req, res) => {
          te.leave_category,
          te.entry_type,
          te.approved_at,
+         te.staff_approved_at,
+         te.staff_approved_by,
+         NULLIF(TRIM(CONCAT(sa.name, ' ', COALESCE(sa.lastname, ''))), '') AS staff_approved_by_name,
          te.shift_id,
          sh.hours          AS scheduled_hours,
          sh.start_time     AS scheduled_start,
@@ -169,14 +215,16 @@ router.get('/portal/time-entries', requireStaffAuth, async (req, res) => {
          s.role            AS staff_role
        FROM time_entries te
        JOIN staff s ON te.staff_id = s.id
+       LEFT JOIN staff sa ON sa.id = te.staff_approved_by
        LEFT JOIN shifts sh ON te.shift_id = sh.id
        WHERE s.manager_id = $1
          AND te.clock_out_time IS NOT NULL
+         ${scopeSql}
        ORDER BY te.clock_in_time DESC
        LIMIT 200`,
       [req.staffId]
     );
-    res.json({ entries: entries.rows });
+    res.json({ entries: entries.rows, category: category === 'all' ? 'filtered' : category });
   } catch (error) {
     console.error('Portal time entries error:', error);
     res.status(500).json({ error: 'Failed to load time entries' });
@@ -191,9 +239,12 @@ router.post('/portal/time-entries/:id/approve', requireStaffAuth, async (req, re
     const entryId = parseInt(req.params.id, 10);
     if (isNaN(entryId)) return res.status(400).json({ error: 'Invalid entry ID' });
 
+    const mode = req.body?.mode === 'scheduled_only' ? 'scheduled_only' : 'with_overtime';
+
     // Verify this entry belongs to a staff member managed by the requesting manager
     const check = await pool.query(
-      `SELECT te.id, te.hours_worked, te.approved_at, sh.hours AS scheduled_hours
+      `SELECT te.id, te.hours_worked, te.approved_at, te.staff_approved_at, te.clock_in_time, te.notes,
+              sh.hours AS scheduled_hours
        FROM time_entries te
        JOIN staff s ON te.staff_id = s.id
        LEFT JOIN shifts sh ON te.shift_id = sh.id
@@ -207,7 +258,12 @@ router.post('/portal/time-entries/:id/approve', requireStaffAuth, async (req, re
     }
     const entry = check.rows[0];
     if (entry.approved_at) {
-      return res.status(400).json({ error: 'Time entry is already approved' });
+      return res.status(400).json({ error: 'Already confirmed by head office' });
+    }
+    if (entry.staff_approved_at) {
+      return res.status(400).json({
+        error: 'Already submitted — awaiting head office confirmation',
+      });
     }
 
     // Only allow approval when actual hours exceed scheduled by more than 3 minutes
@@ -221,18 +277,587 @@ router.post('/portal/time-entries/:id/approve', requireStaffAuth, async (req, re
       });
     }
 
-    // Approve using the company user ID (manager acts on behalf of the employer)
+    const managerStaffId = req.staffId;
+
+    if (mode === 'scheduled_only') {
+      if (entry.scheduled_hours == null || parseFloat(entry.scheduled_hours) <= 0) {
+        return res.status(400).json({
+          error:
+            'Cannot approve scheduled hours only — this entry has no shift length on file. Use “Approve with overtime” or link the shift.',
+        });
+      }
+      if (!entry.clock_in_time) {
+        return res.status(400).json({
+          error: 'Cannot approve scheduled hours only — clock-in time is missing.',
+        });
+      }
+
+      const scheduledH = parseFloat(entry.scheduled_hours);
+      const noteLine = '[Portal] Approved for scheduled hours only (overtime not paid).';
+      const existingNotes = entry.notes != null ? String(entry.notes).trim() : '';
+      const newNotes = existingNotes ? `${existingNotes}\n${noteLine}` : noteLine;
+
+      const updated = await pool.query(
+        `UPDATE time_entries
+         SET clock_out_time = clock_in_time + ('1 hour'::interval * $2::numeric),
+             hours_worked = $2::numeric,
+             overtime_hours = 0,
+             staff_approved_at = NOW(),
+             staff_approved_by = $3,
+             notes = $4
+         WHERE id = $1
+         RETURNING id, approved_at, staff_approved_at, staff_approved_by, hours_worked, overtime_hours, clock_out_time, clock_in_time`,
+        [entryId, scheduledH, managerStaffId, newNotes]
+      );
+      const row = updated.rows[0];
+      const nm = await pool.query(
+        `SELECT NULLIF(TRIM(CONCAT(name, ' ', COALESCE(lastname, ''))), '') AS staff_approved_by_name
+         FROM staff WHERE id = $1`,
+        [managerStaffId]
+      );
+      res.json({
+        message: 'Recommendation recorded — scheduled hours only (awaiting head office)',
+        mode: 'scheduled_only',
+        entry: {
+          ...row,
+          staff_approved_by_name: nm.rows[0]?.staff_approved_by_name ?? null,
+        },
+      });
+      return;
+    }
+
+    // Recommend full overtime — head office confirms later (approved_at stays null)
     const updated = await pool.query(
       `UPDATE time_entries
-       SET approved_at = NOW(), approved_by = $1
+       SET staff_approved_at = NOW(),
+           staff_approved_by = $1
        WHERE id = $2
-       RETURNING id, approved_at, hours_worked`,
-      [req.staff.companyUserId, entryId]
+       RETURNING id, approved_at, staff_approved_at, staff_approved_by, hours_worked, overtime_hours, clock_out_time, clock_in_time`,
+      [managerStaffId, entryId]
     );
-    res.json({ message: 'Time entry approved', entry: updated.rows[0] });
+    const row = updated.rows[0];
+    const nm = await pool.query(
+      `SELECT NULLIF(TRIM(CONCAT(name, ' ', COALESCE(lastname, ''))), '') AS staff_approved_by_name
+       FROM staff WHERE id = $1`,
+      [managerStaffId]
+    );
+    res.json({
+      message: 'Recommendation recorded — awaiting head office confirmation',
+      mode: 'with_overtime',
+      entry: {
+        ...row,
+        staff_approved_by_name: nm.rows[0]?.staff_approved_by_name ?? null,
+      },
+    });
   } catch (error) {
     console.error('Portal approve time entry error:', error);
     res.status(500).json({ error: 'Failed to approve time entry' });
+  }
+});
+
+// GET /api/staff/portal/permissions — manager fetches their company's permission matrix
+router.get('/portal/permissions', requireStaffAuth, async (req, res) => {
+  try {
+    if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
+      return res.status(403).json({ error: 'Manager or payroll admin access required' });
+    }
+    const result = await pool.query(
+      'SELECT manager_permissions FROM users WHERE id = $1',
+      [req.staff.companyUserId]
+    );
+    const stored = result.rows[0]?.manager_permissions || null;
+    res.json({ permissions: mergePermissions(stored) });
+  } catch (error) {
+    console.error('Portal permissions error:', error);
+    res.status(500).json({ error: 'Failed to load permissions' });
+  }
+});
+
+// GET /api/staff/portal/stats — team-scoped overview stats
+router.get('/portal/stats', requireStaffAuth, async (req, res) => {
+  try {
+    if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
+      return res.status(403).json({ error: 'Manager or payroll admin access required' });
+    }
+
+    const permResult = await pool.query(
+      'SELECT manager_permissions FROM users WHERE id = $1',
+      [req.staff.companyUserId]
+    );
+    const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
+    if (!perms.overview.read) {
+      return res.status(403).json({ error: 'Overview access not permitted' });
+    }
+
+    const now = new Date();
+    const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+
+    const [headcountRow, hoursRow, otPendingRow] = await Promise.all([
+      pool.query(
+        `SELECT COUNT(*) AS total FROM staff WHERE manager_id = $1 AND status = 'active'`,
+        [req.staffId]
+      ),
+      pool.query(
+        `SELECT COALESCE(SUM(te.hours_worked), 0) AS hours_this_month
+         FROM time_entries te
+         JOIN staff s ON te.staff_id = s.id
+         WHERE s.manager_id = $1 AND te.date >= $2`,
+        [req.staffId, firstOfMonth]
+      ),
+      pool.query(
+        `SELECT
+           COUNT(*) FILTER (
+             WHERE te.staff_approved_at IS NULL
+               AND (te.hours_worked::numeric - COALESCE(sh.hours::numeric, te.hours_worked::numeric))
+                     > ($2::numeric / 60)
+           )::int AS pending_manager_recommendations,
+           COUNT(*) FILTER (
+             WHERE te.staff_approved_at IS NOT NULL
+               AND (te.hours_worked::numeric - COALESCE(sh.hours::numeric, te.hours_worked::numeric))
+                     > ($2::numeric / 60)
+           )::int AS awaiting_head_office_confirmation
+         FROM time_entries te
+         JOIN staff s ON te.staff_id = s.id
+         LEFT JOIN shifts sh ON te.shift_id = sh.id
+         WHERE s.manager_id = $1
+           AND te.clock_out_time IS NOT NULL
+           AND te.approved_at IS NULL`,
+        [req.staffId, 3]
+      ),
+    ]);
+
+    const otRow = otPendingRow.rows[0] || {};
+    const pendingMgr = parseInt(otRow.pending_manager_recommendations ?? 0, 10);
+    const awaitingHq = parseInt(otRow.awaiting_head_office_confirmation ?? 0, 10);
+
+    res.json({
+      totalStaff: parseInt(headcountRow.rows[0]?.total ?? 0, 10),
+      hoursThisMonth: parseFloat(hoursRow.rows[0]?.hours_this_month ?? 0),
+      pendingManagerRecommendations: pendingMgr,
+      awaitingHeadOfficeConfirmation: awaitingHq,
+      pendingApprovals: pendingMgr,
+    });
+  } catch (error) {
+    console.error('Portal stats error:', error);
+    res.status(500).json({ error: 'Failed to load team stats' });
+  }
+});
+
+// GET /api/staff/portal/budget — team-scoped budget (read-only)
+router.get('/portal/budget', requireStaffAuth, async (req, res) => {
+  try {
+    if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
+      return res.status(403).json({ error: 'Manager or payroll admin access required' });
+    }
+    const permResult = await pool.query(
+      'SELECT manager_permissions FROM users WHERE id = $1',
+      [req.staff.companyUserId]
+    );
+    const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
+    if (!perms.budget.read) {
+      return res.status(403).json({ error: 'Budget access not permitted' });
+    }
+
+    const budgetResult = await pool.query(
+      `SELECT id, name, monthly_amount, start_date, end_date, notes
+       FROM budgets WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10`,
+      [req.staff.companyUserId]
+    );
+    res.json({ budgets: budgetResult.rows });
+  } catch (error) {
+    console.error('Portal budget error:', error);
+    res.status(500).json({ error: 'Failed to load budget' });
+  }
+});
+
+// POST /api/staff/portal/time-entries — create a manual time entry (requires hours.write)
+router.post('/portal/time-entries', requireStaffAuth, async (req, res) => {
+  try {
+    if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
+      return res.status(403).json({ error: 'Manager or payroll admin access required' });
+    }
+    const permResult = await pool.query(
+      'SELECT manager_permissions FROM users WHERE id = $1',
+      [req.staff.companyUserId]
+    );
+    const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
+
+    const { staffId, date, hoursWorked, overtimeHours, leaveCategory, notes } = req.body;
+    if (!staffId || !date || hoursWorked == null) {
+      return res.status(400).json({ error: 'staffId, date, and hoursWorked are required' });
+    }
+
+    const leaveKinds = ['paid_leave', 'unpaid_leave', 'sick_leave'];
+    const isLeaveEntry =
+      leaveCategory && typeof leaveCategory === 'string' && leaveKinds.includes(leaveCategory);
+
+    if (isLeaveEntry) {
+      if (!perms.leave?.write) {
+        return res.status(403).json({ error: 'Leave write access not permitted' });
+      }
+    } else {
+      if (!perms.hours?.write) {
+        return res.status(403).json({ error: 'Hours write access not permitted' });
+      }
+    }
+
+    // Verify the staff member belongs to this manager's team
+    const staffCheck = await pool.query(
+      `SELECT id FROM staff WHERE id = $1 AND manager_id = $2
+         AND user_id = (SELECT user_id FROM staff WHERE id = $2)`,
+      [staffId, req.staffId]
+    );
+    if (staffCheck.rows.length === 0) {
+      return res.status(403).json({ error: 'Staff member not in your team' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO time_entries (staff_id, date, hours_worked, overtime_hours, leave_category, notes, entry_type, user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, 'manual', (SELECT user_id FROM staff WHERE id = $1))
+       RETURNING *`,
+      [staffId, date, hoursWorked, overtimeHours || 0, leaveCategory || null, notes || null]
+    );
+    res.status(201).json({ entry: result.rows[0] });
+  } catch (error) {
+    console.error('Portal create time entry error:', error);
+    res.status(500).json({ error: 'Failed to create time entry' });
+  }
+});
+
+// DELETE /api/staff/portal/time-entries/:id — delete a manual time entry (requires hours.delete)
+router.delete('/portal/time-entries/:id', requireStaffAuth, async (req, res) => {
+  try {
+    if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
+      return res.status(403).json({ error: 'Manager or payroll admin access required' });
+    }
+    const permResult = await pool.query(
+      'SELECT manager_permissions FROM users WHERE id = $1',
+      [req.staff.companyUserId]
+    );
+    const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
+
+    const entryId = parseInt(req.params.id, 10);
+    if (isNaN(entryId)) return res.status(400).json({ error: 'Invalid entry ID' });
+
+    const leaveKinds = ['paid_leave', 'unpaid_leave', 'sick_leave'];
+    const rowCheck = await pool.query(
+      `SELECT te.leave_category FROM time_entries te
+       JOIN staff s ON te.staff_id = s.id
+       WHERE te.id = $1 AND s.manager_id = $2 AND te.entry_type = 'manual'`,
+      [entryId, req.staffId]
+    );
+    if (rowCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Manual time entry not found in your team' });
+    }
+    const cat = rowCheck.rows[0]?.leave_category;
+    const isLeave =
+      cat && typeof cat === 'string' && leaveKinds.includes(cat);
+
+    if (isLeave) {
+      if (!perms.leave?.delete) {
+        return res.status(403).json({ error: 'Leave delete access not permitted' });
+      }
+    } else {
+      if (!perms.hours?.delete) {
+        return res.status(403).json({ error: 'Hours delete access not permitted' });
+      }
+    }
+
+    await pool.query('DELETE FROM time_entries WHERE id = $1', [entryId]);
+    res.json({ message: 'Time entry deleted' });
+  } catch (error) {
+    console.error('Portal delete time entry error:', error);
+    res.status(500).json({ error: 'Failed to delete time entry' });
+  }
+});
+
+// GET /api/staff/portal/shifts — team shifts (read-only list; write via POST)
+router.get('/portal/shifts', requireStaffAuth, async (req, res) => {
+  try {
+    if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
+      return res.status(403).json({ error: 'Manager or payroll admin access required' });
+    }
+    const permResult = await pool.query(
+      'SELECT manager_permissions FROM users WHERE id = $1',
+      [req.staff.companyUserId]
+    );
+    const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
+    if (!perms.schedule?.read) {
+      return res.status(403).json({ error: 'Schedule access not permitted' });
+    }
+    const { startDate, endDate, status } = req.query;
+    const filters = {};
+    if (startDate) filters.startDate = String(startDate).split('T')[0];
+    if (endDate) filters.endDate = String(endDate).split('T')[0];
+    if (status) filters.status = String(status);
+    const rawCn = req.query.clientNow;
+    const rawTz = req.query.timezoneOffset;
+    if (rawCn !== undefined && rawCn !== '') {
+      const cn = parseInt(String(rawCn), 10);
+      if (!Number.isNaN(cn)) filters.clientNow = cn;
+    }
+    if (rawTz !== undefined && rawTz !== '') {
+      const tz = parseInt(String(rawTz), 10);
+      if (!Number.isNaN(tz)) filters.timezoneOffset = tz;
+    }
+    filters.managerStaffId = req.staffId;
+
+    const shifts = await getShifts(req.staff.companyUserId, filters);
+    res.json({ shifts });
+  } catch (error) {
+    console.error('Portal shifts error:', error);
+    res.status(500).json({ error: 'Failed to load shifts' });
+  }
+});
+
+// POST /api/staff/portal/shifts — create a shift for a direct report
+router.post('/portal/shifts', requireStaffAuth, async (req, res) => {
+  try {
+    if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
+      return res.status(403).json({ error: 'Manager or payroll admin access required' });
+    }
+    const permResult = await pool.query(
+      'SELECT manager_permissions FROM users WHERE id = $1',
+      [req.staff.companyUserId]
+    );
+    const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
+    if (!perms.schedule?.write) {
+      return res.status(403).json({ error: 'Schedule write access not permitted' });
+    }
+
+    const {
+      staffId,
+      shiftDate,
+      startTime,
+      hours,
+      breakMinutes,
+      shiftType,
+      payType,
+      location,
+      notes,
+    } = req.body || {};
+    if (!staffId || !shiftDate || !startTime || hours === undefined || hours === null) {
+      return res.status(400).json({ error: 'Staff ID, date, start time, and hours are required' });
+    }
+
+    const teamCheck = await pool.query(
+      `SELECT id FROM staff
+       WHERE id = $1 AND manager_id = $2 AND user_id = $3`,
+      [parseInt(staffId, 10), req.staffId, req.staff.companyUserId]
+    );
+    if (teamCheck.rows.length === 0) {
+      return res.status(403).json({ error: 'You can only schedule shifts for your direct reports' });
+    }
+
+    const normalizedDate = String(shiftDate).split('T')[0];
+    const shiftHours = parseFloat(hours) || 0;
+    const calculatedEndTime = calculateEndTime(startTime, shiftHours);
+    const conflictResult = await checkShiftConflict(
+      req.staff.companyUserId,
+      parseInt(staffId, 10),
+      normalizedDate,
+      startTime,
+      calculatedEndTime
+    );
+    if (conflictResult.hasConflict) {
+      const conflicts = conflictResult.conflictingShifts;
+      const conflictTimes = conflicts.map((c) => `${c.start}-${c.end}`).join(', ');
+      return res.status(409).json({
+        error: `This shift conflicts with an existing shift. Conflicting time(s): ${conflictTimes}`,
+        conflictingShifts: conflicts,
+      });
+    }
+
+    const shift = await createShift(req.staff.companyUserId, {
+      staffId: parseInt(staffId, 10),
+      shiftDate: normalizedDate,
+      startTime,
+      hours: shiftHours,
+      breakMinutes,
+      shiftType,
+      payType,
+      location: location ? sanitizeString(location) : location,
+      notes: notes ? sanitizeString(notes) : notes,
+    }, { createdByStaffId: req.staffId });
+
+    const nm = await pool.query(
+      `SELECT name, lastname FROM staff WHERE id = $1`,
+      [parseInt(staffId, 10)]
+    );
+    const sn = nm.rows[0];
+    const staffName = sn ? `${sn.name || ''} ${sn.lastname || ''}`.trim() : 'Staff';
+
+    await logShiftActivity(req.staff.companyUserId, {
+      shiftId: shift.id,
+      staffName,
+      date: normalizedDate,
+      startTime,
+      hours: shiftHours,
+    }, 'created', `[Portal] Manager scheduled shift for ${staffName}`);
+
+    res.status(201).json({ message: 'Shift created successfully', shift });
+  } catch (error) {
+    console.error('Portal create shift error:', error);
+    if (error.message === INVALID_STAFF_ID) {
+      return res.status(400).json({ error: 'Staff ID must be a positive integer' });
+    }
+    if (error.message && error.message.includes('does not belong to this user')) {
+      return res.status(403).json({ error: 'Cannot create shift for this staff member' });
+    }
+    res.status(500).json({ error: 'Failed to create shift' });
+  }
+});
+
+// DELETE /api/staff/portal/shifts/:id — remove a team shift
+router.delete('/portal/shifts/:id', requireStaffAuth, async (req, res) => {
+  try {
+    if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
+      return res.status(403).json({ error: 'Manager or payroll admin access required' });
+    }
+    const permResult = await pool.query(
+      'SELECT manager_permissions FROM users WHERE id = $1',
+      [req.staff.companyUserId]
+    );
+    const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
+    if (!perms.schedule?.delete) {
+      return res.status(403).json({ error: 'Schedule delete access not permitted' });
+    }
+
+    const shiftId = parseInt(req.params.id, 10);
+    if (isNaN(shiftId)) return res.status(400).json({ error: 'Invalid shift ID' });
+
+    const own = await pool.query(
+      `SELECT s.id, sh.shift_date, st.name AS staff_name, st.lastname AS staff_lastname
+       FROM shifts s
+       JOIN staff st ON s.staff_id = st.id
+       WHERE s.id = $1 AND s.user_id = $2 AND st.manager_id = $3`,
+      [shiftId, req.staff.companyUserId, req.staffId]
+    );
+    if (own.rows.length === 0) {
+      return res.status(404).json({ error: 'Shift not found or not in your team' });
+    }
+
+    await deleteShift(shiftId, req.staff.companyUserId);
+
+    const row = own.rows[0];
+    const dStr =
+      row.shift_date instanceof Date
+        ? row.shift_date.toISOString().split('T')[0]
+        : String(row.shift_date).split('T')[0];
+    const staffLabel = `${row.staff_name || ''} ${row.staff_lastname || ''}`.trim();
+    await logShiftActivity(
+      req.staff.companyUserId,
+      {
+        shiftId,
+        staffName: staffLabel || 'Staff',
+        date: dStr,
+        startTime: '',
+        hours: 0,
+      },
+      'deleted',
+      `[Portal] Manager removed shift for ${staffLabel} on ${dStr}`
+    );
+
+    res.json({ message: 'Shift deleted successfully' });
+  } catch (error) {
+    console.error('Portal delete shift error:', error);
+    if (error.message === 'Shift not found or you do not have permission to delete it') {
+      return res.status(404).json({ error: error.message });
+    }
+    res.status(500).json({ error: 'Failed to delete shift' });
+  }
+});
+
+// GET /api/staff/portal/audit — activity relevant to the manager’s team
+router.get('/portal/audit', requireStaffAuth, async (req, res) => {
+  try {
+    if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
+      return res.status(403).json({ error: 'Manager or payroll admin access required' });
+    }
+    const permResult = await pool.query(
+      'SELECT manager_permissions FROM users WHERE id = $1',
+      [req.staff.companyUserId]
+    );
+    const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
+    if (!perms.audit?.read) {
+      return res.status(403).json({ error: 'Audit access not permitted' });
+    }
+    const limit = req.query.limit;
+    const offset = req.query.offset;
+    const entries = await getPortalTeamActivities(
+      req.staff.companyUserId,
+      req.staffId,
+      limit,
+      offset
+    );
+    res.json({ entries });
+  } catch (error) {
+    console.error('Portal audit error:', error);
+    res.status(500).json({ error: 'Failed to load audit log' });
+  }
+});
+
+// GET /api/staff/manager-permissions — headoffice reads the permission matrix
+router.get('/manager-permissions', requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT manager_permissions FROM users WHERE id = $1',
+      [req.userId]
+    );
+    const stored = result.rows[0]?.manager_permissions || null;
+    res.json({ permissions: mergePermissions(stored) });
+  } catch (error) {
+    console.error('Get manager permissions error:', error);
+    res.status(500).json({ error: 'Failed to get permissions' });
+  }
+});
+
+// PUT /api/staff/manager-permissions — headoffice saves the permission matrix
+router.put('/manager-permissions', requireAuth, async (req, res) => {
+  try {
+    const { permissions } = req.body;
+    if (!permissions || typeof permissions !== 'object') {
+      return res.status(400).json({ error: 'permissions object is required' });
+    }
+    // Sanitise: only allow known keys and boolean values
+    const allowedFeatures = [
+      'overview',
+      'staff',
+      'hours',
+      'leave',
+      'budget',
+      'schedule',
+      'audit',
+    ];
+    const opsByFeature = {
+      overview: ['read'],
+      staff: ['read', 'write', 'delete'],
+      hours: ['read', 'write', 'delete'],
+      leave: ['read', 'write', 'delete'],
+      budget: ['read'],
+      schedule: ['read', 'write', 'delete'],
+      audit: ['read'],
+    };
+    const sanitised = {};
+    for (const feature of allowedFeatures) {
+      if (!permissions[feature]) continue;
+      const ops = opsByFeature[feature];
+      if (!ops) continue;
+      sanitised[feature] = {};
+      for (const op of ops) {
+        if (op in permissions[feature]) {
+          sanitised[feature][op] = Boolean(permissions[feature][op]);
+        }
+      }
+    }
+    await pool.query(
+      'UPDATE users SET manager_permissions = $1 WHERE id = $2',
+      [JSON.stringify(sanitised), req.userId]
+    );
+    res.json({ permissions: mergePermissions(sanitised) });
+  } catch (error) {
+    console.error('Update manager permissions error:', error);
+    res.status(500).json({ error: 'Failed to update permissions' });
   }
 });
 

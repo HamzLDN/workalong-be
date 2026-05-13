@@ -1,5 +1,3 @@
--- Staff face profiles for kiosk face verification (simple face hash MVP)
-
 CREATE TABLE IF NOT EXISTS public.staff_face_profiles (
   id bigserial PRIMARY KEY,
   staff_id bigint NOT NULL UNIQUE REFERENCES public.staff(id) ON DELETE CASCADE,
@@ -13,9 +11,3 @@ CREATE TABLE IF NOT EXISTS public.staff_face_profiles (
 
 CREATE INDEX IF NOT EXISTS idx_staff_face_profiles_user_id
   ON public.staff_face_profiles(user_id);
-
-COMMENT ON TABLE public.staff_face_profiles IS
-  'Stores kiosk face hash templates for staff clock-in/out verification.';
-
-COMMENT ON COLUMN public.staff_face_profiles.face_hashes IS
-  'Array of perceptual face hashes captured from kiosk camera.';

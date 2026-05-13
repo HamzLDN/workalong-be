@@ -22,12 +22,201 @@ export function calculateEndTime(startTime, hours) {
   return `${String(endHour).padStart(2, '0')}:${String(endMin).padStart(2, '0')}:00`;
 }
 
+/** Portal / schedule use ~3 minutes beyond scheduled as overtime threshold (hours). */
+const OT_EPS_HOURS = 3 / 60;
+
+/**
+ * Label whether overtime beyond scheduled hours is paid after approvals (for roster UI).
+ * @returns {'awaiting_head_office_ot'|'scheduled_only_no_ot_pay'|'overtime_accepted_payroll'|null}
+ */
+export function deriveClockPeriodOvertimePayrollHint(teRow) {
+  const notes = String(teRow.notes ?? '');
+  const scheduledOnlyNote =
+    /scheduled hours only/i.test(notes) &&
+    (/overtime not paid/i.test(notes) || /\[portal\]/i.test(notes));
+
+  const approved = !!teRow.approved_at;
+  const staffRec = !!teRow.staff_approved_at;
+  const sched =
+    teRow.shift_scheduled_hours != null ? parseFloat(teRow.shift_scheduled_hours) : null;
+  const clockH = parseFloat(Number(teRow.hours_worked ?? 0).toFixed(6));
+  const oh = parseFloat(teRow.overtime_hours ?? 0) || 0;
+
+  const schedOk = sched != null && Number.isFinite(sched);
+  const hadClockOt = schedOk && clockH > sched + OT_EPS_HOURS;
+
+  if (!approved && staffRec && hadClockOt) {
+    return 'awaiting_head_office_ot';
+  }
+
+  if (!approved) return null;
+
+  if (scheduledOnlyNote) {
+    return 'scheduled_only_no_ot_pay';
+  }
+
+  if (hadClockOt && (oh > 0 || !scheduledOnlyNote)) {
+    return 'overtime_accepted_payroll';
+  }
+
+  return null;
+}
+
+/** `{ startMs, endMs }` in epoch ms for comparing “has this shift ended yet?” */
+function shiftScheduledWindowTimestamps(row, tzOffset) {
+  const shiftDateStr =
+    row.shift_date instanceof Date
+      ? row.shift_date.toISOString().split('T')[0]
+      : typeof row.shift_date === 'string'
+        ? row.shift_date.split('T')[0]
+        : row.shift_date;
+  const [y, m, d] = shiftDateStr.split('-').map(Number);
+  const startTime = row.start_time.split(':').map(Number);
+  const sh = startTime[0];
+  const sm = startTime[1] || 0;
+  const ss = startTime[2] || 0;
+
+  const calculatedEndTime = calculateEndTime(row.start_time, row.hours);
+  const endTime = calculatedEndTime.split(':').map(Number);
+  const startMins = startTime[0] * 60 + (startTime[1] || 0);
+  const endMins = endTime[0] * 60 + (endTime[1] || 0);
+  const isOvernight = endMins <= startMins;
+
+  const endDay = d + (isOvernight ? 1 : 0);
+  const eh = endTime[0];
+  const em = endTime[1] || 0;
+  const es = endTime[2] || 0;
+
+  let shiftStartTimestamp;
+  let shiftEndTimestamp;
+  if (tzOffset != null && !isNaN(tzOffset)) {
+    const offsetMs = tzOffset * 60 * 1000;
+    shiftStartTimestamp = Date.UTC(y, m - 1, d, sh, sm, ss) + offsetMs;
+    shiftEndTimestamp = Date.UTC(y, m - 1, endDay, eh, em, es) + offsetMs;
+  } else {
+    const shiftDate = new Date(`${shiftDateStr}T00:00:00`);
+    const shiftStart = new Date(
+      shiftDate.getFullYear(),
+      shiftDate.getMonth(),
+      shiftDate.getDate(),
+      sh,
+      sm,
+      ss
+    );
+    const shiftEnd = new Date(
+      shiftDate.getFullYear(),
+      shiftDate.getMonth(),
+      shiftDate.getDate() + (isOvernight ? 1 : 0),
+      eh,
+      em,
+      es
+    );
+    shiftStartTimestamp = shiftStart.getTime();
+    shiftEndTimestamp = shiftEnd.getTime();
+  }
+  return { startMs: shiftStartTimestamp, endMs: shiftEndTimestamp };
+}
+
+/**
+ * Promote shifts that still say scheduled/late but already have closed clock periods on time_entries
+ * and the roster window has passed — keeps UI aligned when TE was updated without touching shifts.
+ */
+async function syncScheduledShiftsWithCompletedClockEntries(
+  rows,
+  clockPeriodsByShift,
+  nowTimestamp,
+  tzOffset
+) {
+  const pending = [];
+
+  for (const row of rows) {
+    if (row.status === 'approved' || row.approved_at) continue;
+    if (row.status !== 'scheduled' && row.status !== 'late') continue;
+
+    const periods = clockPeriodsByShift[row.id];
+    if (!periods?.length) continue;
+
+    const win = shiftScheduledWindowTimestamps(row, tzOffset);
+    if (!win || nowTimestamp <= win.endMs) continue;
+
+    const allClosed = periods.every((p) => p.clock_in_time && p.clock_out_time);
+    if (!allClosed) continue;
+
+    const ins = periods.map((p) => new Date(p.clock_in_time).getTime());
+    const outs = periods.map((p) => new Date(p.clock_out_time).getTime());
+    if (ins.some((t) => !Number.isFinite(t)) || outs.some((t) => !Number.isFinite(t))) continue;
+
+    const firstIn = new Date(Math.min(...ins));
+    const lastOut = new Date(Math.max(...outs));
+
+    pending.push({ id: row.id, firstIn, lastOut });
+  }
+
+  if (pending.length === 0) return;
+
+  await Promise.all(
+    pending.map((p) =>
+      pool
+        .query(
+          `UPDATE shifts SET
+             status = 'review_hours',
+             clocked_in_time = COALESCE(clocked_in_time, $2),
+             clocked_out_time = COALESCE(clocked_out_time, $3),
+             clock_source = CASE
+               WHEN clock_source IS NULL OR TRIM(BOTH FROM COALESCE(clock_source, '')) = '' THEN 'staff'
+               ELSE clock_source
+             END,
+             updated_at = NOW()
+           WHERE id = $1
+             AND status IN ('scheduled', 'late')
+             AND approved_at IS NULL`,
+          [p.id, p.firstIn, p.lastOut]
+        )
+        .catch((err) =>
+          console.error(`[getShifts] sync TE→shift status failed for shift ${p.id}:`, err.message)
+        )
+    )
+  );
+
+  const ids = pending.map((p) => p.id);
+  const refreshed = await pool.query(
+    `SELECT id, status, clocked_in_time, clocked_out_time FROM shifts WHERE id = ANY($1::bigint[])`,
+    [ids]
+  );
+  const map = Object.fromEntries(refreshed.rows.map((r) => [r.id, r]));
+  for (const row of rows) {
+    const u = map[row.id];
+    if (!u) continue;
+    row.status = u.status;
+    row.clocked_in_time = u.clocked_in_time;
+    row.clocked_out_time = u.clocked_out_time;
+  }
+}
+
 export async function getShifts(userId, filters = {}) {
   let query = `
     SELECT 
       s.id,
       s.user_id,
       s.staff_id,
+      s.created_by_user_id,
+      s.created_by_staff_id,
+      CASE
+        WHEN s.created_by_staff_id IS NOT NULL THEN
+          NULLIF(
+            TRIM(
+              CONCAT(
+                COALESCE(shift_creator_staff.name, ''),
+                ' ',
+                COALESCE(shift_creator_staff.lastname, '')
+              )
+            ),
+            ''
+          )
+        WHEN s.created_by_user_id IS NOT NULL THEN
+          COALESCE(NULLIF(TRIM(shift_creator_user.name), ''), shift_creator_user.email)
+        ELSE COALESCE(NULLIF(TRIM(account_user.name), ''), account_user.email)
+      END AS created_by_label,
       s.shift_date::text as shift_date,
       s.start_time,
       s.hours,
@@ -41,6 +230,7 @@ export async function getShifts(userId, filters = {}) {
       s.updated_at,
       s.approved_at,
       s.approved_by,
+      COALESCE(NULLIF(TRIM(approver.name), ''), approver.email) AS approved_by_user_name,
       s.time_entry_id,
       s.clocked_in_time,
       s.clocked_out_time,
@@ -60,6 +250,10 @@ export async function getShifts(userId, filters = {}) {
       st.hourly_rate
     FROM shifts s
     JOIN staff st ON s.staff_id = st.id
+    LEFT JOIN users approver ON approver.id = s.approved_by
+    LEFT JOIN users shift_creator_user ON shift_creator_user.id = s.created_by_user_id
+    LEFT JOIN staff shift_creator_staff ON shift_creator_staff.id = s.created_by_staff_id
+    LEFT JOIN users account_user ON account_user.id = s.user_id
     WHERE s.user_id = $1
   `;
 
@@ -90,6 +284,18 @@ export async function getShifts(userId, filters = {}) {
     params.push(filters.status);
   }
 
+  if (filters.managerStaffId != null && filters.managerStaffId !== '') {
+    const mid =
+      typeof filters.managerStaffId === 'number'
+        ? filters.managerStaffId
+        : parseInt(String(filters.managerStaffId), 10);
+    if (!Number.isNaN(mid)) {
+      paramCount++;
+      query += ` AND st.manager_id = $${paramCount}`;
+      params.push(mid);
+    }
+  }
+
   query += ' ORDER BY s.shift_date, s.start_time';
 
   const result = await pool.query(query, params);
@@ -104,6 +310,56 @@ export async function getShifts(userId, filters = {}) {
 
   console.log(
     `[getShifts] Processing ${result.rows.length} shifts (clientNow: ${!!filters.clientNow}, tzOffset: ${tzOffset})`
+  );
+
+  const shiftIdsAll = result.rows.map((r) => r.id);
+  let clockPeriodsByShift = {};
+  if (shiftIdsAll.length > 0) {
+    const teResult = await pool.query(
+      `SELECT te.id, te.shift_id, te.clock_in_time, te.clock_out_time, te.approved_at, te.approved_by,
+              te.staff_approved_at, te.staff_approved_by,
+              te.overtime_hours, te.notes,
+              EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0 as hours_worked,
+              sh.hours AS shift_scheduled_hours,
+              COALESCE(NULLIF(TRIM(u.name), ''), u.email) AS approved_by_user_name,
+              NULLIF(TRIM(CONCAT(sa.name, ' ', COALESCE(sa.lastname, ''))), '') AS staff_approved_by_name
+       FROM time_entries te
+       LEFT JOIN shifts sh ON sh.id = te.shift_id
+       LEFT JOIN users u ON u.id = te.approved_by
+       LEFT JOIN staff sa ON sa.id = te.staff_approved_by
+       WHERE te.shift_id = ANY($1::bigint[])
+         AND te.entry_type = 'clock_in_out'
+         AND te.clock_in_time IS NOT NULL
+         AND te.clock_out_time IS NOT NULL
+       ORDER BY te.shift_id, te.clock_in_time`,
+      [shiftIdsAll]
+    );
+    for (const row of teResult.rows ?? []) {
+      if (!clockPeriodsByShift[row.shift_id]) clockPeriodsByShift[row.shift_id] = [];
+      const overtime_payroll_hint = deriveClockPeriodOvertimePayrollHint(row);
+      clockPeriodsByShift[row.shift_id].push({
+        id: row.id,
+        clock_in_time: row.clock_in_time,
+        clock_out_time: row.clock_out_time,
+        hours_worked: parseFloat(Number(row.hours_worked).toFixed(2)),
+        overtime_hours:
+          row.overtime_hours != null ? parseFloat(Number(row.overtime_hours).toFixed(4)) : 0,
+        approved_at: row.approved_at,
+        approved_by: row.approved_by,
+        approved_by_user_name: row.approved_by_user_name || null,
+        staff_approved_at: row.staff_approved_at,
+        staff_approved_by: row.staff_approved_by,
+        staff_approved_by_name: row.staff_approved_by_name || null,
+        overtime_payroll_hint,
+      });
+    }
+  }
+
+  await syncScheduledShiftsWithCompletedClockEntries(
+    result.rows,
+    clockPeriodsByShift,
+    nowTimestamp,
+    tzOffset
   );
 
   for (const row of result.rows) {
@@ -138,60 +394,18 @@ export async function getShifts(userId, filters = {}) {
     }
 
     try {
-      const shiftDateStr =
-        row.shift_date instanceof Date
-          ? row.shift_date.toISOString().split('T')[0]
-          : typeof row.shift_date === 'string'
-            ? row.shift_date.split('T')[0]
-            : row.shift_date;
-      const [y, m, d] = shiftDateStr.split('-').map(Number);
-      const startTime = row.start_time.split(':').map(Number);
-      const sh = startTime[0];
-      const sm = startTime[1] || 0;
-      const ss = startTime[2] || 0;
+      const win = shiftScheduledWindowTimestamps(row, tzOffset);
 
-      const calculatedEndTime = calculateEndTime(row.start_time, row.hours);
-      const endTime = calculatedEndTime.split(':').map(Number);
-      const startMins = startTime[0] * 60 + (startTime[1] || 0);
-      const endMins = endTime[0] * 60 + (endTime[1] || 0);
-      const isOvernight = endMins <= startMins; // end at 01:15, start 17:15 → end is next day
-
-      const endDay = d + (isOvernight ? 1 : 0);
-      const eh = endTime[0];
-      const em = endTime[1] || 0;
-      const es = endTime[2] || 0;
-
-      let shiftStartTimestamp;
-      let shiftEndTimestamp;
-      if (tzOffset != null && !isNaN(tzOffset)) {
-        const offsetMs = tzOffset * 60 * 1000;
-        shiftStartTimestamp = Date.UTC(y, m - 1, d, sh, sm, ss) + offsetMs;
-        shiftEndTimestamp = Date.UTC(y, m - 1, endDay, eh, em, es) + offsetMs;
-      } else {
-        const shiftDate = new Date(shiftDateStr + 'T00:00:00');
-        const shiftStart = new Date(
-          shiftDate.getFullYear(),
-          shiftDate.getMonth(),
-          shiftDate.getDate(),
-          sh,
-          sm,
-          ss
-        );
-        const shiftEnd = new Date(
-          shiftDate.getFullYear(),
-          shiftDate.getMonth(),
-          shiftDate.getDate() + (isOvernight ? 1 : 0),
-          eh,
-          em,
-          es
-        );
-        shiftStartTimestamp = shiftStart.getTime();
-        shiftEndTimestamp = shiftEnd.getTime();
-      }
+      const shiftStartTimestamp = win.startMs;
+      const shiftEndTimestamp = win.endMs;
 
       const hasClockIn = row.clocked_in_time && row.clocked_in_time !== null;
 
       if (nowTimestamp > shiftEndTimestamp && !row.clocked_in_time) {
+        const hasClosedClockEntries = (clockPeriodsByShift[row.id] || []).length > 0;
+        if (hasClosedClockEntries) {
+          continue;
+        }
         // No clock-in = no one attended → always unattended (never completed)
         const newStatus = 'unattended';
 
@@ -289,30 +503,6 @@ export async function getShifts(userId, filters = {}) {
     }
   }
 
-  // Fetch all clock-in/out periods from time_entries so managers see multiple clock-ins per shift
-  const shiftIds = result.rows.map((r) => r.id);
-  let clockPeriodsByShift = {};
-  if (shiftIds.length > 0) {
-    const teResult = await pool.query(
-      `SELECT id, shift_id, clock_in_time, clock_out_time, approved_at,
-              EXTRACT(EPOCH FROM (clock_out_time - clock_in_time)) / 3600.0 as hours_worked
-       FROM time_entries
-       WHERE shift_id = ANY($1::bigint[]) AND clock_in_time IS NOT NULL AND clock_out_time IS NOT NULL
-       ORDER BY shift_id, clock_in_time`,
-      [shiftIds]
-    );
-    for (const row of teResult.rows) {
-      if (!clockPeriodsByShift[row.shift_id]) clockPeriodsByShift[row.shift_id] = [];
-      clockPeriodsByShift[row.shift_id].push({
-        id: row.id,
-        clock_in_time: row.clock_in_time,
-        clock_out_time: row.clock_out_time,
-        hours_worked: parseFloat(Number(row.hours_worked).toFixed(2)),
-        approved_at: row.approved_at,
-      });
-    }
-  }
-
   return result.rows.map((shift) => {
     const cleaned = { ...shift };
     cleaned.clocked_in_time =
@@ -340,16 +530,46 @@ export async function getShifts(userId, filters = {}) {
     } else if (typeof shift.shift_date === 'string') {
       cleaned.shift_date = shift.shift_date.split('T')[0];
     }
-    cleaned.end_time = calculateEndTime(shift.start_time, shift.hours);
+    cleaned.end_time =
+      shift.start_time != null && String(shift.start_time).trim() !== ''
+        ? calculateEndTime(shift.start_time, shift.hours)
+        : null;
     return cleaned;
   });
 }
 
 export async function getShiftById(shiftId, userId) {
   const result = await pool.query(
-    `SELECT s.*, s.shift_date::text as shift_date, st.name as staff_name, st.role, st.hourly_rate
+    `SELECT s.*,
+            s.shift_date::text as shift_date,
+            st.name as staff_name,
+            st.role,
+            st.hourly_rate,
+            s.created_by_user_id,
+            s.created_by_staff_id,
+            CASE
+              WHEN s.created_by_staff_id IS NOT NULL THEN
+                NULLIF(
+                  TRIM(
+                    CONCAT(
+                      COALESCE(shift_creator_staff.name, ''),
+                      ' ',
+                      COALESCE(shift_creator_staff.lastname, '')
+                    )
+                  ),
+                  ''
+                )
+              WHEN s.created_by_user_id IS NOT NULL THEN
+                COALESCE(NULLIF(TRIM(shift_creator_user.name), ''), shift_creator_user.email)
+              ELSE COALESCE(NULLIF(TRIM(account_user.name), ''), account_user.email)
+            END AS created_by_label,
+            COALESCE(NULLIF(TRIM(appr.name), ''), appr.email) AS approved_by_user_name
      FROM shifts s
      JOIN staff st ON s.staff_id = st.id
+     LEFT JOIN users appr ON appr.id = s.approved_by
+     LEFT JOIN users shift_creator_user ON shift_creator_user.id = s.created_by_user_id
+     LEFT JOIN staff shift_creator_staff ON shift_creator_staff.id = s.created_by_staff_id
+     LEFT JOIN users account_user ON account_user.id = s.user_id
      WHERE s.id = $1 AND s.user_id = $2`,
     [shiftId, userId]
   );
@@ -364,7 +584,8 @@ export async function getShiftById(shiftId, userId) {
   return result.rows[0];
 }
 
-export async function createShift(userId, data) {
+export async function createShift(userId, data, options = {}) {
+  const { createdByUserId = null, createdByStaffId = null } = options;
   const {
     staffId,
     shiftDate,
@@ -405,9 +626,10 @@ export async function createShift(userId, data) {
   const result = await pool.query(
     `INSERT INTO shifts (
       user_id, staff_id, shift_date, start_time, hours, 
-      break_minutes, shift_type, pay_type, location, notes
+      break_minutes, shift_type, pay_type, location, notes,
+      created_by_user_id, created_by_staff_id
     ) 
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) 
     RETURNING *`,
     [
       userId,
@@ -420,6 +642,8 @@ export async function createShift(userId, data) {
       payType || 'regular',
       sanitizedLocation,
       sanitizedNotes,
+      createdByUserId,
+      createdByStaffId,
     ]
   );
 
@@ -663,7 +887,8 @@ export async function deleteShift(shiftId, userId) {
   return result.rows[0];
 }
 
-export async function createBulkShifts(userId, shifts) {
+export async function createBulkShifts(userId, shifts, options = {}) {
+  const { createdByUserId = null, createdByStaffId = null } = options;
   const client = await pool.connect();
 
   try {
@@ -695,9 +920,10 @@ export async function createBulkShifts(userId, shifts) {
       const result = await client.query(
         `INSERT INTO shifts (
           user_id, staff_id, shift_date, start_time, 
-          hours, break_minutes, shift_type, pay_type, location, notes
+          hours, break_minutes, shift_type, pay_type, location, notes,
+          created_by_user_id, created_by_staff_id
         ) 
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) 
         RETURNING *`,
         [
           userId,
@@ -710,6 +936,8 @@ export async function createBulkShifts(userId, shifts) {
           shift.payType || 'regular',
           sanitizedLocation,
           sanitizedNotes,
+          createdByUserId,
+          createdByStaffId,
         ]
       );
 

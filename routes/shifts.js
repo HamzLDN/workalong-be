@@ -1,6 +1,5 @@
 import express from 'express';
 import { pool } from '../lib/db.js';
-import { ifNoneMatchSatisfied, weakEtagForJson } from '../lib/conditionalJson.js';
 import { sanitizeString } from '../lib/sanitize.js';
 import {
   getShifts,
@@ -29,6 +28,7 @@ import {
 import { requireAuth, requireStaffAuth, authenticateStaffOrUser } from '../middleware/auth.js';
 import { requireSubscription } from '../middleware/obfuscation.js';
 import { logShiftActivity } from '../lib/activity.js';
+import { mergePermissions } from '../lib/managerPermissions.js';
 
 const router = express.Router();
 
@@ -130,25 +130,55 @@ router.get('/shifts', async (req, res) => {
       if (!isNaN(ts)) filters.clientNow = ts;
     }
 
+    // Staff browser/API sessions must not list or filter the whole company roster like an employer user.
+    // (Otherwise any employee could pass ?staffId= and read others' schedules; managers would see everyone.)
+    if (req.staff && !req.apiKey) {
+      const role = req.staff.accessRole || 'employee';
+      if (role === 'employee') {
+        filters.staffId = req.staffId;
+        delete filters.managerStaffId;
+      } else if (role === 'manager' || role === 'payroll_admin') {
+        const permResult = await pool.query(
+          'SELECT manager_permissions FROM users WHERE id = $1',
+          [req.staff.companyUserId]
+        );
+        const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
+        if (!perms.schedule?.read) {
+          return res.status(403).json({ error: 'Schedule access not permitted' });
+        }
+        filters.managerStaffId = req.staffId;
+        if (filterStaffId !== undefined && filterStaffId !== '') {
+          const wantSid = parseInt(String(filterStaffId), 10);
+          if (!Number.isNaN(wantSid)) {
+            const teamCheck = await pool.query(
+              `SELECT id FROM staff
+               WHERE id = $1 AND manager_id = $2 AND user_id = $3`,
+              [wantSid, req.staffId, req.staff.companyUserId]
+            );
+            if (teamCheck.rows.length === 0) {
+              return res
+                .status(403)
+                .json({ error: 'You can only view shifts for your direct reports' });
+            }
+            filters.staffId = wantSid;
+          }
+        }
+      }
+    }
+
     const shifts = await getShifts(req.userId, filters);
     if (res.headersSent) return;
 
     const payload = { shifts };
-    const etag = weakEtagForJson(payload);
+    // Do not use ETag/304 for roster data — shifts change frequently; 304 + empty body breaks fetch clients.
+    res.set('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+    res.set('Pragma', 'no-cache');
     res.set('X-Shifts-ClientNow', filters.clientNow ? 'yes' : 'no');
     res.set(
       'X-Shifts-TimezoneOffset',
       filters.timezoneOffset !== undefined ? String(filters.timezoneOffset) : 'none'
     );
 
-    // Same behaviour as other JSON list routes: allow 304 when If-None-Match matches this body
-    // (send the ETag from the first response on the next request). Omit If-None-Match → always 200.
-    if (ifNoneMatchSatisfied(req.headers['if-none-match'], etag)) {
-      res.set('ETag', etag);
-      return res.status(304).end();
-    }
-
-    res.set('ETag', etag);
     res.json(payload);
   } catch (error) {
     console.error('Get shifts error:', error);
@@ -224,7 +254,7 @@ router.post('/shifts', requireAuth, async (req, res) => {
       payType,
       location: location ? sanitizeString(location) : location,
       notes: notes ? sanitizeString(notes) : notes,
-    });
+    }, { createdByUserId: req.userId });
     res.status(201).json({ message: 'Shift created successfully', shift });
   } catch (error) {
     console.error('Create shift error:', error);
@@ -252,7 +282,9 @@ router.post('/shifts/bulk', requireAuth, requireSubscription, async (req, res) =
       }
       return { ...shift, hours: parseFloat(shift.hours) };
     });
-    const createdShifts = await createBulkShifts(req.userId, validatedShifts);
+    const createdShifts = await createBulkShifts(req.userId, validatedShifts, {
+      createdByUserId: req.userId,
+    });
     res.status(201).json({
       message: `${createdShifts.length} shifts created successfully`,
       shifts: createdShifts,

@@ -32,6 +32,8 @@ const PRIORITY_ORDER = [
   'request_signing_keys.sql',
   '00_functions_and_triggers.sql',
   'add-company-structure.sql',
+  'add-users.sql',
+  'add-time-entries.sql',
 ];
 
 function listSchemaFiles() {

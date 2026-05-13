@@ -1,6 +1,3 @@
--- Clock-in kiosk: device_links (idempotent; safe to re-run on prod)
--- Mirrors database-schema/device_links.sql without failing if objects already exist.
-
 CREATE TABLE IF NOT EXISTS public.device_links (
   id uuid DEFAULT gen_random_uuid() NOT NULL,
   user_id bigint NOT NULL,
@@ -49,13 +46,3 @@ BEGIN
 EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
-
-COMMENT ON TABLE public.device_links IS
-  'Device-specific links for clock-in/clock-out kiosk system. Each link is tied to a specific device/PC. Multiple staff can use the same device link with their 6-digit IDs.';
-COMMENT ON COLUMN public.device_links.staff_id IS
-  'Optional - can be NULL for kiosk mode where multiple staff use the same device';
-COMMENT ON COLUMN public.device_links.link_token IS 'Unique token used in the clock-in URL';
-COMMENT ON COLUMN public.device_links.device_fingerprint IS
-  'Browser/device fingerprint to ensure link only works on the intended device. Set to NULL initially, populated on first access.';
-COMMENT ON COLUMN public.device_links.device_name IS
-  'Optional name for the device (e.g., "Office Tablet", "Reception iPad")';

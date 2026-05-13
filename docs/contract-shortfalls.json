@@ -1,0 +1,31 @@
+{
+  "schema": "contract-shortfalls.v1",
+  "description": "Track gaps between agreed delivery (customer / internal roadmap) and what is implemented. HR compliance items can be marked deferred to avoid scope cost.",
+  "deferred_categories_note": "Items tagged HR are often expensive (legal review, policies, audits). Move to cancelled or deferred until budget exists.",
+  "items": [
+    {
+      "id": "SF-001",
+      "category": "FR",
+      "title": "Example: feature promised in SOW but not shipped yet",
+      "status": "open",
+      "contract_ref": "SOW § or ticket link",
+      "notes": "Replace with real shortfalls; delete this row when done."
+    },
+    {
+      "id": "SF-002",
+      "category": "NFR",
+      "title": "Example: performance / availability / security requirement",
+      "status": "open",
+      "contract_ref": "",
+      "notes": "NFR = how well the system runs (speed, resilience, audit logs), not a user button."
+    },
+    {
+      "id": "SF-HR-DEFER",
+      "category": "HR",
+      "title": "Example: statutory HR compliance pack (policies, right-to-work workflow, etc.)",
+      "status": "deferred",
+      "contract_ref": "",
+      "notes": "Deferred: HR compliance can be costly. Product already disclaims legal compliance in Terms; customers remain responsible. Re-open when budget allows."
+    }
+  ]
+}

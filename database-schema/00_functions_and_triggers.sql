@@ -20,13 +20,11 @@ SET row_security = off;
 
 -- *not* creating schema, since initdb creates it
 
-
 --
 -- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: -
 --
 
 COMMENT ON SCHEMA public IS '';
-
 
 --
 -- Name: calculate_shift_hours(time without time zone, time without time zone, integer); Type: FUNCTION; Schema: public; Owner: -
@@ -63,7 +61,6 @@ BEGIN
 END;
 $$;
 
-
 --
 -- Name: cleanup_old_activities(); Type: FUNCTION; Schema: public; Owner: -
 --
@@ -77,7 +74,6 @@ BEGIN
 END;
 $$;
 
-
 --
 -- Name: cleanup_old_rate_limit_logs(); Type: FUNCTION; Schema: public; Owner: -
 --
@@ -89,7 +85,6 @@ BEGIN
   DELETE FROM rate_limit_logs WHERE created_at < NOW() - INTERVAL '24 hours';
 END;
 $$;
-
 
 --
 -- Name: cleanup_old_security_audit_logs(); Type: FUNCTION; Schema: public; Owner: -
@@ -104,7 +99,6 @@ BEGIN
   DELETE FROM security_audit_logs WHERE created_at < NOW() - INTERVAL '1 year' AND severity = 'critical';
 END;
 $$;
-
 
 --
 -- Name: generate_clockin_id(); Type: FUNCTION; Schema: public; Owner: -
@@ -132,7 +126,6 @@ BEGIN
 END;
 $$;
 
-
 --
 -- Name: increment_edit_count(); Type: FUNCTION; Schema: public; Owner: -
 --
@@ -150,7 +143,6 @@ BEGIN
 END;
 $$;
 
-
 --
 -- Name: update_shift_swap_requests_updated_at(); Type: FUNCTION; Schema: public; Owner: -
 --
@@ -163,7 +155,6 @@ BEGIN
     RETURN NEW;
 END;
 $$;
-
 
 --
 -- Name: update_updated_at_column(); Type: FUNCTION; Schema: public; Owner: -
@@ -178,6 +169,4 @@ BEGIN
 END;
 $$;
 
-
 SET default_tablespace = '';
-

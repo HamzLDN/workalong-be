@@ -5,13 +5,13 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const SCHEMA_DIR = path.join(__dirname, '..', 'database-schema');
 
 async function runMigration() {
   try {
-    console.log('Running migration: Add subscription_discount_percent column...');
+    console.log('Running migration: user columns (includes subscription_discount_percent)…');
 
-    // Read the SQL file
-    const sqlPath = path.join(__dirname, 'add-discount-percent-column.sql');
+    const sqlPath = path.join(SCHEMA_DIR, 'add-users.sql');
     const sql = fs.readFileSync(sqlPath, 'utf8');
 
     // Execute the migration
