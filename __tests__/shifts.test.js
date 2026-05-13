@@ -224,10 +224,7 @@ describe('Shifts Functions', () => {
 
       const result = await getShiftById(1, 1);
 
-      expect(mockQueryFn).toHaveBeenCalledWith(
-        expect.stringContaining('created_by_label'),
-        [1, 1]
-      );
+      expect(mockQueryFn).toHaveBeenCalledWith(expect.stringContaining('created_by_label'), [1, 1]);
       expect(result).toBeDefined();
     });
 

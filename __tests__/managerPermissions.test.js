@@ -1,8 +1,5 @@
 import { describe, it, expect } from '@jest/globals';
-import {
-  DEFAULT_MANAGER_PERMISSIONS,
-  mergePermissions,
-} from '../lib/managerPermissions.js';
+import { DEFAULT_MANAGER_PERMISSIONS, mergePermissions } from '../lib/managerPermissions.js';
 
 describe('Manager permissions (portal security)', () => {
   it('returns defaults when stored is null or not an object', () => {

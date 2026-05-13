@@ -5,11 +5,7 @@
  * Usage: node scripts/compare-db-schemas.js
  * Or with custom containers: MAIN_CONTAINER=... MOCK_CONTAINER=... node scripts/compare-db-schemas.js
  */
-import {
-  containerIsRunning,
-  dockerPgDumpSchema,
-  normalizeSchemaDump,
-} from './_docker-utils.js';
+import { containerIsRunning, dockerPgDumpSchema, normalizeSchemaDump } from './_docker-utils.js';
 
 const MAIN_CONTAINER = process.env.MAIN_CONTAINER || 'workalong-postgres';
 const MOCK_CONTAINER = process.env.MOCK_CONTAINER || 'workalong-postgres-mock';
@@ -46,7 +42,9 @@ function main() {
     if (!containerIsRunning(c)) {
       console.error(`❌ Error: Container '${c}' is not running`);
       console.error('   Start main: docker-compose -f docker-compose.full.yml up -d postgres');
-      console.error('   Start mock: docker/scripts/manage-mock-db.sh start (or npm run db:mock:up)');
+      console.error(
+        '   Start mock: docker/scripts/manage-mock-db.sh start (or npm run db:mock:up)'
+      );
       console.error('   Sync them:  ./docker/scripts/clone-db-to-mock.sh');
       process.exit(1);
     }

@@ -61,7 +61,8 @@ function employerUserJson(user) {
     isVerified: user.is_verified,
     subscriptionStatus: user.subscription_status,
     subscriptionPlan: user.subscription_plan,
-    subscriptionStaffLimit: user.subscription_staff_limit != null ? user.subscription_staff_limit : null,
+    subscriptionStaffLimit:
+      user.subscription_staff_limit != null ? user.subscription_staff_limit : null,
     timezone: user.timezone || null,
     createdAt: user.created_at || null,
     subscriptionStartDate: user.subscription_start_date || null,

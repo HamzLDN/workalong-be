@@ -41,18 +41,7 @@ function containerForArg(target) {
 }
 
 function dockerPsql(container, sql, flags = []) {
-  const args = [
-    'exec',
-    container,
-    'psql',
-    '-U',
-    DB_USER,
-    '-d',
-    DB_NAME,
-    ...flags,
-    '-c',
-    sql,
-  ];
+  const args = ['exec', container, 'psql', '-U', DB_USER, '-d', DB_NAME, ...flags, '-c', sql];
   return spawnSync('docker', args, { encoding: 'utf8' });
 }
 
@@ -91,7 +80,9 @@ async function main() {
   }
 
   console.log('');
-  console.log(`⚠️  About to delete ${count} test user(s) and their related data (staff, shifts, etc.).`);
+  console.log(
+    `⚠️  About to delete ${count} test user(s) and their related data (staff, shifts, etc.).`
+  );
 
   const rl = readline.createInterface({ input, output });
   let confirm;

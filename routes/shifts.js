@@ -138,10 +138,9 @@ router.get('/shifts', async (req, res) => {
         filters.staffId = req.staffId;
         delete filters.managerStaffId;
       } else if (role === 'manager' || role === 'payroll_admin') {
-        const permResult = await pool.query(
-          'SELECT manager_permissions FROM users WHERE id = $1',
-          [req.staff.companyUserId]
-        );
+        const permResult = await pool.query('SELECT manager_permissions FROM users WHERE id = $1', [
+          req.staff.companyUserId,
+        ]);
         const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
         if (!perms.schedule?.read) {
           return res.status(403).json({ error: 'Schedule access not permitted' });
@@ -244,17 +243,21 @@ router.post('/shifts', requireAuth, async (req, res) => {
       });
     }
     // Sanitize string inputs to remove null bytes
-    const shift = await createShift(req.userId, {
-      staffId,
-      shiftDate: normalizedDate,
-      startTime,
-      hours: parseFloat(hours),
-      breakMinutes,
-      shiftType,
-      payType,
-      location: location ? sanitizeString(location) : location,
-      notes: notes ? sanitizeString(notes) : notes,
-    }, { createdByUserId: req.userId });
+    const shift = await createShift(
+      req.userId,
+      {
+        staffId,
+        shiftDate: normalizedDate,
+        startTime,
+        hours: parseFloat(hours),
+        breakMinutes,
+        shiftType,
+        payType,
+        location: location ? sanitizeString(location) : location,
+        notes: notes ? sanitizeString(notes) : notes,
+      },
+      { createdByUserId: req.userId }
+    );
     res.status(201).json({ message: 'Shift created successfully', shift });
   } catch (error) {
     console.error('Create shift error:', error);

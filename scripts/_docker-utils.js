@@ -14,7 +14,10 @@ export function dockerContainerNames() {
   if (r.status !== 0) {
     throw new Error((r.stderr || '').trim() || 'docker ps failed');
   }
-  return r.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  return r.stdout
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 export function containerIsRunning(name) {

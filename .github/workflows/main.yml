@@ -69,7 +69,7 @@ jobs:
           node-version: '18'
           cache: 'npm'
       - run: npm ci
-      - run: npm run format:check
+      - run: npm run format
 
   audit:
     name: Security Audit
@@ -121,10 +121,7 @@ jobs:
 
       - name: Recreate mock Postgres from git (empty volume → init scripts only)
         run: |
-          docker rm -f workalong-postgres-mock 2>/dev/null || true
-          docker volume rm workalong-backend_postgres_data_mock 2>/dev/null || true
-          npm run db:mock:init
-          docker compose -f docker-compose.mock.yml up -d || docker-compose -f docker-compose.mock.yml up -d
+          npm run db:mock:recreate
           for i in $(seq 1 45); do
             if docker exec workalong-postgres-mock pg_isready -U workalong -d users >/dev/null 2>&1; then
               echo "✅ Postgres ready (schema from checkout only — missing DDL in repo fails tests here)"

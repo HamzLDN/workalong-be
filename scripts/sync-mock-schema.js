@@ -30,7 +30,9 @@ function main() {
   console.log('📦 Regenerating database-schema/mock-init.sql...');
   run('npm', ['run', 'db:mock:init']);
 
-  console.log(`📦 Applying additive schema sync to mock only (${MOCK_CONTAINER}, localhost:5433)...`);
+  console.log(
+    `📦 Applying additive schema sync to mock only (${MOCK_CONTAINER}, localhost:5433)...`
+  );
   run(process.execPath, [path.join(repoRoot, 'scripts/run-schema-sync.js')], {
     env: {
       ...process.env,

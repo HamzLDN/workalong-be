@@ -155,10 +155,9 @@ router.get('/portal/time-entries', requireStaffAuth, async (req, res) => {
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
       return res.status(403).json({ error: 'Manager or payroll admin access required' });
     }
-    const permResult = await pool.query(
-      'SELECT manager_permissions FROM users WHERE id = $1',
-      [req.staff.companyUserId]
-    );
+    const permResult = await pool.query('SELECT manager_permissions FROM users WHERE id = $1', [
+      req.staff.companyUserId,
+    ]);
     const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
 
     const category = String(req.query.category || 'all').toLowerCase();
@@ -168,11 +167,7 @@ router.get('/portal/time-entries', requireStaffAuth, async (req, res) => {
     if (category === 'leave' && !perms.leave?.read) {
       return res.status(403).json({ error: 'Leave access not permitted' });
     }
-    if (
-      category === 'all' &&
-      !perms.hours?.read &&
-      !perms.leave?.read
-    ) {
+    if (category === 'all' && !perms.hours?.read && !perms.leave?.read) {
       return res.status(403).json({ error: 'Hours or leave access required' });
     }
 
@@ -361,10 +356,9 @@ router.get('/portal/permissions', requireStaffAuth, async (req, res) => {
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
       return res.status(403).json({ error: 'Manager or payroll admin access required' });
     }
-    const result = await pool.query(
-      'SELECT manager_permissions FROM users WHERE id = $1',
-      [req.staff.companyUserId]
-    );
+    const result = await pool.query('SELECT manager_permissions FROM users WHERE id = $1', [
+      req.staff.companyUserId,
+    ]);
     const stored = result.rows[0]?.manager_permissions || null;
     res.json({ permissions: mergePermissions(stored) });
   } catch (error) {
@@ -380,10 +374,9 @@ router.get('/portal/stats', requireStaffAuth, async (req, res) => {
       return res.status(403).json({ error: 'Manager or payroll admin access required' });
     }
 
-    const permResult = await pool.query(
-      'SELECT manager_permissions FROM users WHERE id = $1',
-      [req.staff.companyUserId]
-    );
+    const permResult = await pool.query('SELECT manager_permissions FROM users WHERE id = $1', [
+      req.staff.companyUserId,
+    ]);
     const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
     if (!perms.overview.read) {
       return res.status(403).json({ error: 'Overview access not permitted' });
@@ -449,10 +442,9 @@ router.get('/portal/budget', requireStaffAuth, async (req, res) => {
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
       return res.status(403).json({ error: 'Manager or payroll admin access required' });
     }
-    const permResult = await pool.query(
-      'SELECT manager_permissions FROM users WHERE id = $1',
-      [req.staff.companyUserId]
-    );
+    const permResult = await pool.query('SELECT manager_permissions FROM users WHERE id = $1', [
+      req.staff.companyUserId,
+    ]);
     const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
     if (!perms.budget.read) {
       return res.status(403).json({ error: 'Budget access not permitted' });
@@ -476,10 +468,9 @@ router.post('/portal/time-entries', requireStaffAuth, async (req, res) => {
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
       return res.status(403).json({ error: 'Manager or payroll admin access required' });
     }
-    const permResult = await pool.query(
-      'SELECT manager_permissions FROM users WHERE id = $1',
-      [req.staff.companyUserId]
-    );
+    const permResult = await pool.query('SELECT manager_permissions FROM users WHERE id = $1', [
+      req.staff.companyUserId,
+    ]);
     const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
 
     const { staffId, date, hoursWorked, overtimeHours, leaveCategory, notes } = req.body;
@@ -530,10 +521,9 @@ router.delete('/portal/time-entries/:id', requireStaffAuth, async (req, res) => 
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
       return res.status(403).json({ error: 'Manager or payroll admin access required' });
     }
-    const permResult = await pool.query(
-      'SELECT manager_permissions FROM users WHERE id = $1',
-      [req.staff.companyUserId]
-    );
+    const permResult = await pool.query('SELECT manager_permissions FROM users WHERE id = $1', [
+      req.staff.companyUserId,
+    ]);
     const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
 
     const entryId = parseInt(req.params.id, 10);
@@ -550,8 +540,7 @@ router.delete('/portal/time-entries/:id', requireStaffAuth, async (req, res) => 
       return res.status(404).json({ error: 'Manual time entry not found in your team' });
     }
     const cat = rowCheck.rows[0]?.leave_category;
-    const isLeave =
-      cat && typeof cat === 'string' && leaveKinds.includes(cat);
+    const isLeave = cat && typeof cat === 'string' && leaveKinds.includes(cat);
 
     if (isLeave) {
       if (!perms.leave?.delete) {
@@ -577,10 +566,9 @@ router.get('/portal/shifts', requireStaffAuth, async (req, res) => {
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
       return res.status(403).json({ error: 'Manager or payroll admin access required' });
     }
-    const permResult = await pool.query(
-      'SELECT manager_permissions FROM users WHERE id = $1',
-      [req.staff.companyUserId]
-    );
+    const permResult = await pool.query('SELECT manager_permissions FROM users WHERE id = $1', [
+      req.staff.companyUserId,
+    ]);
     const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
     if (!perms.schedule?.read) {
       return res.status(403).json({ error: 'Schedule access not permitted' });
@@ -616,10 +604,9 @@ router.post('/portal/shifts', requireStaffAuth, async (req, res) => {
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
       return res.status(403).json({ error: 'Manager or payroll admin access required' });
     }
-    const permResult = await pool.query(
-      'SELECT manager_permissions FROM users WHERE id = $1',
-      [req.staff.companyUserId]
-    );
+    const permResult = await pool.query('SELECT manager_permissions FROM users WHERE id = $1', [
+      req.staff.companyUserId,
+    ]);
     const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
     if (!perms.schedule?.write) {
       return res.status(403).json({ error: 'Schedule write access not permitted' });
@@ -646,7 +633,9 @@ router.post('/portal/shifts', requireStaffAuth, async (req, res) => {
       [parseInt(staffId, 10), req.staffId, req.staff.companyUserId]
     );
     if (teamCheck.rows.length === 0) {
-      return res.status(403).json({ error: 'You can only schedule shifts for your direct reports' });
+      return res
+        .status(403)
+        .json({ error: 'You can only schedule shifts for your direct reports' });
     }
 
     const normalizedDate = String(shiftDate).split('T')[0];
@@ -668,32 +657,40 @@ router.post('/portal/shifts', requireStaffAuth, async (req, res) => {
       });
     }
 
-    const shift = await createShift(req.staff.companyUserId, {
-      staffId: parseInt(staffId, 10),
-      shiftDate: normalizedDate,
-      startTime,
-      hours: shiftHours,
-      breakMinutes,
-      shiftType,
-      payType,
-      location: location ? sanitizeString(location) : location,
-      notes: notes ? sanitizeString(notes) : notes,
-    }, { createdByStaffId: req.staffId });
-
-    const nm = await pool.query(
-      `SELECT name, lastname FROM staff WHERE id = $1`,
-      [parseInt(staffId, 10)]
+    const shift = await createShift(
+      req.staff.companyUserId,
+      {
+        staffId: parseInt(staffId, 10),
+        shiftDate: normalizedDate,
+        startTime,
+        hours: shiftHours,
+        breakMinutes,
+        shiftType,
+        payType,
+        location: location ? sanitizeString(location) : location,
+        notes: notes ? sanitizeString(notes) : notes,
+      },
+      { createdByStaffId: req.staffId }
     );
+
+    const nm = await pool.query(`SELECT name, lastname FROM staff WHERE id = $1`, [
+      parseInt(staffId, 10),
+    ]);
     const sn = nm.rows[0];
     const staffName = sn ? `${sn.name || ''} ${sn.lastname || ''}`.trim() : 'Staff';
 
-    await logShiftActivity(req.staff.companyUserId, {
-      shiftId: shift.id,
-      staffName,
-      date: normalizedDate,
-      startTime,
-      hours: shiftHours,
-    }, 'created', `[Portal] Manager scheduled shift for ${staffName}`);
+    await logShiftActivity(
+      req.staff.companyUserId,
+      {
+        shiftId: shift.id,
+        staffName,
+        date: normalizedDate,
+        startTime,
+        hours: shiftHours,
+      },
+      'created',
+      `[Portal] Manager scheduled shift for ${staffName}`
+    );
 
     res.status(201).json({ message: 'Shift created successfully', shift });
   } catch (error) {
@@ -714,10 +711,9 @@ router.delete('/portal/shifts/:id', requireStaffAuth, async (req, res) => {
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
       return res.status(403).json({ error: 'Manager or payroll admin access required' });
     }
-    const permResult = await pool.query(
-      'SELECT manager_permissions FROM users WHERE id = $1',
-      [req.staff.companyUserId]
-    );
+    const permResult = await pool.query('SELECT manager_permissions FROM users WHERE id = $1', [
+      req.staff.companyUserId,
+    ]);
     const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
     if (!perms.schedule?.delete) {
       return res.status(403).json({ error: 'Schedule delete access not permitted' });
@@ -774,10 +770,9 @@ router.get('/portal/audit', requireStaffAuth, async (req, res) => {
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
       return res.status(403).json({ error: 'Manager or payroll admin access required' });
     }
-    const permResult = await pool.query(
-      'SELECT manager_permissions FROM users WHERE id = $1',
-      [req.staff.companyUserId]
-    );
+    const permResult = await pool.query('SELECT manager_permissions FROM users WHERE id = $1', [
+      req.staff.companyUserId,
+    ]);
     const perms = mergePermissions(permResult.rows[0]?.manager_permissions);
     if (!perms.audit?.read) {
       return res.status(403).json({ error: 'Audit access not permitted' });
@@ -800,10 +795,9 @@ router.get('/portal/audit', requireStaffAuth, async (req, res) => {
 // GET /api/staff/manager-permissions — headoffice reads the permission matrix
 router.get('/manager-permissions', requireAuth, async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT manager_permissions FROM users WHERE id = $1',
-      [req.userId]
-    );
+    const result = await pool.query('SELECT manager_permissions FROM users WHERE id = $1', [
+      req.userId,
+    ]);
     const stored = result.rows[0]?.manager_permissions || null;
     res.json({ permissions: mergePermissions(stored) });
   } catch (error) {
@@ -820,15 +814,7 @@ router.put('/manager-permissions', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'permissions object is required' });
     }
     // Sanitise: only allow known keys and boolean values
-    const allowedFeatures = [
-      'overview',
-      'staff',
-      'hours',
-      'leave',
-      'budget',
-      'schedule',
-      'audit',
-    ];
+    const allowedFeatures = ['overview', 'staff', 'hours', 'leave', 'budget', 'schedule', 'audit'];
     const opsByFeature = {
       overview: ['read'],
       staff: ['read', 'write', 'delete'],
@@ -850,10 +836,10 @@ router.put('/manager-permissions', requireAuth, async (req, res) => {
         }
       }
     }
-    await pool.query(
-      'UPDATE users SET manager_permissions = $1 WHERE id = $2',
-      [JSON.stringify(sanitised), req.userId]
-    );
+    await pool.query('UPDATE users SET manager_permissions = $1 WHERE id = $2', [
+      JSON.stringify(sanitised),
+      req.userId,
+    ]);
     res.json({ permissions: mergePermissions(sanitised) });
   } catch (error) {
     console.error('Update manager permissions error:', error);
