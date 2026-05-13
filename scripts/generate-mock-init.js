@@ -7,33 +7,47 @@ const __dirname = path.dirname(__filename);
 const SCHEMA_DIR = path.join(__dirname, '..', 'database-schema');
 const OUTPUT_FILE = path.join(SCHEMA_DIR, 'mock-init.sql');
 
-const PRIORITY_ORDER = [
+/**
+ * Load order mirrors scripts/run-schema-sync.js:
+ * - functions first (tables reference trigger functions via CREATE TRIGGER)
+ * - BASE_SCHEMA_FILES
+ * - ADDITIVE_MIGRATIONS (+ add-device-links as idempotent extra)
+ *
+ * Changing run-schema-sync? Update this array to match or docker init stops at first error.
+ */
+const MOCK_INIT_ORDER = [
+  '00_functions_and_triggers.sql',
   'users.sql',
   'sessions.sql',
+  'password_reset_tokens.sql',
+  'login_codes.sql',
+  'api_keys.sql',
+  'ip_whitelists.sql',
+  'request_signing_keys.sql',
   'staff.sql',
   'staff_sessions.sql',
   'staff_password_tokens.sql',
-  'time_entries.sql',
-  'shifts.sql',
-  'shift_swaps.sql',
-  'shift_swap_requests.sql',
-  'device_links.sql',
-  'password_reset_tokens.sql',
-  'rate_limit_logs.sql',
   'payroll_records.sql',
   'payroll_line_items.sql',
-  'security_audit_logs.sql',
-  'fraud_flags.sql',
-  'activity_feed.sql',
-  'api_keys.sql',
   'budgets.sql',
-  'login_codes.sql',
-  'ip_whitelists.sql',
-  'request_signing_keys.sql',
-  '00_functions_and_triggers.sql',
-  'add-company-structure.sql',
+  'shifts.sql',
+  'time_entries.sql',
+  'shift_swap_requests.sql',
+  'shift_swaps.sql',
+  'activity_feed.sql',
+  'fraud_flags.sql',
+  'security_audit_logs.sql',
+  'rate_limit_logs.sql',
+  'device_links.sql',
   'add-users.sql',
+  'add-session-csrf-token.sql',
   'add-time-entries.sql',
+  'add-staff-face-profiles.sql',
+  'add_staff_lastname.sql',
+  'add-face-embeddings-column.sql',
+  'add-company-structure.sql',
+  'add-shift-creator-columns.sql',
+  'add-device-links.sql',
 ];
 
 function listSchemaFiles() {
@@ -47,7 +61,7 @@ function buildOrderedList(files) {
   const fileSet = new Set(files);
   const ordered = [];
 
-  for (const name of PRIORITY_ORDER) {
+  for (const name of MOCK_INIT_ORDER) {
     if (fileSet.has(name)) {
       ordered.push(name);
       fileSet.delete(name);
@@ -62,7 +76,7 @@ function buildContent(orderedFiles) {
   const lines = [
     '-- AUTO-GENERATED FILE. DO NOT EDIT DIRECTLY.',
     '-- Run: npm run db:mock:init',
-    '-- Source: database-schema/*.sql',
+    '-- Source: database-schema/*.sql (order mirrors run-schema-sync.js; see scripts/generate-mock-init.js)',
     '',
     '\\set ON_ERROR_STOP on',
     '',

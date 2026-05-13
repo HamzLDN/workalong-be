@@ -124,13 +124,23 @@ jobs:
           npm run db:mock:recreate
           for i in $(seq 1 45); do
             if docker exec workalong-postgres-mock pg_isready -U workalong -d users >/dev/null 2>&1; then
-              echo "✅ Postgres ready (schema from checkout only — missing DDL in repo fails tests here)"
+              echo "Postgres accepting connections"
               exit 0
             fi
             sleep 2
           done
           docker logs workalong-postgres-mock --tail 80 2>&1 || true
           exit 1
+
+      - name: Schema sync mock DB (handles circular FK retries; aligns with additive migrations)
+        run: npm run migrate:prod
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: '5433'
+          DB_USER: workalong
+          DB_PASSWORD: admin
+          DB_NAME: users
+          NODE_ENV: production
 
       - name: Setup environment file for server
         run: |

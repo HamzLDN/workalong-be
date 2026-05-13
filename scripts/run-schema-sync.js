@@ -16,6 +16,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const SCHEMA_DIR = path.join(__dirname, '..', 'database-schema');
 
+// Mock Postgres docker init aggregates these files via `npm run db:mock:init` —
+// scripts/generate-mock-init.js `MOCK_INIT_ORDER` mirrors this list (with
+// `00_functions_and_triggers.sql` first). Divergence causes docker init to stop on first `\i` error.
 const BASE_SCHEMA_FILES = [
   'users.sql',
   'sessions.sql',
