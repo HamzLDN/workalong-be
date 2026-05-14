@@ -25,7 +25,12 @@ import {
   cancelSwapRequest,
   getSwapRequestById,
 } from '../services/shift-swaps.js';
-import { requireAuth, requireStaffAuth, authenticateStaffOrUser } from '../middleware/auth.js';
+import {
+  requireAuth,
+  requireStaffAuth,
+  authenticateStaffOrUser,
+  authenticateStaffOrUserPreferEmployer,
+} from '../middleware/auth.js';
 import { requireSubscription } from '../middleware/obfuscation.js';
 import { logShiftActivity } from '../lib/activity.js';
 import { mergePermissions } from '../lib/managerPermissions.js';
@@ -102,7 +107,7 @@ router.get('/shifts', async (req, res) => {
         return res.status(401).json({ error: 'Invalid or expired API key' });
       }
     } else {
-      const authResult = await authenticateStaffOrUser(req, res);
+      const authResult = await authenticateStaffOrUserPreferEmployer(req, res);
       if (!authResult && !req.userId) {
         if (!res.headersSent) {
           return res.status(401).json({ error: 'Authentication required' });

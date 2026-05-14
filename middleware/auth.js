@@ -233,3 +233,53 @@ export async function authenticateStaffOrUser(req, res) {
 
   return null;
 }
+
+/**
+ * When the browser has both employer (`sessionId`) and staff (`staffSessionId`) cookies, the default
+ * {@link authenticateStaffOrUser} chooses staff first — so the employer Schedule page hits staff
+ * permission checks (e.g. schedule.read defaults false) and returns 403 even though the user is
+ * viewing head-office UI. This variant validates employer session cookies / Bearer user sessions
+ * first, then delegates to {@link authenticateStaffOrUser} for staff-only contexts.
+ */
+export async function authenticateStaffOrUserPreferEmployer(req, res) {
+  if (req.cookies.sessionId && req.cookies.sessionId !== 'undefined' && req.cookies.sessionId !== 'null') {
+    const userSession = await getSession(req.cookies.sessionId);
+    if (userSession) {
+      const csrfOk = await verifyBrowserSessionCsrf(
+        req,
+        res,
+        req.cookies.sessionId,
+        userSession.user_id
+      );
+      if (!csrfOk) return null;
+      req.userId = userSession.user_id;
+      req.user = { id: userSession.user_id, email: userSession.email, name: userSession.name };
+      return { isStaff: false };
+    }
+  }
+
+  if (req.headers.authorization?.startsWith('Bearer ')) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader.includes('wak_')) {
+      const token = authHeader.replace('Bearer ', '').trim();
+      const userSession = await getSession(token);
+      if (userSession) {
+        const csrfOk = await verifyBrowserSessionCsrf(req, res, token, userSession.user_id);
+        if (!csrfOk) return null;
+        req.userId = userSession.user_id;
+        req.user = { id: userSession.user_id, email: userSession.email, name: userSession.name };
+        if (!req.cookies.sessionId) {
+          res.cookie('sessionId', token, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            maxAge: 7 * 24 * 60 * 60 * 1000,
+          });
+        }
+        return { isStaff: false };
+      }
+    }
+  }
+
+  return authenticateStaffOrUser(req, res);
+}

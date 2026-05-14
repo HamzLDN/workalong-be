@@ -454,10 +454,13 @@ function generateRequestSignature(method, url, body, sessionId, timestamp, nonce
 
 // OBFUSCATED request helper (signed, XOR-encoded body)
 // Used for all authenticated, obfuscated endpoints (staff, shifts, budgets, fraud, etc.).
-async function makeObfuscatedRequest(endpoint, body, method = 'POST') {
+// options.extraCookie: e.g. "staffSessionId=..." — simulates prod browsers that send BOTH employer + staff cookies.
+async function makeObfuscatedRequest(endpoint, body, method = 'POST', options = {}) {
   if (!sessionId) {
     throw new Error('Session required for obfuscated requests');
   }
+
+  const extraCookie = options.extraCookie ? String(options.extraCookie).trim() : '';
 
   // Ensure CSRF token is loaded from current session
   if (!csrfToken) {
@@ -527,7 +530,7 @@ async function makeObfuscatedRequest(endpoint, body, method = 'POST') {
     'X-Request-Nonce': nonce,
     'X-Request-Signature': signature,
     Authorization: `Bearer ${sessionId}`,
-    Cookie: `sessionId=${sessionId}`,
+    Cookie: extraCookie ? `sessionId=${sessionId}; ${extraCookie}` : `sessionId=${sessionId}`,
     'X-CSRF-Token': csrfToken,
   };
 
@@ -2755,6 +2758,40 @@ async function testStaffPortalFlow() {
     if (mgrCookieMatch) mgrSessionId = mgrCookieMatch[1];
 
     if (mgrSessionId) {
+      // Production parity: same origin sets both cookies; obfuscated GET /shifts must use employer
+      // session (regression: staff-first auth + default schedule.read=false → 403 on prod).
+      const rangeStart = await pgCalendarDatePlusDays(-7);
+      const rangeEnd = await pgCalendarDatePlusDays(7);
+      const tz = new Date().getTimezoneOffset();
+      const nowMs = Date.now();
+      const dualQuery = `startDate=${encodeURIComponent(rangeStart)}&endDate=${encodeURIComponent(
+        rangeEnd
+      )}&timezoneOffset=${tz}&clientNow=${nowMs}`;
+      const dualShifts = await makeObfuscatedRequest(
+        `/shifts?${dualQuery}`,
+        {},
+        'GET',
+        { extraCookie: `staffSessionId=${mgrSessionId}` }
+      );
+      const dualOk =
+        dualShifts.ok &&
+        dualShifts.status === 200 &&
+        dualShifts.data &&
+        Array.isArray(dualShifts.data.shifts) &&
+        !dualShifts.data.error;
+      console.log('  GET /shifts [OBF] with sessionId + staffSessionId (prod-like):');
+      assertResult(
+        'Employer /shifts with dual cookies (expect 200, not 403)',
+        { status: 200, hasShiftsArray: true },
+        {
+          status: dualShifts.status,
+          hasShiftsArray: Array.isArray(dualShifts.data?.shifts),
+          err: dualShifts.data?.error ?? null,
+        },
+        dualOk
+      );
+      allPassed = allPassed && dualOk;
+
       // Manager accesses /portal/team → 200
       const teamResult = await staffPortalRequest(
         '/staff/portal/team',
