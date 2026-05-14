@@ -59,3 +59,7 @@ ALTER TABLE ONLY public.time_entries
 
 ALTER TABLE ONLY public.time_entries
     ADD CONSTRAINT time_entries_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+-- Circular ref: shifts.time_entry_id → time_entries; time_entries.shift_id → shifts. Add after both tables exist.
+ALTER TABLE ONLY public.shifts
+    ADD CONSTRAINT shifts_time_entry_id_fkey FOREIGN KEY (time_entry_id) REFERENCES public.time_entries(id) ON DELETE SET NULL;
