@@ -11,11 +11,50 @@ function coercePositiveIntId(value) {
   return n;
 }
 
+/**
+ * Normalise Postgres TIME / pg driver variants → `HH:mm:ss` for end-time modulo math.
+ * Returns null only when nothing parseable remains (caller should skip auto-status updates).
+ */
+function coerceShiftStartTimeString(raw) {
+  if (raw == null || raw === '') return null;
+  if (raw instanceof Date && !Number.isNaN(raw.getTime())) {
+    // pg sometimes represents TIME columns as JS Date anchored at 1970-01-01 in UTC.
+    const h = raw.getUTCHours();
+    const m = raw.getUTCMinutes();
+    const s = raw.getUTCSeconds();
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
+  const str = typeof raw === 'string' ? raw.trim() : String(raw).trim();
+  if (!str) return null;
+  // ISO datetime fragments (e.g. "1970-01-01T09:05:06.789Z"), or bare "HH:mm[:ss]".
+  let m = str.match(/T(\d{1,2}):(\d{2})(?::(\d{2}))?\b/);
+  if (!m) m = str.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\b/);
+  if (!m) return null;
+  const hh = m[1].padStart(2, '0');
+  const mm = m[2].padStart(2, '0');
+  const ss = (m[3] ?? '00').padStart(2, '0');
+  const h = Number.parseInt(hh, 10);
+  const mn = Number.parseInt(mm, 10);
+  const sc = Number.parseInt(ss, 10);
+  if (!Number.isFinite(h) || !Number.isFinite(mn) || !Number.isFinite(sc)) return null;
+  return `${hh}:${mm}:${ss}`;
+}
+
 export const INVALID_STAFF_ID = 'INVALID_STAFF_ID';
 
 export function calculateEndTime(startTime, hours) {
-  const [startHour, startMin] = startTime.split(':').map(Number);
-  const totalMinutes = startHour * 60 + startMin + hours * 60;
+  const token = coerceShiftStartTimeString(startTime) ?? '00:00:00';
+  let hm =
+    typeof hours === 'number' && Number.isFinite(hours)
+      ? hours
+      : hours == null || hours === ''
+        ? 0
+        : Number.parseFloat(String(hours));
+  if (!Number.isFinite(hm)) hm = 0;
+  const parts = token.split(':').map((x) => Number.parseInt(String(x ?? '0').replace(/\..*$/, ''), 10));
+  const startHour = Number.isFinite(parts[0]) ? parts[0] : 0;
+  const startMin = Number.isFinite(parts[1]) ? parts[1] : 0;
+  const totalMinutes = startHour * 60 + startMin + hm * 60;
   const endMinutes = totalMinutes % (24 * 60);
   const endHour = Math.floor(endMinutes / 60);
   const endMin = endMinutes % 60;
@@ -62,30 +101,42 @@ export function deriveClockPeriodOvertimePayrollHint(teRow) {
   return null;
 }
 
-/** `{ startMs, endMs }` in epoch ms for comparing “has this shift ended yet?” */
-function shiftScheduledWindowTimestamps(row, tzOffset) {
-  const shiftDateStr =
-    row.shift_date instanceof Date
-      ? row.shift_date.toISOString().split('T')[0]
-      : typeof row.shift_date === 'string'
-        ? row.shift_date.split('T')[0]
-        : row.shift_date;
+/** `{ startMs, endMs }` in epoch ms — same semantics as GET /shifts roster windows (`timezoneOffset`). */
+export function shiftScheduledWindowTimestamps(row, tzOffset) {
+  let shiftDateStr;
+  if (row.shift_date instanceof Date && !Number.isNaN(row.shift_date.getTime())) {
+    // node-pg may represent Postgres DATE such that UTC-midnight from toISOString() is the wrong calendar day.
+    // en-CA yields YYYY-MM-DD in local calendar for that instant (matches kiosk wall dates).
+    shiftDateStr = row.shift_date.toLocaleDateString('en-CA');
+  } else if (typeof row.shift_date === 'string') {
+    shiftDateStr = row.shift_date.split('T')[0];
+  } else {
+    shiftDateStr = row.shift_date;
+  }
+  const token = coerceShiftStartTimeString(row.start_time);
+  if (!token || !shiftDateStr || typeof shiftDateStr !== 'string') {
+    return null;
+  }
   const [y, m, d] = shiftDateStr.split('-').map(Number);
-  const startTime = row.start_time.split(':').map(Number);
-  const sh = startTime[0];
-  const sm = startTime[1] || 0;
-  const ss = startTime[2] || 0;
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) {
+    return null;
+  }
+  const startParts = token.split(':').map((x) => Number.parseInt(String(x ?? '0').replace(/\..*$/, ''), 10));
+  const sh = Number.isFinite(startParts[0]) ? startParts[0] : 0;
+  const sm = Number.isFinite(startParts[1]) ? startParts[1] : 0;
+  const ss = Number.isFinite(startParts[2]) ? startParts[2] : 0;
 
   const calculatedEndTime = calculateEndTime(row.start_time, row.hours);
-  const endTime = calculatedEndTime.split(':').map(Number);
-  const startMins = startTime[0] * 60 + (startTime[1] || 0);
-  const endMins = endTime[0] * 60 + (endTime[1] || 0);
+  const endTime = calculatedEndTime.split(':').map((x) => Number.parseInt(String(x ?? '0').replace(/\..*$/, ''), 10));
+  const eh = Number.isFinite(endTime[0]) ? endTime[0] : 0;
+  const em = Number.isFinite(endTime[1]) ? endTime[1] : 0;
+  const es = Number.isFinite(endTime[2]) ? endTime[2] : 0;
+
+  const startMins = sh * 60 + sm;
+  const endMins = eh * 60 + em;
   const isOvernight = endMins <= startMins;
 
   const endDay = d + (isOvernight ? 1 : 0);
-  const eh = endTime[0];
-  const em = endTime[1] || 0;
-  const es = endTime[2] || 0;
 
   let shiftStartTimestamp;
   let shiftEndTimestamp;
@@ -136,7 +187,13 @@ async function syncScheduledShiftsWithCompletedClockEntries(
     const periods = clockPeriodsByShift[row.id];
     if (!periods?.length) continue;
 
-    const win = shiftScheduledWindowTimestamps(row, tzOffset);
+    let win;
+    try {
+      win = shiftScheduledWindowTimestamps(row, tzOffset);
+    } catch (err) {
+      console.error(`[getShifts] TE sync: shift window timestamps failed (${row?.id}):`, err.message);
+      continue;
+    }
     if (!win || nowTimestamp <= win.endMs) continue;
 
     const allClosed = periods.every((p) => p.clock_in_time && p.clock_out_time);

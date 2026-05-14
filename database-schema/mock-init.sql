@@ -35,4 +35,5 @@
 \i /docker-entrypoint-initdb.d/schema/add-face-embeddings-column.sql
 \i /docker-entrypoint-initdb.d/schema/add-company-structure.sql
 \i /docker-entrypoint-initdb.d/schema/add-shift-creator-columns.sql
+\i /docker-entrypoint-initdb.d/schema/add-shifts-clock-source.sql
 \i /docker-entrypoint-initdb.d/schema/add-device-links.sql

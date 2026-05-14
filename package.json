@@ -20,6 +20,7 @@
     "db:compare": "node scripts/compare-db-schemas.js",
     "db:delete-users-by-email-pattern": "node scripts/delete-users-by-email-pattern.js",
     "db:cleanup-test-users": "node scripts/cleanup-test-users.js",
+    "db:target": "node scripts/print-db-target.js",
     "migrate:prod": "node scripts/run-schema-sync.js",
     "migrate:discount": "node scripts/run-discount-migration.js",
     "migrate:time-entry-approval": "node scripts/run-time-entry-approval-migration.js",

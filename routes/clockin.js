@@ -14,6 +14,7 @@ import {
   verifyEmbeddingAgainstStored,
   normalizeEmbeddingArray,
 } from '../lib/faceEmbeddingMatch.js';
+import { shiftScheduledWindowTimestamps } from '../services/shifts.js';
 
 const router = express.Router();
 const isDev = process.env.NODE_ENV !== 'production';
@@ -540,6 +541,13 @@ router.post('/clock-action', async (req, res) => {
 
     if (action === 'clock-in') {
       const now = new Date();
+      const tzRaw =
+        req.body.timezoneOffset !== undefined ? req.body.timezoneOffset : req.body.timeZoneOffset;
+      const tzParsed =
+        tzRaw !== undefined && tzRaw !== null && tzRaw !== ''
+          ? parseInt(String(tzRaw), 10)
+          : NaN;
+      const timezoneOffset = !Number.isNaN(tzParsed) ? tzParsed : null;
       const today = now.toISOString().split('T')[0];
       // Only enforce geofence when valid coordinates are provided (skip for desktop/kiosk without location)
       const hasValidLocation = typeof latitude === 'number' && typeof longitude === 'number';
@@ -571,14 +579,16 @@ router.post('/clock-action', async (req, res) => {
       if (existingEntry.rows.length > 0) {
         return res.status(400).json({ error: 'Already clocked in today. Please clock out first.' });
       }
-      // Find shifts where we're within the shift window AND have hours remaining (allows clock-in again after clock-out)
-      const shiftResult = await pool.query(
-        `SELECT s.id, s.shift_date, s.start_time, s.hours, s.clocked_in_time
+      // Primary filter: legacy Postgres window (same as years of production). Keeps DB/session semantics.
+      // When the client sends timezoneOffset (like GET /shifts), prefer the first SQL-eligible shift that
+      // also fits shiftScheduledWindowTimestamps; if none do, fall back to the first SQL row (no false reject).
+      const shiftSqlEligible = await pool.query(
+        `SELECT s.id, s.shift_date::text AS shift_date, s.start_time, s.hours, s.clocked_in_time
          FROM shifts s
          LEFT JOIN (
-           SELECT shift_id, SUM(hours_worked) as total_worked
+           SELECT shift_id, SUM(hours_worked) AS total_worked
            FROM time_entries
-           WHERE clock_out_time IS NOT NULL
+           WHERE clock_out_time IS NOT NULL AND entry_type = 'clock_in_out'
            GROUP BY shift_id
          ) te ON te.shift_id = s.id
          WHERE s.staff_id = $1 AND s.status != 'cancelled'
@@ -588,15 +598,36 @@ router.post('/clock-action', async (req, res) => {
          ORDER BY s.shift_date ASC, s.start_time ASC`,
         [staffId, now]
       );
-      if (shiftResult.rows.length === 0) {
+      if (shiftSqlEligible.rows.length === 0) {
         return res.status(400).json({
           error:
             'No shift scheduled with hours remaining. You can only clock in during your scheduled shift.',
         });
       }
 
-      const shift = shiftResult.rows[0];
-      const shiftId = shift.id;
+      let matchedShiftRow = null;
+      if (timezoneOffset == null) {
+        matchedShiftRow = shiftSqlEligible.rows[0];
+      } else {
+        const nowMs = now.getTime();
+        for (const row of shiftSqlEligible.rows) {
+          let win;
+          try {
+            win = shiftScheduledWindowTimestamps(row, timezoneOffset);
+          } catch (_) {
+            continue;
+          }
+          if (win && nowMs >= win.startMs && nowMs <= win.endMs) {
+            matchedShiftRow = row;
+            break;
+          }
+        }
+        if (!matchedShiftRow) {
+          matchedShiftRow = shiftSqlEligible.rows[0];
+        }
+      }
+
+      const shiftId = matchedShiftRow.id;
       // Prevent duplicate time entries: delete any existing open entries for this staff/date/shift
       // (same logic as staff API clock-in; avoids double-counting hours when using both link + app)
       const previousEntries = await pool.query(

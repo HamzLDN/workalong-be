@@ -85,6 +85,11 @@ const ADDITIVE_MIGRATIONS = [
     file: 'add-shift-creator-columns.sql',
     dir: SCHEMA_DIR,
   },
+  {
+    name: 'shifts clock_source',
+    file: 'add-shifts-clock-source.sql',
+    dir: SCHEMA_DIR,
+  },
 ];
 
 /**

@@ -47,6 +47,7 @@ const MOCK_INIT_ORDER = [
   'add-face-embeddings-column.sql',
   'add-company-structure.sql',
   'add-shift-creator-columns.sql',
+  'add-shifts-clock-source.sql',
   'add-device-links.sql',
 ];
 

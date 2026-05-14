@@ -42,6 +42,28 @@ function assertStatusResponse(testName, result, expectedStatus = 200) {
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8081/api';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-this-secret-key-in-production';
 
+/** YYYY-MM-DD in the machine's local timezone. Do not use toISOString() for calendar dates (that is UTC). */
+function formatLocalYMD(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Postgres `CURRENT_DATE ± days` as YYYY-MM-DD (same connection as `/shifts` and clock-action).
+ * Use for shift CREATE/DELETE in live API tests so `shift_date` matches how PostgreSQL evaluates
+ * `(shift_date + start_time)` vs `NOW()` (avoids Node local TZ vs PG session TZ drift).
+ */
+async function pgCalendarDatePlusDays(offsetDays = 0) {
+  const q =
+    offsetDays === 0
+      ? `SELECT CURRENT_DATE::text AS d`
+      : `SELECT (CURRENT_DATE + $1::integer)::text AS d`;
+  const r = offsetDays === 0 ? await pool.query(q) : await pool.query(q, [offsetDays]);
+  return String(r.rows[0].d).trim();
+}
+
 /** Bootstrap CSRF from GET /auth/csrf-token (no X-CSRF-Token required). */
 async function fetchCsrfTokenFromApi(sid) {
   if (!sid) return null;
@@ -824,7 +846,7 @@ async function testCreateShift() {
     return true; // Not a failure, just skip
   }
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = await pgCalendarDatePlusDays(0);
   const result = await makeObfuscatedRequest(
     '/shifts',
     {
@@ -866,7 +888,7 @@ async function testCreateShiftObfuscated() {
     return true; // Not a failure, just skip
   }
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = await pgCalendarDatePlusDays(0);
   const result = await makeObfuscatedRequest(
     '/shifts',
     {
@@ -1094,9 +1116,7 @@ async function testShiftConflictOvernightNoFalsePositive() {
     if (!staffRes.ok || !staffRes.data?.staff?.length) return false;
     localStaffId = staffRes.data.staff[0].id;
   }
-  const testDate = new Date();
-  testDate.setDate(testDate.getDate() + 14);
-  const dateStr = testDate.toISOString().split('T')[0];
+  const dateStr = await pgCalendarDatePlusDays(14);
   try {
     await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
       localStaffId,
@@ -1155,9 +1175,7 @@ async function testOvernightShiftNotCompletedPrematurely() {
     if (!staffRes.ok || !staffRes.data?.staff?.length) return false;
     localStaffId = staffRes.data.staff[0].id;
   }
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const dateStr = tomorrow.toISOString().split('T')[0];
+  const dateStr = await pgCalendarDatePlusDays(1);
   let createdId = null;
   try {
     await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
@@ -1228,9 +1246,7 @@ async function testMultiDayShiftCreation() {
     if (!staffRes.ok || !staffRes.data?.staff?.length) return false;
     localStaffId = staffRes.data.staff[0].id;
   }
-  const testDate = new Date();
-  testDate.setDate(testDate.getDate() + 20);
-  const dateStr = testDate.toISOString().split('T')[0];
+  const dateStr = await pgCalendarDatePlusDays(20);
   let createdId = null;
   try {
     await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
@@ -1292,14 +1308,10 @@ async function testFiveConsecutiveOvernightShifts() {
     if (!staffRes.ok || !staffRes.data?.staff?.length) return false;
     localStaffId = staffRes.data.staff[0].id;
   }
-  const base = new Date();
-  base.setDate(base.getDate() + 25);
   const createdIds = [];
   try {
     for (let i = 0; i < 5; i++) {
-      const d = new Date(base);
-      d.setDate(d.getDate() + i);
-      const dateStr = d.toISOString().split('T')[0];
+      const dateStr = await pgCalendarDatePlusDays(25 + i);
       await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
         localStaffId,
         dateStr,
@@ -1350,9 +1362,7 @@ async function test24HourShiftNoClockInUnattended() {
     if (!staffRes.ok || !staffRes.data?.staff?.length) return false;
     localStaffId = staffRes.data.staff[0].id;
   }
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const dateStr = yesterday.toISOString().split('T')[0];
+  const dateStr = await pgCalendarDatePlusDays(-1);
   let createdId = null;
   try {
     await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
@@ -1424,9 +1434,7 @@ async function testCompletedShiftWithNoClockInCorrected() {
     if (!staffRes.ok || !staffRes.data?.staff?.length) return false;
     localStaffId = staffRes.data.staff[0].id;
   }
-  const futureDate = new Date();
-  futureDate.setDate(futureDate.getDate() + 40);
-  const dateStr = futureDate.toISOString().split('T')[0];
+  const dateStr = await pgCalendarDatePlusDays(40);
   let createdId = null;
   try {
     await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
@@ -1465,12 +1473,12 @@ async function testCompletedShiftWithNoClockInCorrected() {
       console.log(`  ${RED}FAIL:${RESET} Could not update shift ${createdId}`);
       return false;
     }
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - 7);
-    const endDate = new Date();
-    endDate.setDate(endDate.getDate() + 60);
+    const range = await pool.query(
+      `SELECT (CURRENT_DATE - 7)::text AS sd, (CURRENT_DATE + 60)::text AS ed`
+    );
+    const { sd, ed } = range.rows[0];
     const getRes = await makeObfuscatedRequest(
-      `/shifts?startDate=${startDate.toISOString().split('T')[0]}&endDate=${endDate.toISOString().split('T')[0]}`,
+      `/shifts?startDate=${sd}&endDate=${ed}`,
       {},
       'GET'
     );
@@ -1514,12 +1522,8 @@ async function test24HourShiftEndTime() {
     if (!staffRes.ok || !staffRes.data?.staff?.length) return false;
     localStaffId = staffRes.data.staff[0].id;
   }
-  const testDate = new Date();
-  testDate.setDate(testDate.getDate() + 35);
-  const dateStr = testDate.toISOString().split('T')[0];
-  const nextDay = new Date(testDate);
-  nextDay.setDate(nextDay.getDate() + 1);
-  const nextDayStr = nextDay.toISOString().split('T')[0];
+  const dateStr = await pgCalendarDatePlusDays(35);
+  const nextDayStr = await pgCalendarDatePlusDays(36);
   let createdId = null;
   try {
     await pool.query(
@@ -1585,10 +1589,8 @@ async function testGetPayrollPreview() {
   console.log('\n=== Testing Get Payroll Preview ===');
   if (!sessionId) return false;
   const today = new Date();
-  const startDate = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
-  const endDate = new Date(today.getFullYear(), today.getMonth() + 1, 0)
-    .toISOString()
-    .split('T')[0];
+  const startDate = formatLocalYMD(new Date(today.getFullYear(), today.getMonth(), 1));
+  const endDate = formatLocalYMD(new Date(today.getFullYear(), today.getMonth() + 1, 0));
   const result = await makeObfuscatedRequest(
     `/payroll-preview?startDate=${startDate}&endDate=${endDate}`,
     {},
@@ -1619,7 +1621,7 @@ async function testCreateTimeEntry() {
     console.log(`  ${RED}ERROR:${RESET} No staff ID available`);
     return false;
   }
-  const today = new Date().toISOString().split('T')[0];
+  const today = await pgCalendarDatePlusDays(0);
   const result = await makeObfuscatedRequest(
     '/time-entries',
     {
@@ -1751,10 +1753,8 @@ async function testCreateBudget() {
   console.log('\n=== Testing Create Budget (Obfuscated) ===');
   if (!sessionId) return false;
   const today = new Date();
-  const startDate = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
-  const endDate = new Date(today.getFullYear(), today.getMonth() + 1, 0)
-    .toISOString()
-    .split('T')[0];
+  const startDate = formatLocalYMD(new Date(today.getFullYear(), today.getMonth(), 1));
+  const endDate = formatLocalYMD(new Date(today.getFullYear(), today.getMonth() + 1, 0));
   const result = await makeObfuscatedRequest(
     '/budgets',
     {
@@ -2203,8 +2203,8 @@ async function testClockInFlowWithStaff() {
   }
   const codeToUse = clockinCode;
 
-  // 4. Create shift for today via API - use full-day window so "now" is always within shift (avoids timezone/timing flakiness)
-  const today = new Date().toISOString().split('T')[0];
+  // 4. Create shift spanning "today" using Postgres CURRENT_DATE — matches clock-action `(date + time) <= NOW()` semantics.
+  const today = await pgCalendarDatePlusDays(0);
   // Remove existing shifts for this staff today to avoid 409 overlap from prior tests
   await pool.query('DELETE FROM shifts WHERE staff_id = $1 AND shift_date = $2::date', [
     staffId,
@@ -2276,7 +2276,7 @@ async function testClockInFlowWithStaff() {
   }
   console.log(`  ${GREEN}PASS:${RESET} Face enrolled for kiosk clock-action`);
 
-  // 7. Clock-in - POST exactly like frontend clockAction (includes faceHash)
+  // 7. Clock-in (optional timezoneOffset like GET /shifts; hybrid route still falls back to Postgres window)
   const clockInBody = {
     clockinId: codeToUse,
     action: 'clock-in',
@@ -2285,6 +2285,7 @@ async function testClockInFlowWithStaff() {
     faceHash,
     latitude: 51.5074,
     longitude: -0.1278,
+    timezoneOffset: new Date().getTimezoneOffset(),
   };
   const clockInResult = await makePlainClockLinkPost(
     '/clockin/clock-action',
@@ -2317,6 +2318,7 @@ async function testClockInFlowWithStaff() {
     latitude: 51.5074,
     longitude: -0.1278,
     lateReason: 'Test clock-out (API test)',
+    timezoneOffset: new Date().getTimezoneOffset(),
   };
   const clockOutResult = await makePlainClockLinkPost(
     '/clockin/clock-action',
@@ -2685,9 +2687,23 @@ async function testStaffPortalFlow() {
     // Staff username is generated as "name.clockin_id" (not email) — fetch from DB for login
     const mgrRow = await pool.query('SELECT username FROM staff WHERE id = $1', [managerStaffId]);
     managerUsername = mgrRow.rows[0]?.username;
+    if (!managerUsername) {
+      console.log(`  ${RED}FAIL:${RESET} Manager staff has no username (cannot portal login)`);
+      return false;
+    }
 
     // Promote to manager
-    await makeObfuscatedRequest(`/staff/${managerStaffId}`, { accessRole: 'manager' }, 'PUT');
+    const promoteRes = await makeObfuscatedRequest(
+      `/staff/${managerStaffId}`,
+      { accessRole: 'manager' },
+      'PUT'
+    );
+    if (!promoteRes.ok || promoteRes.status !== 200) {
+      console.log(
+        `  ${RED}FAIL:${RESET} Promote manager failed (${promoteRes.status}): ${promoteRes.data?.error || 'unknown'}`
+      );
+      return false;
+    }
 
     // Create employee staff
     const empCreate = await makeObfuscatedRequest(

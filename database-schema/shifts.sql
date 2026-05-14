@@ -17,6 +17,7 @@ CREATE TABLE public.shifts (
     time_entry_id bigint,
     clocked_in_time timestamp without time zone,
     clocked_out_time timestamp without time zone,
+    clock_source text DEFAULT 'staff'::text,
     pay_type character varying(50) DEFAULT 'regular'::character varying,
     CONSTRAINT positive_hours CHECK ((hours > (0)::numeric)),
     CONSTRAINT valid_break CHECK ((break_minutes >= 0)),
