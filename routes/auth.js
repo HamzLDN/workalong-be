@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { config } from '../lib/config.js';
 import { pool } from '../lib/db.js';
 import { sanitizeString } from '../lib/sanitize.js';
+import { isValidEmployerEmail } from '../lib/emailValidation.js';
 import {
   createUser,
   findUserByEmail,
@@ -202,6 +203,9 @@ router.post(
       }
       if (password.length < 8) {
         return res.status(400).json({ error: 'Password must be at least 8 characters' });
+      }
+      if (!isValidEmployerEmail(email)) {
+        return res.status(400).json({ error: 'Invalid email format' });
       }
       const existingUser = await findUserByEmail(email);
       if (existingUser) {
@@ -978,8 +982,7 @@ router.put('/profile', async (req, res) => {
       if (typeof email !== 'string' || !email.trim()) {
         return res.status(400).json({ error: 'Email cannot be empty' });
       }
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(email.trim())) {
+      if (!isValidEmployerEmail(email)) {
         return res.status(400).json({ error: 'Invalid email format' });
       }
       // Check if email is already taken by another user
