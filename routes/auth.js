@@ -22,6 +22,12 @@ import { logSecurityEvent } from '../lib/api-security.js';
 import { ensureSessionCsrfToken, verifyBrowserSessionCsrf } from '../lib/csrfSession.js';
 import { createRateLimiter } from '../middleware/security.js';
 import { requireAuth } from '../middleware/auth.js';
+import { cookieSecure } from '../lib/cookieSecure.js';
+import {
+  rememberPublicSignupCsrfToken,
+  consumePublicSignupCsrfToken,
+  discardPublicSignupCsrfToken,
+} from '../lib/publicSignupCsrf.js';
 
 const router = express.Router();
 
@@ -33,11 +39,13 @@ const PUBLIC_CSRF_HEADER = 'x-public-csrf-token';
 router.get('/public-csrf-token', (req, res) => {
   try {
     const token = crypto.randomBytes(32).toString('hex');
+    rememberPublicSignupCsrfToken(token);
     res.cookie(PUBLIC_CSRF_COOKIE, token, {
       httpOnly: false,
-      secure: process.env.NODE_ENV === 'production',
+      secure: cookieSecure(req),
       sameSite: 'lax',
       maxAge: 10 * 60 * 1000,
+      path: '/',
     });
     res.json({ csrfToken: token });
   } catch (error) {
@@ -192,10 +200,21 @@ router.post(
   '/signup',
   /* createRateLimiter({ limitPerMinute: 5, limitPerHour: 20 }), */ async (req, res) => {
     try {
-      const cookieToken = req.cookies[PUBLIC_CSRF_COOKIE];
-      const headerToken = req.headers[PUBLIC_CSRF_HEADER];
-      if (!cookieToken || !headerToken || cookieToken !== headerToken) {
+      let cookieToken = req.cookies[PUBLIC_CSRF_COOKIE];
+      let headerToken = req.headers[PUBLIC_CSRF_HEADER];
+      if (Array.isArray(headerToken)) headerToken = headerToken[0];
+      if (typeof cookieToken === 'string') cookieToken = cookieToken.trim();
+      if (typeof headerToken === 'string') headerToken = headerToken.trim();
+
+      const cookieMatch =
+        Boolean(cookieToken && headerToken && cookieToken === headerToken);
+      const serverIssuedOk =
+        !cookieMatch && Boolean(headerToken) && consumePublicSignupCsrfToken(headerToken);
+      if (!cookieMatch && !serverIssuedOk) {
         return res.status(403).json({ error: 'Invalid or missing CSRF token for signup' });
+      }
+      if (cookieMatch && headerToken) {
+        discardPublicSignupCsrfToken(headerToken);
       }
       const { email, password, name, company } = req.body;
       if (!email || !password || !name) {
@@ -219,9 +238,10 @@ router.post(
       );
       res.cookie('sessionId', sessionId, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: cookieSecure(req),
         sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60 * 1000,
+        path: '/',
       });
       res.status(201).json({
         message: 'User created successfully',
@@ -359,7 +379,7 @@ router.post(
       );
       res.cookie('sessionId', sessionId, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: cookieSecure(req),
         sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60 * 1000,
       });
@@ -434,7 +454,7 @@ router.post('/verify-code', async (req, res) => {
     const { sessionId, expiresAt } = await createSession(userId, req.ip, req.headers['user-agent']);
     res.cookie('sessionId', sessionId, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: cookieSecure(req),
       sameSite: 'lax',
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
@@ -483,7 +503,7 @@ router.post('/verify-totp', async (req, res) => {
     );
     res.cookie('sessionId', sessionId, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: cookieSecure(req),
       sameSite: 'lax',
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
@@ -704,12 +724,12 @@ router.post('/2fa/totp/reset', requireAuth, async (req, res) => {
   }
 });
 
-/** Returns session ID when request has valid cookie - lets frontend restore session to localStorage for obfuscation (e.g. returning user with cookie but cleared localStorage) */
+/** Returns session ID when request has valid cookie - lets frontend restore session to localStorage for obfuscation (e.g. returning user with cookie but cleared localStorage). No cookie => 200 { sessionId: null } (not 401) so anonymous loads do not look like auth failures in DevTools. */
 router.get('/session-id', async (req, res) => {
   try {
     const sessionId = req.cookies.sessionId;
     if (!sessionId) {
-      return res.status(401).json({ error: 'No session cookie found' });
+      return res.json({ sessionId: null });
     }
     const session = await getSession(sessionId);
     if (!session) {
@@ -741,7 +761,7 @@ router.get('/csrf-token', async (req, res) => {
     if (!req.cookies.sessionId && sessionId) {
       res.cookie('sessionId', sessionId, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: cookieSecure(req),
         sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60 * 1000,
       });
@@ -777,7 +797,7 @@ router.get('/me', async (req, res) => {
     if (!fromCookie && sessionId) {
       res.cookie('sessionId', sessionId, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: cookieSecure(req),
         sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60 * 1000,
       });
@@ -949,8 +969,9 @@ router.post('/signout', async (req, res) => {
     await deleteSession(sessionId);
     res.clearCookie('sessionId', {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: cookieSecure(req),
       sameSite: 'lax',
+      path: '/',
     });
     res.json({ message: 'Signed out successfully' });
   } catch (error) {
