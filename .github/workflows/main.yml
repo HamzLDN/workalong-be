@@ -121,16 +121,47 @@ jobs:
 
       - name: Recreate mock Postgres from git (empty volume → init scripts only)
         run: |
+          set -euo pipefail
+          PORT="${DB_PORT:-5433}"
           npm run db:mock:recreate
-          for i in $(seq 1 45); do
+
+          echo "Waiting for Postgres inside container (entrypoint/init SQL can take minutes on fresh volume)..."
+          inner_ok=""
+          for i in $(seq 1 120); do
             if docker exec workalong-postgres-mock pg_isready -U workalong -d users >/dev/null 2>&1; then
-              echo "Postgres accepting connections"
-              exit 0
+              inner_ok=1
+              echo "✓ pg_isready inside container (waited ${i} attempts × 2s)"
+              break
+            fi
+            if [ "$((i % 20))" -eq 0 ]; then
+              echo "Still waiting inside container (${i}×2s)..."
+              docker logs workalong-postgres-mock --tail 40 2>&1 || true
             fi
             sleep 2
           done
-          docker logs workalong-postgres-mock --tail 80 2>&1 || true
-          exit 1
+          if [ -z "${inner_ok}" ]; then
+            echo "❌ Postgres never became ready inside the container."
+            docker logs workalong-postgres-mock --tail 120 2>&1 || true
+            exit 1
+          fi
+
+          # pg_isready in-container can succeed before docker-proxy binds host Port (first CI cold start race).
+          echo "Waiting until host TCP 127.0.0.1:${PORT} accepts connections..."
+          host_ok=""
+          for i in $(seq 1 90); do
+            if bash -c "timeout 2 bash -c 'cat </dev/null >/dev/tcp/127.0.0.1/${PORT}'" 2>/dev/null; then
+              host_ok=1
+              echo "✓ Host sees open port ${PORT} (attempt ${i})"
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "${host_ok}" ]; then
+            echo "❌ Host never saw port ${PORT} open (ECONNREFUSED from migrate)."
+            ss -ltnp 2>/dev/null || netstat -tlnp 2>/dev/null || true
+            docker port workalong-postgres-mock 2>/dev/null || true
+            exit 1
+          fi
 
       - name: Schema sync mock DB (handles circular FK retries; aligns with additive migrations)
         run: npm run migrate:prod
@@ -141,6 +172,8 @@ jobs:
           DB_PASSWORD: admin
           DB_NAME: users
           NODE_ENV: production
+          SCHEMA_SYNC_CONNECT_RETRIES: '60'
+          SCHEMA_SYNC_CONNECT_DELAY_MS: '1000'
 
       - name: Setup environment file for server
         run: |

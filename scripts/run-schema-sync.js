@@ -178,6 +178,43 @@ function splitPgSqlStatements(sql) {
   return stmts;
 }
 
+async function waitForDbReady() {
+  const maxAttempts = Number.parseInt(process.env.SCHEMA_SYNC_CONNECT_RETRIES || '45', 10);
+  const delayMs = Number.parseInt(process.env.SCHEMA_SYNC_CONNECT_DELAY_MS || '1000', 10);
+
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await pool.query('SELECT 1 AS ok');
+      if (attempt > 1) {
+        console.log(`✅ PostgreSQL reachable after ${attempt} attempt(s).\n`);
+      }
+      return;
+    } catch (err) {
+      lastErr = err;
+      const code = err?.code;
+      const msg = String(err?.message || '');
+      const retryable =
+        code === 'ECONNREFUSED' ||
+        code === 'ETIMEDOUT' ||
+        code === 'ENOTFOUND' ||
+        code === 'ECONNRESET' ||
+        msg.includes('Connection terminated unexpectedly');
+
+      if (!retryable || attempt === maxAttempts) {
+        break;
+      }
+
+      console.warn(
+        `⏳ Database not reachable yet (${code || msg || 'unknown'}, attempt ${attempt}/${maxAttempts}) — retry in ${delayMs}ms`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
 function isIgnorableSchemaError(err) {
   return (
     err?.message?.includes('already exists') ||
@@ -344,6 +381,8 @@ async function syncSchema() {
     console.log('\n⚠️  Target is not localhost - ensure this is intended for production.');
   }
   console.log('');
+
+  await waitForDbReady();
 
   await applyFunctionsFile();
   await syncBaseSchema();
