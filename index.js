@@ -7,7 +7,7 @@ import cookieParser from 'cookie-parser';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './lib/swagger.js';
 import { config } from './lib/config.js';
-import { pool } from './lib/db.js';
+import { pool, waitForDatabaseReady } from './lib/db.js';
 import { cleanupExpiredSessions } from './services/auth.js';
 import { runBillingReminders } from './services/billing-reminders.js';
 import { ensureAppSettingsTable } from './lib/appSettings.js';
@@ -91,6 +91,7 @@ if (useAdminPanelProxy) {
   );
 }
 let httpsServer = null;
+let httpsOptions = null;
 let shuttingDown = false;
 let cleanupInterval = null;
 /** Cleared on shutdown; billing only scheduled after HTTP listen succeeds (avoids pool.end vs billing race on port conflict). */
@@ -216,44 +217,6 @@ function attachAdminPanelSocketUpgrade(server) {
 
 attachAdminPanelSocketUpgrade(httpServer);
 
-function handleListenError(name, port) {
-  return (err) => {
-    if (err.code === 'EACCES') {
-      console.log(`??  Cannot bind ${name} server to port ${port} (requires elevated privileges)`);
-    } else if (err.code === 'EADDRINUSE') {
-      console.log(`??  Port ${port} is already in use for ${name}`);
-      console.log('??  Another backend process is likely still running.');
-    } else {
-      console.error(`? ${name} server error:`, err.message);
-    }
-
-    if (!shuttingDown) {
-      shutdown(`${name}_STARTUP_ERROR`, 1);
-    }
-  };
-}
-
-function enqueueBillingReminders() {
-  if (shuttingDown) return;
-  billingRemindersChain = billingRemindersChain
-    .then(() => runBillingReminders())
-    .catch((err) => console.error('[BillingReminder] Job failed:', err));
-}
-
-httpServer
-  .listen(HTTP_PORT, () => {
-    console.log(`?? HTTP Server running on http://localhost:${HTTP_PORT}`);
-    console.log(`?? API available at http://localhost:${HTTP_PORT}/api`);
-    // Only after HTTP binds: avoids runBillingReminders() racing with shutdown + pool.end() when
-    // the port is already taken (EADDRINUSE → handleListenError → shutdown).
-    enqueueBillingReminders();
-    ensureAppSettingsTable().catch((e) => console.warn('[appSettings] ensure failed:', e.message));
-    billingReminderInterval = setInterval(enqueueBillingReminders, 24 * 60 * 60 * 1000);
-    billingReminderInterval.unref?.();
-  })
-  .on('error', handleListenError('HTTP', HTTP_PORT));
-
-let httpsOptions = null;
 const LETSENCRYPT_KEY = '/etc/letsencrypt/live/workalong.co.uk/privkey.pem';
 const LETSENCRYPT_CERT = '/etc/letsencrypt/live/workalong.co.uk/fullchain.pem';
 const DOCKER_SSL_KEY = '/etc/nginx/ssl/privkey.pem';
@@ -286,23 +249,6 @@ try {
 
   httpsServer = https.createServer(httpsOptions, app);
   attachAdminPanelSocketUpgrade(httpsServer);
-
-  const HTTPS_DEV_PORT =
-    process.env.NODE_ENV === 'production' || process.env.DOCKER === 'true' ? HTTPS_PORT : 3443;
-  const DOMAIN = process.env.NODE_ENV === 'production' ? 'workalong.co.uk' : 'localhost';
-
-  httpsServer
-    .listen(HTTPS_DEV_PORT, () => {
-      if (HTTPS_DEV_PORT === 443) {
-        console.log(`?? HTTPS Server running on https://${DOMAIN}`);
-        console.log(`?? Secure API available at https://${DOMAIN}/api`);
-      } else {
-        console.log(`?? HTTPS Server running on https://${DOMAIN}:${HTTPS_DEV_PORT}`);
-        console.log(`?? Secure API available at https://${DOMAIN}:${HTTPS_DEV_PORT}/api`);
-        console.log(`??  Using port ${HTTPS_DEV_PORT} for development. Use sudo for port 443.`);
-      }
-    })
-    .on('error', handleListenError('HTTPS', HTTPS_DEV_PORT, true));
 } catch (err) {
   console.log('??  HTTPS certificates not found. Running HTTP only.');
   console.log(
@@ -310,6 +256,81 @@ try {
   );
   console.log('?? For development: cd workalong-backend && ./docker/scripts/generate-cert.sh');
 }
+
+function handleListenError(name, port) {
+  return (err) => {
+    if (err.code === 'EACCES') {
+      console.log(`??  Cannot bind ${name} server to port ${port} (requires elevated privileges)`);
+    } else if (err.code === 'EADDRINUSE') {
+      console.log(`??  Port ${port} is already in use for ${name}`);
+      console.log('??  Another backend process is likely still running.');
+    } else {
+      console.error(`? ${name} server error:`, err.message);
+    }
+
+    if (!shuttingDown) {
+      shutdown(`${name}_STARTUP_ERROR`, 1);
+    }
+  };
+}
+
+function enqueueBillingReminders() {
+  if (shuttingDown) return;
+  billingRemindersChain = billingRemindersChain
+    .then(() => runBillingReminders())
+    .catch((err) => console.error('[BillingReminder] Job failed:', err));
+}
+
+/** After stack restarts, Postgres may accept TCP before queries work — avoid serving /api until DB answers. */
+async function startHttpServers() {
+  const skipWait =
+    process.env.SKIP_DB_WAIT === '1' || String(process.env.SKIP_DB_WAIT).toLowerCase() === 'true';
+  if (!skipWait) {
+    await waitForDatabaseReady({
+      maxAttempts: Number(process.env.DB_STARTUP_MAX_ATTEMPTS) || 60,
+      delayMs: Number(process.env.DB_STARTUP_RETRY_MS) || 1000,
+    });
+  } else {
+    console.warn('[db] SKIP_DB_WAIT — not waiting for PostgreSQL (dev/test only)');
+  }
+
+  httpServer
+    .listen(HTTP_PORT, () => {
+      console.log(`?? HTTP Server running on http://localhost:${HTTP_PORT}`);
+      console.log(`?? API available at http://localhost:${HTTP_PORT}/api`);
+      // Only after HTTP binds: avoids runBillingReminders() racing with shutdown + pool.end() when
+      // the port is already taken (EADDRINUSE → handleListenError → shutdown).
+      enqueueBillingReminders();
+      ensureAppSettingsTable().catch((e) => console.warn('[appSettings] ensure failed:', e.message));
+      billingReminderInterval = setInterval(enqueueBillingReminders, 24 * 60 * 60 * 1000);
+      billingReminderInterval.unref?.();
+    })
+    .on('error', handleListenError('HTTP', HTTP_PORT));
+
+  const httpsListenPort =
+    process.env.NODE_ENV === 'production' || process.env.DOCKER === 'true' ? HTTPS_PORT : 3443;
+  const httpsDomain = process.env.NODE_ENV === 'production' ? 'workalong.co.uk' : 'localhost';
+
+  if (httpsServer) {
+    httpsServer
+      .listen(httpsListenPort, () => {
+        if (httpsListenPort === 443) {
+          console.log(`?? HTTPS Server running on https://${httpsDomain}`);
+          console.log(`?? Secure API available at https://${httpsDomain}/api`);
+        } else {
+          console.log(`?? HTTPS Server running on https://${httpsDomain}:${httpsListenPort}`);
+          console.log(`?? Secure API available at https://${httpsDomain}:${httpsListenPort}/api`);
+          console.log(`??  Using port ${httpsListenPort} for development. Use sudo for port 443.`);
+        }
+      })
+      .on('error', handleListenError('HTTPS', httpsListenPort));
+  }
+}
+
+startHttpServers().catch((err) => {
+  console.error('Fatal startup (database or listen):', err?.message || err);
+  process.exit(1);
+});
 
 async function shutdown(signal, exitCode = 0, { skipExit = false } = {}) {
   if (shuttingDown) return;

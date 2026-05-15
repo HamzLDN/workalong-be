@@ -141,6 +141,33 @@ async function getUserWithSubscription(userId) {
 }
 
 /**
+ * Prefer full profile from getUserWithSubscription; on DB/query failures (migrations, column drift),
+ * fall back to the user row already loaded for auth so sign-in still completes.
+ */
+async function resolveEmployerUserForResponse(userId, fallbackUserRow) {
+  try {
+    const row = await getUserWithSubscription(userId);
+    if (row) return row;
+  } catch (e) {
+    console.error('getUserWithSubscription failed:', userId, e?.message || e);
+  }
+  if (fallbackUserRow && Number(fallbackUserRow.id) === Number(userId)) {
+    if (fallbackUserRow.annual_leave_hours_target == null) {
+      fallbackUserRow.annual_leave_hours_target = 150;
+    }
+    if (fallbackUserRow.pension_employee_percent == null) {
+      fallbackUserRow.pension_employee_percent = 5;
+    }
+    if (fallbackUserRow.pension_employer_percent == null) {
+      fallbackUserRow.pension_employer_percent = 3;
+    }
+    normalizeEmployerUserRow(fallbackUserRow);
+    return fallbackUserRow;
+  }
+  return null;
+}
+
+/**
  * @swagger
  * /auth/signup:
  *   post:
@@ -372,6 +399,13 @@ router.post(
           requiresEmailCode: true,
         });
       }
+      const fullUser = await resolveEmployerUserForResponse(user.id, user);
+      if (!fullUser) {
+        return res.status(500).json({
+          error: 'Could not load your account profile. Please try again or contact support.',
+        });
+      }
+
       const { sessionId, expiresAt } = await createSession(
         user.id,
         req.ip,
@@ -386,7 +420,6 @@ router.post(
       logAuthActivity(user.id, 'signin').catch((err) =>
         console.error('Failed to log signin activity:', err)
       );
-      const fullUser = await getUserWithSubscription(user.id);
       res.json({
         message: 'Signed in successfully',
         user: employerUserJson(fullUser),
@@ -451,6 +484,10 @@ router.post('/verify-code', async (req, res) => {
     if (!isValid) {
       return res.status(401).json({ error: 'Invalid or expired verification code' });
     }
+    const fullUser = await resolveEmployerUserForResponse(userId, user);
+    if (!fullUser) {
+      return res.status(500).json({ error: 'Could not load your account after verification.' });
+    }
     const { sessionId, expiresAt } = await createSession(userId, req.ip, req.headers['user-agent']);
     res.cookie('sessionId', sessionId, {
       httpOnly: true,
@@ -461,10 +498,6 @@ router.post('/verify-code', async (req, res) => {
     logAuthActivity(userId, 'signin').catch((err) =>
       console.error('Failed to log signin activity:', err)
     );
-    const fullUser = await getUserWithSubscription(userId);
-    if (!fullUser) {
-      return res.status(500).json({ error: 'User not found after login' });
-    }
     res.json({
       message: 'Signed in successfully',
       user: employerUserJson(fullUser),
@@ -496,6 +529,10 @@ router.post('/verify-totp', async (req, res) => {
     if (!isValid) {
       return res.status(401).json({ error: 'Invalid TOTP code' });
     }
+    const fullUser = await resolveEmployerUserForResponse(user.id, user);
+    if (!fullUser) {
+      return res.status(500).json({ error: 'Could not load your account profile.' });
+    }
     const { sessionId, expiresAt } = await createSession(
       user.id,
       req.ip,
@@ -510,7 +547,6 @@ router.post('/verify-totp', async (req, res) => {
     logAuthActivity(user.id, 'signin').catch((err) =>
       console.error('Failed to log signin activity:', err)
     );
-    const fullUser = await getUserWithSubscription(user.id);
     res.json({
       message: 'Signed in successfully',
       user: employerUserJson(fullUser),
