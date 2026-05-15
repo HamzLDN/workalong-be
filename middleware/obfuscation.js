@@ -228,6 +228,8 @@ const PUBLIC_ENDPOINTS = [
   '/api/staff/auth/login',
   '/staff/auth/logout',
   '/api/staff/auth/logout',
+  '/staff/auth/me',
+  '/api/staff/auth/me',
   '/staff/set-password',
   '/api/staff/set-password',
 ];
@@ -267,6 +269,7 @@ const PUBLIC_ENDPOINT_SUFFIXES = [
   '/payment/verify-session',
   '/staff/auth/login',
   '/staff/auth/logout',
+  '/staff/auth/me',
   '/staff/set-password',
 ];
 

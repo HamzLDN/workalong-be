@@ -27,11 +27,13 @@ describe('isPublicEndpoint', () => {
     expect(isPublicEndpoint('/support/chat/messages')).toBe(true);
   });
 
-  it('treats staff auth login and logout as public (no employer session at that point)', () => {
+  it('treats staff auth login, logout, and me as public (staff session cookie, not employer obfuscation)', () => {
     expect(isPublicEndpoint('/api/staff/auth/login')).toBe(true);
     expect(isPublicEndpoint('/staff/auth/login')).toBe(true);
     expect(isPublicEndpoint('/api/staff/auth/logout')).toBe(true);
     expect(isPublicEndpoint('/staff/auth/logout')).toBe(true);
+    expect(isPublicEndpoint('/api/staff/auth/me')).toBe(true);
+    expect(isPublicEndpoint('/staff/auth/me')).toBe(true);
   });
 
   it('treats staff set-password as public (token-based, no session)', () => {
