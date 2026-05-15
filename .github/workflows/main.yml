@@ -444,22 +444,18 @@ jobs:
       - name: Wait for Postgres before schema sync
         run: |
           set -euo pipefail
-          # Prefer production DB; fall back to mock on self-hosted runners (CI integration uses mock on :5433).
+          # Production only: workalong-postgres (:5432). Mock (workalong-postgres-mock :5433) is integration-test only — do not mix.
           PG_CONTAINER='${{ vars.POSTGRES_CONTAINER_NAME }}'
           if [ -z "$PG_CONTAINER" ]; then
-            for candidate in workalong-postgres workalong-postgres-mock; do
-              if [ "$(docker inspect -f '{{.State.Status}}' "$candidate" 2>/dev/null)" = "running" ]; then
-                PG_CONTAINER="$candidate"
-                break
-              fi
-            done
+            PG_CONTAINER="workalong-postgres"
           fi
-          if [ -z "$PG_CONTAINER" ]; then
-            echo "::notice::No running Postgres container (workalong-postgres / workalong-postgres-mock). Skipping host pg_isready; migrate uses DB on the compose network."
-            exit 0
+          if ! docker ps -a --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
+            echo "::error::Production Postgres container ${PG_CONTAINER} not found. Start it (e.g. docker compose -f docker-compose.full.yml up -d postgres). Mock on :5433 is separate."
+            exit 1
           fi
           if [ "$(docker inspect -f '{{.State.Status}}' "$PG_CONTAINER" 2>/dev/null)" != "running" ]; then
-            echo "::error::Postgres container ${PG_CONTAINER} is not running."
+            echo "::error::Production Postgres ${PG_CONTAINER} is not running (mock on :5433 does not replace prod)."
+            echo "If 'docker start' fails on init-workalong-db.sh mount, remove repo-root init-workalong-db.sh if it is a directory and recreate with docker/scripts/init-workalong-db.sh."
             docker ps -a --filter "name=postgres" || true
             exit 1
           fi
