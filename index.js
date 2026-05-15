@@ -21,6 +21,7 @@ import {
 import { verifyObfuscatedRequest, obfuscateResponse } from './middleware/obfuscation.js';
 import { registerRoutes } from './routes/index.js';
 import { createProxyMiddleware } from 'http-proxy-middleware';
+import { isEmployerWorkspaceOrigin, originsFromEnv } from './lib/corsOrigins.js';
 
 const app = express();
 
@@ -116,6 +117,9 @@ const allowedOrigins = [
   'http://api.workalong.co.uk',
   'https://ai.workalong.co.uk',
   'http://ai.workalong.co.uk',
+  'https://dashboard.workalong.co.uk',
+  'http://dashboard.workalong.co.uk',
+  ...originsFromEnv(),
 ];
 
 if (process.env.DOCKER === 'true' || process.env.NODE_ENV === 'production') {
@@ -149,6 +153,11 @@ app.use(
       }
 
       if (allowedOrigins.indexOf(origin) !== -1) {
+        callback(null, true);
+        return;
+      }
+
+      if (isEmployerWorkspaceOrigin(origin)) {
         callback(null, true);
         return;
       }
