@@ -58,6 +58,37 @@ function parseOptionalAssignmentId(value, fieldName) {
   return id;
 }
 
+const ACCESS_ROLES_ALLOWED = new Set(['employee', 'manager', 'payroll_admin']);
+
+/**
+ * Canonical `access_role` for DB. Accepts any case (e.g. "Manager"). Throws if not allowed.
+ */
+export function parseAccessRoleOrThrow(value) {
+  if (value === undefined || value === null) return undefined;
+  let s = typeof value === 'string' ? value.trim() : String(value).trim();
+  if (s === '') return undefined;
+  try {
+    s = s.normalize('NFKC');
+  } catch {
+    // ignore
+  }
+  s = s.replace(/^\uFEFF/, '');
+  const lower = s.toLowerCase();
+  if (!ACCESS_ROLES_ALLOWED.has(lower)) {
+    throw new Error('Invalid access role');
+  }
+  return lower;
+}
+
+function coalesceAccessRoleForCreate(accessRole) {
+  if (accessRole === undefined || accessRole === null) return 'employee';
+  try {
+    return parseAccessRoleOrThrow(accessRole) ?? 'employee';
+  } catch {
+    return 'employee';
+  }
+}
+
 async function assertAssignmentOwnedByUser(client, table, id, userId, label) {
   if (id == null) return;
   const result = await client.query(`SELECT id FROM ${table} WHERE id = $1 AND user_id = $2`, [
@@ -128,7 +159,7 @@ export async function createStaff(userId, data) {
         departmentId,
         branchId,
         managerId,
-        ['employee', 'manager', 'payroll_admin'].includes(accessRole) ? accessRole : 'employee',
+        coalesceAccessRoleForCreate(accessRole),
       ]
     );
     const staffId = result.rows[0].id;
@@ -347,11 +378,10 @@ export async function updateStaff(staffId, userId, data) {
     if (employmentType !== undefined) addUpdate('employment_type', employmentType);
     if (status !== undefined) addUpdate('status', status);
     if (accessRole !== undefined) {
-      const roleStr = typeof accessRole === 'string' ? accessRole.trim() : String(accessRole).trim();
-      if (!['employee', 'manager', 'payroll_admin'].includes(roleStr)) {
-        throw new Error('Invalid access role');
+      const roleStr = parseAccessRoleOrThrow(accessRole);
+      if (roleStr !== undefined) {
+        addUpdate('access_role', roleStr);
       }
-      addUpdate('access_role', roleStr);
     }
     if (departmentId !== undefined) addUpdate('department_id', departmentId);
     if (branchId !== undefined) addUpdate('branch_id', branchId);
