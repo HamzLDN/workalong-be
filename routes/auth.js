@@ -151,7 +151,8 @@ async function resolveEmployerUserForResponse(userId, fallbackUserRow) {
   } catch (e) {
     console.error('getUserWithSubscription failed:', userId, e?.message || e);
   }
-  if (fallbackUserRow && Number(fallbackUserRow.id) === Number(userId)) {
+  // Compare as strings — pg often returns bigint id as string; Number() can mismatch for large ids.
+  if (fallbackUserRow && String(fallbackUserRow.id) === String(userId)) {
     if (fallbackUserRow.annual_leave_hours_target == null) {
       fallbackUserRow.annual_leave_hours_target = 150;
     }
@@ -362,6 +363,10 @@ router.post(
       if (!user) {
         return res.status(401).json({ error: 'Invalid email or password' });
       }
+      if (!user.password_hash) {
+        console.error('Signin: user has no password_hash (id=%s)', user.id);
+        return res.status(401).json({ error: 'Invalid email or password' });
+      }
       const isValid = await verifyPassword(password, user.password_hash);
       if (!isValid) {
         return res.status(401).json({ error: 'Invalid email or password' });
@@ -427,7 +432,7 @@ router.post(
         requires2FA: false,
       });
     } catch (error) {
-      console.error('Signin error:', error);
+      console.error('Signin error:', error?.code || '', error?.message || error);
       res.status(500).json({ error: 'An error occurred during signin' });
     }
   }

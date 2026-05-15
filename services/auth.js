@@ -41,11 +41,24 @@ export async function createSession(userId, ipAddress, userAgent) {
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   const csrfToken = generateStoredCsrfToken();
 
-  await pool.query(
-    `INSERT INTO sessions (id, user_id, expires_at, ip_address, user_agent, csrf_token) 
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [sessionId, userId, expiresAt, ipAddress, userAgent, csrfToken]
-  );
+  try {
+    await pool.query(
+      `INSERT INTO sessions (id, user_id, expires_at, ip_address, user_agent, csrf_token) 
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [sessionId, userId, expiresAt, ipAddress, userAgent, csrfToken]
+    );
+  } catch (err) {
+    // Older DBs before add-session-csrf-token migration; CSRF layer falls back to legacy token when NULL.
+    const missingCsrf =
+      err?.code === '42703' && String(err.message || '').toLowerCase().includes('csrf_token');
+    if (!missingCsrf) throw err;
+    console.warn('[sessions] csrf_token column missing — insert without it (run migrate:prod).');
+    await pool.query(
+      `INSERT INTO sessions (id, user_id, expires_at, ip_address, user_agent) 
+       VALUES ($1, $2, $3, $4, $5)`,
+      [sessionId, userId, expiresAt, ipAddress, userAgent]
+    );
+  }
 
   return { sessionId, expiresAt };
 }
