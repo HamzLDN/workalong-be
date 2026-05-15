@@ -986,12 +986,7 @@ router.post('/signout', async (req, res) => {
       return res.status(400).json({ error: 'No session provided' });
     }
     await deleteSession(sessionId);
-    res.clearCookie('sessionId', {
-      httpOnly: true,
-      secure: cookieSecure(req),
-      sameSite: 'lax',
-      path: '/',
-    });
+    res.clearCookie('sessionId', { ...sessionCookieOptions(req), maxAge: 0 });
     res.json({ message: 'Signed out successfully' });
   } catch (error) {
     console.error('Signout error:', error);
