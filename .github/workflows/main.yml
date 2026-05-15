@@ -444,18 +444,23 @@ jobs:
       - name: Wait for Postgres before schema sync
         run: |
           set -euo pipefail
-          # Default matches docker-compose DB service on the VPS; override with repo variable POSTGRES_CONTAINER_NAME.
+          # Prefer production DB; fall back to mock on self-hosted runners (CI integration uses mock on :5433).
           PG_CONTAINER='${{ vars.POSTGRES_CONTAINER_NAME }}'
           if [ -z "$PG_CONTAINER" ]; then
-            PG_CONTAINER="workalong-postgres"
+            for candidate in workalong-postgres workalong-postgres-mock; do
+              if [ "$(docker inspect -f '{{.State.Status}}' "$candidate" 2>/dev/null)" = "running" ]; then
+                PG_CONTAINER="$candidate"
+                break
+              fi
+            done
           fi
-          if ! docker ps -a --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
-            echo "::notice::No container named ${PG_CONTAINER} — skipping pg_isready. Ensure production Postgres is reachable on the compose network for migrate."
+          if [ -z "$PG_CONTAINER" ]; then
+            echo "::notice::No running Postgres container (workalong-postgres / workalong-postgres-mock). Skipping host pg_isready; migrate uses DB on the compose network."
             exit 0
           fi
           if [ "$(docker inspect -f '{{.State.Status}}' "$PG_CONTAINER" 2>/dev/null)" != "running" ]; then
             echo "::error::Postgres container ${PG_CONTAINER} is not running."
-            docker ps -a --filter "name=$PG_CONTAINER" || true
+            docker ps -a --filter "name=postgres" || true
             exit 1
           fi
           echo "Waiting for ${PG_CONTAINER} (pg_isready -U workalong -d users)..."
