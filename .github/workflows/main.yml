@@ -441,6 +441,38 @@ jobs:
           echo "Building Docker image..."
           docker build -f Dockerfile.backend.ubuntu -t workalong-backend:latest .
 
+      - name: Wait for Postgres before schema sync
+        run: |
+          set -euo pipefail
+          # Default matches docker-compose DB service on the VPS; override with repo variable POSTGRES_CONTAINER_NAME.
+          PG_CONTAINER='${{ vars.POSTGRES_CONTAINER_NAME }}'
+          if [ -z "$PG_CONTAINER" ]; then
+            PG_CONTAINER="workalong-postgres"
+          fi
+          if ! docker ps -a --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
+            echo "::notice::No container named ${PG_CONTAINER} — skipping pg_isready. Ensure production Postgres is reachable on the compose network for migrate."
+            exit 0
+          fi
+          if [ "$(docker inspect -f '{{.State.Status}}' "$PG_CONTAINER" 2>/dev/null)" != "running" ]; then
+            echo "::error::Postgres container ${PG_CONTAINER} is not running."
+            docker ps -a --filter "name=$PG_CONTAINER" || true
+            exit 1
+          fi
+          echo "Waiting for ${PG_CONTAINER} (pg_isready -U workalong -d users)..."
+          for i in $(seq 1 90); do
+            if docker exec "$PG_CONTAINER" pg_isready -U workalong -d users >/dev/null 2>&1; then
+              echo "✅ Postgres ready (attempt ${i})"
+              exit 0
+            fi
+            if [ "$((i % 15))" -eq 0 ]; then
+              docker logs "$PG_CONTAINER" --tail 30 2>&1 || true
+            fi
+            sleep 2
+          done
+          echo "::error::Postgres did not become ready within 180s"
+          docker logs "$PG_CONTAINER" --tail 120 2>&1 || true
+          exit 1
+
       - name: Sync production database schema
         run: |
           cd /root/workalong-backend
@@ -453,6 +485,8 @@ jobs:
             -e DOCKER=true \
             -e DB_HOST=workalong-postgres \
             -e DB_PORT=5432 \
+            -e SCHEMA_SYNC_CONNECT_RETRIES=90 \
+            -e SCHEMA_SYNC_CONNECT_DELAY_MS=1000 \
             --network workalong_workalong-network \
             workalong-backend:latest \
             npm run migrate:prod

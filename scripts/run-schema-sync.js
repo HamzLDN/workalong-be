@@ -178,6 +178,27 @@ function splitPgSqlStatements(sql) {
   return stmts;
 }
 
+/** True when a quick retry may succeed (TCP not open yet, or PG still in startup/recovery). */
+function isTransientDatabaseConnectError(err) {
+  const code = err?.code;
+  const msg = String(err?.message || '');
+  if (
+    code === 'ECONNREFUSED' ||
+    code === 'ETIMEDOUT' ||
+    code === 'ENOTFOUND' ||
+    code === 'ECONNRESET' ||
+    msg.includes('Connection terminated unexpectedly')
+  ) {
+    return true;
+  }
+  // PostgreSQL: database still starting / cannot accept connections yet (common right after docker start).
+  if (code === '57P03' || code === '57P01') return true;
+  if (/not yet accepting connections|the database system is starting up|recovery mode/i.test(msg)) {
+    return true;
+  }
+  return false;
+}
+
 async function waitForDbReady() {
   const maxAttempts = Number.parseInt(process.env.SCHEMA_SYNC_CONNECT_RETRIES || '45', 10);
   const delayMs = Number.parseInt(process.env.SCHEMA_SYNC_CONNECT_DELAY_MS || '1000', 10);
@@ -194,19 +215,14 @@ async function waitForDbReady() {
       lastErr = err;
       const code = err?.code;
       const msg = String(err?.message || '');
-      const retryable =
-        code === 'ECONNREFUSED' ||
-        code === 'ETIMEDOUT' ||
-        code === 'ENOTFOUND' ||
-        code === 'ECONNRESET' ||
-        msg.includes('Connection terminated unexpectedly');
+      const retryable = isTransientDatabaseConnectError(err);
 
       if (!retryable || attempt === maxAttempts) {
         break;
       }
 
       console.warn(
-        `⏳ Database not reachable yet (${code || msg || 'unknown'}, attempt ${attempt}/${maxAttempts}) — retry in ${delayMs}ms`
+        `⏳ Database not reachable yet (${code || msg.slice(0, 120) || 'unknown'}, attempt ${attempt}/${maxAttempts}) — retry in ${delayMs}ms`
       );
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
