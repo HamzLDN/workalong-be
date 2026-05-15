@@ -544,9 +544,7 @@ router.post('/clock-action', async (req, res) => {
       const tzRaw =
         req.body.timezoneOffset !== undefined ? req.body.timezoneOffset : req.body.timeZoneOffset;
       const tzParsed =
-        tzRaw !== undefined && tzRaw !== null && tzRaw !== ''
-          ? parseInt(String(tzRaw), 10)
-          : NaN;
+        tzRaw !== undefined && tzRaw !== null && tzRaw !== '' ? parseInt(String(tzRaw), 10) : NaN;
       const timezoneOffset = !Number.isNaN(tzParsed) ? tzParsed : null;
       const today = now.toISOString().split('T')[0];
       // Only enforce geofence when valid coordinates are provided (skip for desktop/kiosk without location)

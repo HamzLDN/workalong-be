@@ -90,6 +90,11 @@ const ADDITIVE_MIGRATIONS = [
     file: 'add-shifts-clock-source.sql',
     dir: SCHEMA_DIR,
   },
+  {
+    name: 'users workspace_slug (employer subdomain)',
+    file: 'add-workspace-subdomain.sql',
+    dir: SCHEMA_DIR,
+  },
 ];
 
 /**

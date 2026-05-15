@@ -12,7 +12,9 @@ const user = process.env.DB_USER || '(unset)';
 console.log('Database target (what migrate:prod / the app use after config defaults):');
 console.log(`  NODE_ENV     ${process.env.NODE_ENV ?? '(unset)'}`);
 console.log(`  DB_HOST      ${host}`);
-console.log(`  DB_PORT      ${port ?? '(unset — migrate:prod will fail if still unset after config import)'}`);
+console.log(
+  `  DB_PORT      ${port ?? '(unset — migrate:prod will fail if still unset after config import)'}`
+);
 console.log(`  DB_NAME      ${name}`);
 console.log(`  DB_USER      ${user}`);
 console.log('');

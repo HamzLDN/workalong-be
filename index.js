@@ -301,7 +301,9 @@ async function startHttpServers() {
       // Only after HTTP binds: avoids runBillingReminders() racing with shutdown + pool.end() when
       // the port is already taken (EADDRINUSE → handleListenError → shutdown).
       enqueueBillingReminders();
-      ensureAppSettingsTable().catch((e) => console.warn('[appSettings] ensure failed:', e.message));
+      ensureAppSettingsTable().catch((e) =>
+        console.warn('[appSettings] ensure failed:', e.message)
+      );
       billingReminderInterval = setInterval(enqueueBillingReminders, 24 * 60 * 60 * 1000);
       billingReminderInterval.unref?.();
     })

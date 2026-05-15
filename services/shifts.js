@@ -51,7 +51,9 @@ export function calculateEndTime(startTime, hours) {
         ? 0
         : Number.parseFloat(String(hours));
   if (!Number.isFinite(hm)) hm = 0;
-  const parts = token.split(':').map((x) => Number.parseInt(String(x ?? '0').replace(/\..*$/, ''), 10));
+  const parts = token
+    .split(':')
+    .map((x) => Number.parseInt(String(x ?? '0').replace(/\..*$/, ''), 10));
   const startHour = Number.isFinite(parts[0]) ? parts[0] : 0;
   const startMin = Number.isFinite(parts[1]) ? parts[1] : 0;
   const totalMinutes = startHour * 60 + startMin + hm * 60;
@@ -121,13 +123,17 @@ export function shiftScheduledWindowTimestamps(row, tzOffset) {
   if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) {
     return null;
   }
-  const startParts = token.split(':').map((x) => Number.parseInt(String(x ?? '0').replace(/\..*$/, ''), 10));
+  const startParts = token
+    .split(':')
+    .map((x) => Number.parseInt(String(x ?? '0').replace(/\..*$/, ''), 10));
   const sh = Number.isFinite(startParts[0]) ? startParts[0] : 0;
   const sm = Number.isFinite(startParts[1]) ? startParts[1] : 0;
   const ss = Number.isFinite(startParts[2]) ? startParts[2] : 0;
 
   const calculatedEndTime = calculateEndTime(row.start_time, row.hours);
-  const endTime = calculatedEndTime.split(':').map((x) => Number.parseInt(String(x ?? '0').replace(/\..*$/, ''), 10));
+  const endTime = calculatedEndTime
+    .split(':')
+    .map((x) => Number.parseInt(String(x ?? '0').replace(/\..*$/, ''), 10));
   const eh = Number.isFinite(endTime[0]) ? endTime[0] : 0;
   const em = Number.isFinite(endTime[1]) ? endTime[1] : 0;
   const es = Number.isFinite(endTime[2]) ? endTime[2] : 0;
@@ -191,7 +197,10 @@ async function syncScheduledShiftsWithCompletedClockEntries(
     try {
       win = shiftScheduledWindowTimestamps(row, tzOffset);
     } catch (err) {
-      console.error(`[getShifts] TE sync: shift window timestamps failed (${row?.id}):`, err.message);
+      console.error(
+        `[getShifts] TE sync: shift window timestamps failed (${row?.id}):`,
+        err.message
+      );
       continue;
     }
     if (!win || nowTimestamp <= win.endMs) continue;

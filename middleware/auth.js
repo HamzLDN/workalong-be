@@ -3,6 +3,7 @@ import { getSession } from '../services/auth.js';
 import { getStaffSession } from '../services/staff-auth.js';
 import { logSecurityEvent } from '../lib/api-security.js';
 import { verifyBrowserSessionCsrf } from '../lib/csrfSession.js';
+import { sessionCookieOptions } from '../lib/cookieSecure.js';
 
 async function authenticateUserRequest(req, res, { requireCsrf = true } = {}) {
   if (req.userId && req.apiKey) {
@@ -65,12 +66,7 @@ async function authenticateUserRequest(req, res, { requireCsrf = true } = {}) {
   }
 
   if (!fromCookie && sessionId) {
-    res.cookie('sessionId', sessionId, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: oneday * 7,
-    });
+    res.cookie('sessionId', sessionId, sessionCookieOptions(req, { maxAge: oneday * 7 }));
   }
 
   req.userId = session.user_id;
@@ -220,12 +216,7 @@ export async function authenticateStaffOrUser(req, res) {
       req.userId = userSession.user_id;
       req.user = { id: userSession.user_id, email: userSession.email, name: userSession.name };
       if (!req.cookies.sessionId && sessionId) {
-        res.cookie('sessionId', sessionId, {
-          httpOnly: true,
-          secure: process.env.NODE_ENV === 'production',
-          sameSite: 'lax',
-          maxAge: 7 * 24 * 60 * 60 * 1000,
-        });
+        res.cookie('sessionId', sessionId, sessionCookieOptions(req));
       }
       return { isStaff: false };
     }
@@ -242,7 +233,11 @@ export async function authenticateStaffOrUser(req, res) {
  * first, then delegates to {@link authenticateStaffOrUser} for staff-only contexts.
  */
 export async function authenticateStaffOrUserPreferEmployer(req, res) {
-  if (req.cookies.sessionId && req.cookies.sessionId !== 'undefined' && req.cookies.sessionId !== 'null') {
+  if (
+    req.cookies.sessionId &&
+    req.cookies.sessionId !== 'undefined' &&
+    req.cookies.sessionId !== 'null'
+  ) {
     const userSession = await getSession(req.cookies.sessionId);
     if (userSession) {
       const csrfOk = await verifyBrowserSessionCsrf(
@@ -269,12 +264,7 @@ export async function authenticateStaffOrUserPreferEmployer(req, res) {
         req.userId = userSession.user_id;
         req.user = { id: userSession.user_id, email: userSession.email, name: userSession.name };
         if (!req.cookies.sessionId) {
-          res.cookie('sessionId', token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'lax',
-            maxAge: 7 * 24 * 60 * 60 * 1000,
-          });
+          res.cookie('sessionId', token, sessionCookieOptions(req));
         }
         return { isStaff: false };
       }

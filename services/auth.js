@@ -50,7 +50,10 @@ export async function createSession(userId, ipAddress, userAgent) {
   } catch (err) {
     // Older DBs before add-session-csrf-token migration; CSRF layer falls back to legacy token when NULL.
     const missingCsrf =
-      err?.code === '42703' && String(err.message || '').toLowerCase().includes('csrf_token');
+      err?.code === '42703' &&
+      String(err.message || '')
+        .toLowerCase()
+        .includes('csrf_token');
     if (!missingCsrf) throw err;
     console.warn('[sessions] csrf_token column missing — insert without it (run migrate:prod).');
     await pool.query(

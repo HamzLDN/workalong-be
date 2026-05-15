@@ -22,7 +22,8 @@ import { logSecurityEvent } from '../lib/api-security.js';
 import { ensureSessionCsrfToken, verifyBrowserSessionCsrf } from '../lib/csrfSession.js';
 import { createRateLimiter } from '../middleware/security.js';
 import { requireAuth } from '../middleware/auth.js';
-import { cookieSecure } from '../lib/cookieSecure.js';
+import { cookieSecure, sessionCookieOptions } from '../lib/cookieSecure.js';
+import { assignWorkspaceSlugForUser } from '../lib/workspaceSlug.js';
 import {
   rememberPublicSignupCsrfToken,
   consumePublicSignupCsrfToken,
@@ -79,7 +80,19 @@ function employerUserJson(user) {
     pensionEmployeePercent: parseFloat(user.pension_employee_percent ?? 5) || 5,
     pensionEmployerPercent: parseFloat(user.pension_employer_percent ?? 3) || 3,
     headOfficeAccess: user.head_office_access !== false,
+    workspaceSlug: user.workspace_slug || null,
   };
+}
+
+/** Ensure every employer has a unique workspace subdomain (backfill on login). */
+async function ensureUserWorkspaceSlug(userRow, companyHint = null) {
+  if (!userRow?.id) return null;
+  if (userRow.workspace_slug) return userRow.workspace_slug;
+  const slug = await assignWorkspaceSlugForUser(userRow.id, companyHint || userRow.name, {
+    force: false,
+  });
+  userRow.workspace_slug = slug;
+  return slug;
 }
 
 async function getUserWithSubscription(userId) {
@@ -89,7 +102,7 @@ async function getUserWithSubscription(userId) {
               subscription_staff_limit, timezone,
               created_at, subscription_start_date,
               annual_leave_hours_target, pension_employee_percent, pension_employer_percent,
-              head_office_access
+              head_office_access, workspace_slug
        FROM users WHERE id = $1`,
       [userId]
     );
@@ -234,8 +247,7 @@ router.post(
       if (typeof cookieToken === 'string') cookieToken = cookieToken.trim();
       if (typeof headerToken === 'string') headerToken = headerToken.trim();
 
-      const cookieMatch =
-        Boolean(cookieToken && headerToken && cookieToken === headerToken);
+      const cookieMatch = Boolean(cookieToken && headerToken && cookieToken === headerToken);
       const serverIssuedOk =
         !cookieMatch && Boolean(headerToken) && consumePublicSignupCsrfToken(headerToken);
       if (!cookieMatch && !serverIssuedOk) {
@@ -259,30 +271,17 @@ router.post(
         return res.status(400).json({ error: 'Email already registered' });
       }
       const user = await createUser(email, password, name);
+      await ensureUserWorkspaceSlug(user, company || name);
       const { sessionId, expiresAt } = await createSession(
         user.id,
         req.ip,
         req.headers['user-agent']
       );
-      res.cookie('sessionId', sessionId, {
-        httpOnly: true,
-        secure: cookieSecure(req),
-        sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-        path: '/',
-      });
+      res.cookie('sessionId', sessionId, sessionCookieOptions(req));
+      const profile = (await getUserWithSubscription(user.id)) || user;
       res.status(201).json({
         message: 'User created successfully',
-        user: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          isVerified: user.is_verified,
-          subscriptionStatus: user.subscription_status,
-          subscriptionPlan: user.subscription_plan,
-          latitude: user.latitude,
-          longitude: user.longitude,
-        },
+        user: employerUserJson(profile),
         session: { id: sessionId, expiresAt },
       });
     } catch (error) {
@@ -404,6 +403,7 @@ router.post(
           requiresEmailCode: true,
         });
       }
+      await ensureUserWorkspaceSlug(user);
       const fullUser = await resolveEmployerUserForResponse(user.id, user);
       if (!fullUser) {
         return res.status(500).json({
@@ -416,12 +416,7 @@ router.post(
         req.ip,
         req.headers['user-agent']
       );
-      res.cookie('sessionId', sessionId, {
-        httpOnly: true,
-        secure: cookieSecure(req),
-        sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
+      res.cookie('sessionId', sessionId, sessionCookieOptions(req));
       logAuthActivity(user.id, 'signin').catch((err) =>
         console.error('Failed to log signin activity:', err)
       );
@@ -489,17 +484,13 @@ router.post('/verify-code', async (req, res) => {
     if (!isValid) {
       return res.status(401).json({ error: 'Invalid or expired verification code' });
     }
+    await ensureUserWorkspaceSlug(user);
     const fullUser = await resolveEmployerUserForResponse(userId, user);
     if (!fullUser) {
       return res.status(500).json({ error: 'Could not load your account after verification.' });
     }
     const { sessionId, expiresAt } = await createSession(userId, req.ip, req.headers['user-agent']);
-    res.cookie('sessionId', sessionId, {
-      httpOnly: true,
-      secure: cookieSecure(req),
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    res.cookie('sessionId', sessionId, sessionCookieOptions(req));
     logAuthActivity(userId, 'signin').catch((err) =>
       console.error('Failed to log signin activity:', err)
     );
@@ -534,6 +525,7 @@ router.post('/verify-totp', async (req, res) => {
     if (!isValid) {
       return res.status(401).json({ error: 'Invalid TOTP code' });
     }
+    await ensureUserWorkspaceSlug(user);
     const fullUser = await resolveEmployerUserForResponse(user.id, user);
     if (!fullUser) {
       return res.status(500).json({ error: 'Could not load your account profile.' });
@@ -543,12 +535,7 @@ router.post('/verify-totp', async (req, res) => {
       req.ip,
       req.headers['user-agent']
     );
-    res.cookie('sessionId', sessionId, {
-      httpOnly: true,
-      secure: cookieSecure(req),
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    res.cookie('sessionId', sessionId, sessionCookieOptions(req));
     logAuthActivity(user.id, 'signin').catch((err) =>
       console.error('Failed to log signin activity:', err)
     );
@@ -800,12 +787,7 @@ router.get('/csrf-token', async (req, res) => {
       return res.status(401).json({ error: 'Invalid or expired session' });
     }
     if (!req.cookies.sessionId && sessionId) {
-      res.cookie('sessionId', sessionId, {
-        httpOnly: true,
-        secure: cookieSecure(req),
-        sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
+      res.cookie('sessionId', sessionId, sessionCookieOptions(req));
     }
     const csrfToken = await ensureSessionCsrfToken(sessionId);
     if (!csrfToken) {
@@ -836,17 +818,13 @@ router.get('/me', async (req, res) => {
     const csrfOk = await verifyBrowserSessionCsrf(req, res, sessionId, session.user_id);
     if (!csrfOk) return;
     if (!fromCookie && sessionId) {
-      res.cookie('sessionId', sessionId, {
-        httpOnly: true,
-        secure: cookieSecure(req),
-        sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
+      res.cookie('sessionId', sessionId, sessionCookieOptions(req));
     }
     const user = await getUserWithSubscription(session.user_id);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
+    await ensureUserWorkspaceSlug(user);
     res.json({
       user: employerUserJson(user),
     });

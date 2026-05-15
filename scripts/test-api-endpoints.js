@@ -1480,11 +1480,7 @@ async function testCompletedShiftWithNoClockInCorrected() {
       `SELECT (CURRENT_DATE - 7)::text AS sd, (CURRENT_DATE + 60)::text AS ed`
     );
     const { sd, ed } = range.rows[0];
-    const getRes = await makeObfuscatedRequest(
-      `/shifts?startDate=${sd}&endDate=${ed}`,
-      {},
-      'GET'
-    );
+    const getRes = await makeObfuscatedRequest(`/shifts?startDate=${sd}&endDate=${ed}`, {}, 'GET');
     const shifts = getRes.data?.shifts ?? getRes.data;
     if (!getRes.ok || !Array.isArray(shifts)) {
       console.log(`  ${RED}FAIL:${RESET} Could not fetch shifts`);
@@ -2582,7 +2578,9 @@ async function testStaffAccessRoleCycle() {
       promoteOk
     );
     if (!promoteOk) {
-      console.log(`  ${RED}Hint:${RESET} promote error body: ${JSON.stringify(promoteResult.data ?? null)}`);
+      console.log(
+        `  ${RED}Hint:${RESET} promote error body: ${JSON.stringify(promoteResult.data ?? null)}`
+      );
     }
     allPassed = allPassed && promoteOk;
 
@@ -2693,7 +2691,8 @@ async function testStaffPortalFlow() {
     // Prefer username from create response (same truth as API); DB fallback if a proxy omits it
     managerUsername =
       mgrCreate.data.staff.username ||
-      (await pool.query('SELECT username FROM staff WHERE id = $1', [managerStaffId])).rows[0]?.username;
+      (await pool.query('SELECT username FROM staff WHERE id = $1', [managerStaffId])).rows[0]
+        ?.username;
     if (!managerUsername) {
       console.log(`  ${RED}FAIL:${RESET} Manager staff has no username (cannot portal login)`);
       return false;
@@ -2776,12 +2775,9 @@ async function testStaffPortalFlow() {
       const dualQuery = `startDate=${encodeURIComponent(rangeStart)}&endDate=${encodeURIComponent(
         rangeEnd
       )}&timezoneOffset=${tz}&clientNow=${nowMs}`;
-      const dualShifts = await makeObfuscatedRequest(
-        `/shifts?${dualQuery}`,
-        {},
-        'GET',
-        { extraCookie: `staffSessionId=${mgrSessionId}` }
-      );
+      const dualShifts = await makeObfuscatedRequest(`/shifts?${dualQuery}`, {}, 'GET', {
+        extraCookie: `staffSessionId=${mgrSessionId}`,
+      });
       const dualOk =
         dualShifts.ok &&
         dualShifts.status === 200 &&
