@@ -347,10 +347,11 @@ export async function updateStaff(staffId, userId, data) {
     if (employmentType !== undefined) addUpdate('employment_type', employmentType);
     if (status !== undefined) addUpdate('status', status);
     if (accessRole !== undefined) {
-      if (!['employee', 'manager', 'payroll_admin'].includes(accessRole)) {
+      const roleStr = typeof accessRole === 'string' ? accessRole.trim() : String(accessRole).trim();
+      if (!['employee', 'manager', 'payroll_admin'].includes(roleStr)) {
         throw new Error('Invalid access role');
       }
-      addUpdate('access_role', accessRole);
+      addUpdate('access_role', roleStr);
     }
     if (departmentId !== undefined) addUpdate('department_id', departmentId);
     if (branchId !== undefined) addUpdate('branch_id', branchId);

@@ -2581,6 +2581,9 @@ async function testStaffAccessRoleCycle() {
       { status: promoteResult.status, accessRole: promoteResult.data?.staff?.access_role },
       promoteOk
     );
+    if (!promoteOk) {
+      console.log(`  ${RED}Hint:${RESET} promote error body: ${JSON.stringify(promoteResult.data ?? null)}`);
+    }
     allPassed = allPassed && promoteOk;
 
     // 2. Demote back to employee
@@ -2687,9 +2690,10 @@ async function testStaffPortalFlow() {
       return true;
     }
     managerStaffId = mgrCreate.data.staff.id;
-    // Staff username is generated as "name.clockin_id" (not email) — fetch from DB for login
-    const mgrRow = await pool.query('SELECT username FROM staff WHERE id = $1', [managerStaffId]);
-    managerUsername = mgrRow.rows[0]?.username;
+    // Prefer username from create response (same truth as API); DB fallback if a proxy omits it
+    managerUsername =
+      mgrCreate.data.staff.username ||
+      (await pool.query('SELECT username FROM staff WHERE id = $1', [managerStaffId])).rows[0]?.username;
     if (!managerUsername) {
       console.log(`  ${RED}FAIL:${RESET} Manager staff has no username (cannot portal login)`);
       return false;
@@ -2722,10 +2726,10 @@ async function testStaffPortalFlow() {
     );
     if (empCreate.ok && empCreate.data?.staff) {
       employeeStaffId = empCreate.data.staff.id;
-      const empRow = await pool.query('SELECT username FROM staff WHERE id = $1', [
-        employeeStaffId,
-      ]);
-      employeeUsername = empRow.rows[0]?.username;
+      employeeUsername =
+        empCreate.data.staff.username ||
+        (await pool.query('SELECT username FROM staff WHERE id = $1', [employeeStaffId])).rows[0]
+          ?.username;
     }
 
     // Set password for both directly in DB (bypasses email token flow for testing)
@@ -2749,6 +2753,11 @@ async function testStaffPortalFlow() {
       { status: mgrLogin.status, accessRole: mgrLogin.data?.staff?.accessRole },
       mgrLoginOk
     );
+    if (!mgrLoginOk) {
+      console.log(
+        `  ${RED}Hint:${RESET} login body: ${JSON.stringify(mgrLogin.data ?? null)} (username=${JSON.stringify(managerUsername)})`
+      );
+    }
     allPassed = allPassed && mgrLoginOk;
 
     // Extract staffSessionId from Set-Cookie
