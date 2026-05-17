@@ -219,23 +219,30 @@ jobs:
           echo "Working directory: ${{ github.workspace }}"
           echo "Checking for .env file:"
           ls -la .env || echo ".env file not found in current directory"
-          # Disable admin-panel HTTP proxy (Docker-only ADMIN_PANEL_API_URL in .env breaks on self-hosted
-          # runners outside compose — proxy would target unreachable host and can break /api/admin).
+
+          # Stop stale CI dev servers (nodemon orphans from previous runs).
+          if [ -f /tmp/backend.pid ]; then
+            OLD_PID=$(tr -d ' ' < /tmp/backend.pid)
+            if [ -n "$OLD_PID" ] && ps -p "$OLD_PID" > /dev/null 2>&1; then
+              OLD_PGID=$(ps -o pgid= -p "$OLD_PID" | tr -d ' ')
+              kill -TERM -- "-$OLD_PGID" 2>/dev/null || kill -TERM "$OLD_PID" 2>/dev/null || true
+            fi
+          fi
+          pkill -f 'nodemon index.js' 2>/dev/null || true
+          fuser -k 8081/tcp 3443/tcp 2>/dev/null || true
+          rm -f /tmp/backend.pid
+          sleep 1
+
           export ADMIN_PANEL_PROXY=false
-          # Set a dummy Stripe test key for dev mode to prevent initialization errors
-          # Payment endpoints will fail gracefully with API errors
           export STRIPE_SECRET_KEY="${STRIPE_SECRET_KEY:-sk_test_00000000000000000000000000000000000000000000000000}"
-          # Start server and capture both stdout and stderr
-          NODE_ENV=dev npm run dev:secure > /tmp/backend.log 2>&1 &
+          # setsid → own process group so cleanup can kill npm → nodemon → node together.
+          setsid bash -c 'exec npm run dev:secure' > /tmp/backend.log 2>&1 &
           SERVER_PID=$!
-          echo $SERVER_PID > /tmp/backend.pid
-          echo "Backend server started with PID: $SERVER_PID"
-          echo "Waiting a moment for server to initialize..."
+          echo "$SERVER_PID" > /tmp/backend.pid
+          echo "Backend server started with PID: $SERVER_PID (PGID $(ps -o pgid= -p "$SERVER_PID" | tr -d ' '))"
           sleep 5
-          echo "Checking if process is still running..."
-          if ps -p $SERVER_PID > /dev/null 2>&1; then
+          if ps -p "$SERVER_PID" > /dev/null 2>&1; then
             echo "✅ Server process is running"
-            echo "Recent server logs:"
             tail -30 /tmp/backend.log || echo "No logs available yet"
           else
             echo "❌ Server process died immediately. Logs:"
@@ -411,19 +418,26 @@ jobs:
       - name: Cleaning up the backend testing server
         if: always()
         run: |
-          echo "Stopping backend server..."
+          echo "Stopping CI dev backend (ports 8081/3443 only; production Docker on 8080 untouched)..."
           if [ -f /tmp/backend.pid ]; then
-            PID=$(cat /tmp/backend.pid)
-            if ps -p $PID > /dev/null 2>&1; then
-              kill $PID || true
-              echo "Backend server stopped (PID: $PID)"
-            else
-              echo "Backend server process not found"
+            PID=$(tr -d ' ' < /tmp/backend.pid)
+            if [ -n "$PID" ] && ps -p "$PID" > /dev/null 2>&1; then
+              PGID=$(ps -o pgid= -p "$PID" | tr -d ' ')
+              echo "Killing process group PGID=$PGID (leader PID=$PID)"
+              kill -TERM -- "-$PGID" 2>/dev/null || kill -TERM "$PID" 2>/dev/null || true
+              sleep 2
+              kill -KILL -- "-$PGID" 2>/dev/null || kill -KILL "$PID" 2>/dev/null || true
             fi
             rm -f /tmp/backend.pid
-          else
-            echo "No PID file found, server may have already stopped"
           fi
+          pkill -f 'nodemon index.js' 2>/dev/null || true
+          fuser -k 8081/tcp 3443/tcp 2>/dev/null || true
+          if curl -sf http://localhost:8081/api/health >/dev/null 2>&1; then
+            echo "⚠ WARNING: dev server still responding on 8081"
+          else
+            echo "✅ Dev server on 8081 is down"
+          fi
+          curl -sf http://localhost:8080/api/health >/dev/null && echo "✅ Production on 8080 still healthy" || true
 
   deploy:
     name: Deploy Backend to Server
