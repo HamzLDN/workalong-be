@@ -2898,6 +2898,339 @@ async function testStaffPortalFlow() {
   return allPassed;
 }
 
+// ============================================================
+// MANAGER PORTAL: head office sets manager_permissions → portal enforces
+// ============================================================
+async function testManagerPortalPermissions() {
+  console.log('\n=== Testing Manager Portal Permissions (head office → manager) ===');
+  if (!sessionId) {
+    console.log(`${YELLOW}WARNING:${RESET} No session available, skipping manager permissions tests`);
+    return false;
+  }
+
+  const suffix = Date.now();
+  const managerEmail = `perm-mgr-${suffix}@example.com`;
+  const reportEmail = `perm-report-${suffix}@example.com`;
+  const testPassword = 'TestPermPortal123!';
+  let managerStaffId = null;
+  let reportStaffId = null;
+  let managerUsername = null;
+  let mgrSessionId = null;
+  let createdShiftId = null;
+  let allPassed = true;
+
+  async function staffPortalRequest(endpoint, options = {}, staffSessionId = null) {
+    const url = `${API_BASE_URL}${endpoint}`;
+    const headers = { 'Content-Type': 'application/json', ...options.headers };
+    if (staffSessionId) headers['Cookie'] = `staffSessionId=${staffSessionId}`;
+    try {
+      const response = await fetch(url, { ...options, headers });
+      let data;
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
+      return { status: response.status, ok: response.ok, data, headers: response.headers };
+    } catch {
+      return { status: 0, ok: false, data: null, headers: null };
+    }
+  }
+
+  async function setHeadOfficePermissions(permissions) {
+    return makeObfuscatedRequest(
+      '/staff/manager-permissions',
+      { permissions },
+      'PUT'
+    );
+  }
+
+  try {
+    // --- Head office: grant schedule read only (no write) ---
+    const grantRead = await setHeadOfficePermissions({
+      overview: { read: true },
+      schedule: { read: true, write: false },
+    });
+    const grantReadOk = grantRead.ok && grantRead.data?.permissions?.schedule?.read === true;
+    console.log('  Head office PUT schedule.read=true, schedule.write=false:');
+    assertResult(
+      'Head office grants schedule read',
+      { status: 200, scheduleRead: true },
+      {
+        status: grantRead.status,
+        scheduleRead: grantRead.data?.permissions?.schedule?.read,
+      },
+      grantReadOk
+    );
+    allPassed = allPassed && grantReadOk;
+    if (!grantReadOk) return false;
+
+    const mgrCreate = await makeObfuscatedRequest(
+      '/staff',
+      {
+        name: 'Perm Test Manager',
+        email: managerEmail,
+        role: 'Supervisor',
+        hourlyRate: 20,
+        employmentType: 'full-time',
+      },
+      'POST'
+    );
+    if (!mgrCreate.ok || !mgrCreate.data?.staff?.id) {
+      console.log(`  ${YELLOW}WARNING:${RESET} Could not create manager staff`);
+      return false;
+    }
+    managerStaffId = mgrCreate.data.staff.id;
+    managerUsername =
+      mgrCreate.data.staff.username ||
+      (await pool.query('SELECT username FROM staff WHERE id = $1', [managerStaffId])).rows[0]
+        ?.username;
+
+    const promoteRes = await makeObfuscatedRequest(
+      `/staff/${managerStaffId}`,
+      { accessRole: 'manager' },
+      'PUT'
+    );
+    if (!promoteRes.ok) {
+      console.log(`  ${RED}FAIL:${RESET} Promote to manager (${promoteRes.status})`);
+      return false;
+    }
+
+    const reportCreate = await makeObfuscatedRequest(
+      '/staff',
+      {
+        name: 'Perm Direct Report',
+        email: reportEmail,
+        role: 'Staff',
+        hourlyRate: 12,
+        employmentType: 'part-time',
+        managerId: managerStaffId,
+      },
+      'POST'
+    );
+    if (reportCreate.ok && reportCreate.data?.staff?.id) {
+      reportStaffId = reportCreate.data.staff.id;
+    }
+
+    const passwordHash = await bcrypt.hash(testPassword, 10);
+    await pool.query(
+      `UPDATE staff SET password_hash = $1, password_set = TRUE WHERE id = $2`,
+      [passwordHash, managerStaffId]
+    );
+
+    const mgrLogin = await staffPortalRequest('/staff/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: managerUsername, password: testPassword }),
+    });
+    const mgrCookieMatch = (mgrLogin.headers?.get('set-cookie') || '').match(
+      /staffSessionId=([^;]+)/
+    );
+    mgrSessionId = mgrCookieMatch ? mgrCookieMatch[1] : null;
+    if (!mgrSessionId) {
+      console.log(`  ${RED}FAIL:${RESET} Manager portal login (no session cookie)`);
+      return false;
+    }
+
+    const shiftDate = await pgCalendarDatePlusDays(7);
+
+    // schedule.read granted → GET /portal/shifts 200
+    const shiftsAllowed = await staffPortalRequest(
+      `/staff/portal/shifts?startDate=${shiftDate}&endDate=${shiftDate}`,
+      { method: 'GET' },
+      mgrSessionId
+    );
+    const shiftsAllowedOk = shiftsAllowed.status === 200 && Array.isArray(shiftsAllowed.data?.shifts);
+    console.log('  Manager GET /portal/shifts when schedule.read granted:');
+    assertResult(
+      'GET /portal/shifts allowed',
+      { status: 200 },
+      { status: shiftsAllowed.status },
+      shiftsAllowedOk
+    );
+    allPassed = allPassed && shiftsAllowedOk;
+
+    // schedule.write denied → POST /portal/shifts 403
+    if (reportStaffId) {
+      const postDenied = await staffPortalRequest(
+        '/staff/portal/shifts',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            staffId: reportStaffId,
+            shiftDate,
+            startTime: '09:00',
+            hours: 8,
+          }),
+        },
+        mgrSessionId
+      );
+      const postDeniedOk = postDenied.status === 403;
+      console.log('  Manager POST /portal/shifts when schedule.write denied:');
+      assertResult(
+        'POST /portal/shifts forbidden',
+        { status: 403 },
+        { status: postDenied.status, error: postDenied.data?.error },
+        postDeniedOk
+      );
+      allPassed = allPassed && postDeniedOk;
+    }
+
+    // Head office revokes schedule.read → GET 403
+    const revokeRead = await setHeadOfficePermissions({
+      schedule: { read: false, write: false },
+      overview: { read: true },
+    });
+    allPassed = allPassed && revokeRead.ok;
+
+    const shiftsDenied = await staffPortalRequest(
+      `/staff/portal/shifts?startDate=${shiftDate}&endDate=${shiftDate}`,
+      { method: 'GET' },
+      mgrSessionId
+    );
+    const shiftsDeniedOk = shiftsDenied.status === 403;
+    console.log('  Manager GET /portal/shifts when schedule.read revoked:');
+    assertResult(
+      'GET /portal/shifts denied',
+      { status: 403 },
+      { status: shiftsDenied.status, error: shiftsDenied.data?.error },
+      shiftsDeniedOk
+    );
+    allPassed = allPassed && shiftsDeniedOk;
+
+    // Head office grants schedule.write → POST 201 (or 409 conflict)
+    const grantWrite = await setHeadOfficePermissions({
+      overview: { read: true },
+      schedule: { read: true, write: true },
+    });
+    allPassed = allPassed && grantWrite.ok;
+
+    if (reportStaffId) {
+      const postAllowed = await staffPortalRequest(
+        '/staff/portal/shifts',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            staffId: reportStaffId,
+            shiftDate,
+            startTime: '10:00',
+            hours: 4,
+          }),
+        },
+        mgrSessionId
+      );
+      const postAllowedOk = postAllowed.status === 201 || postAllowed.status === 409;
+      console.log('  Manager POST /portal/shifts when schedule.write granted:');
+      assertResult(
+        'POST /portal/shifts allowed',
+        { status: '201 or 409' },
+        { status: postAllowed.status },
+        postAllowedOk
+      );
+      allPassed = allPassed && postAllowedOk;
+      if (postAllowed.status === 201 && postAllowed.data?.shift?.id) {
+        createdShiftId = postAllowed.data.shift.id;
+      }
+    }
+
+    // schedule.delete denied → DELETE /portal/shifts/:id 403
+    if (reportStaffId && createdShiftId) {
+      const noDeletePerms = await setHeadOfficePermissions({
+        overview: { read: true },
+        schedule: { read: true, write: true, delete: false },
+      });
+      allPassed = allPassed && noDeletePerms.ok;
+
+      const deleteDenied = await staffPortalRequest(
+        `/staff/portal/shifts/${createdShiftId}`,
+        { method: 'DELETE' },
+        mgrSessionId
+      );
+      const deleteDeniedOk = deleteDenied.status === 403;
+      console.log('  Manager DELETE /portal/shifts when schedule.delete denied:');
+      assertResult(
+        'DELETE /portal/shifts forbidden',
+        { status: 403 },
+        { status: deleteDenied.status, error: deleteDenied.data?.error },
+        deleteDeniedOk
+      );
+      allPassed = allPassed && deleteDeniedOk;
+
+      const grantDelete = await setHeadOfficePermissions({
+        overview: { read: true },
+        schedule: { read: true, write: true, delete: true },
+      });
+      allPassed = allPassed && grantDelete.ok;
+
+      const deleteAllowed = await staffPortalRequest(
+        `/staff/portal/shifts/${createdShiftId}`,
+        { method: 'DELETE' },
+        mgrSessionId
+      );
+      const deleteAllowedOk = deleteAllowed.status === 200;
+      console.log('  Manager DELETE /portal/shifts when schedule.delete granted:');
+      assertResult(
+        'DELETE /portal/shifts allowed',
+        { status: 200 },
+        { status: deleteAllowed.status, error: deleteAllowed.data?.error },
+        deleteAllowedOk
+      );
+      allPassed = allPassed && deleteAllowedOk;
+      if (deleteAllowedOk) createdShiftId = null;
+    } else if (reportStaffId) {
+      console.log(
+        `  ${YELLOW}SKIP:${RESET} shift delete tests (no shift id — POST did not return 201)`
+      );
+    }
+
+    // budget.read default false → GET /portal/budget 403
+    const budgetDenied = await staffPortalRequest(
+      '/staff/portal/budget',
+      { method: 'GET' },
+      mgrSessionId
+    );
+    const budgetDeniedOk = budgetDenied.status === 403;
+    console.log('  Manager GET /portal/budget without budget.read:');
+    assertResult(
+      'GET /portal/budget denied',
+      { status: 403 },
+      { status: budgetDenied.status },
+      budgetDeniedOk
+    );
+    allPassed = allPassed && budgetDeniedOk;
+
+    const grantBudget = await setHeadOfficePermissions({
+      overview: { read: true },
+      schedule: { read: true, write: true },
+      budget: { read: true },
+    });
+    allPassed = allPassed && grantBudget.ok;
+
+    const budgetAllowed = await staffPortalRequest(
+      '/staff/portal/budget',
+      { method: 'GET' },
+      mgrSessionId
+    );
+    const budgetAllowedOk = budgetAllowed.status === 200 && Array.isArray(budgetAllowed.data?.budgets);
+    console.log('  Manager GET /portal/budget when budget.read granted:');
+    assertResult(
+      'GET /portal/budget allowed',
+      { status: 200 },
+      { status: budgetAllowed.status },
+      budgetAllowedOk
+    );
+    allPassed = allPassed && budgetAllowedOk;
+
+    await staffPortalRequest('/staff/auth/logout', { method: 'POST' }, mgrSessionId);
+  } finally {
+    await setHeadOfficePermissions({}).catch(() => {});
+    for (const sid of [reportStaffId, managerStaffId].filter(Boolean)) {
+      await makeObfuscatedRequest(`/staff/${sid}`, {}, 'DELETE');
+    }
+  }
+
+  return allPassed;
+}
+
 async function runAllTests() {
   console.log('========================================');
   console.log('COMPREHENSIVE API Endpoint Testing Suite');
@@ -3116,6 +3449,14 @@ async function runAllTests() {
       passed: staffPortalOk,
     });
     if (staffPortalOk) results.passed++;
+    else results.failed++;
+
+    const managerPermsOk = await testManagerPortalPermissions();
+    results.tests.push({
+      name: 'Manager Portal Permissions (head office grants enforce on portal)',
+      passed: managerPermsOk,
+    });
+    if (managerPermsOk) results.passed++;
     else results.failed++;
 
     // Shift endpoints

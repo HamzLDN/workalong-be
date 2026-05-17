@@ -13,6 +13,7 @@ import {
   updateStaff,
   deleteStaff,
   getStaffStats,
+  getBudgets,
   validatePasswordToken,
   setPasswordWithToken,
   resetStaffPassword,
@@ -29,7 +30,10 @@ import {
 } from '../services/shifts.js';
 import { requireAuth, requireStaffAuth } from '../middleware/auth.js';
 import { checkGeofence } from '../lib/geofence.js';
-import { mergePermissions } from '../lib/managerPermissions.js';
+import {
+  mergePermissions,
+  sanitizeManagerPermissions,
+} from '../lib/managerPermissions.js';
 
 const router = express.Router();
 
@@ -450,12 +454,8 @@ router.get('/portal/budget', requireStaffAuth, async (req, res) => {
       return res.status(403).json({ error: 'Budget access not permitted' });
     }
 
-    const budgetResult = await pool.query(
-      `SELECT id, name, monthly_amount, start_date, end_date, notes
-       FROM budgets WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10`,
-      [req.staff.companyUserId]
-    );
-    res.json({ budgets: budgetResult.rows });
+    const budgets = await getBudgets(req.staff.companyUserId);
+    res.json({ budgets });
   } catch (error) {
     console.error('Portal budget error:', error);
     res.status(500).json({ error: 'Failed to load budget' });
@@ -723,7 +723,7 @@ router.delete('/portal/shifts/:id', requireStaffAuth, async (req, res) => {
     if (isNaN(shiftId)) return res.status(400).json({ error: 'Invalid shift ID' });
 
     const own = await pool.query(
-      `SELECT s.id, sh.shift_date, st.name AS staff_name, st.lastname AS staff_lastname
+      `SELECT s.id, s.shift_date, st.name AS staff_name, st.lastname AS staff_lastname
        FROM shifts s
        JOIN staff st ON s.staff_id = st.id
        WHERE s.id = $1 AND s.user_id = $2 AND st.manager_id = $3`,
@@ -813,29 +813,7 @@ router.put('/manager-permissions', requireAuth, async (req, res) => {
     if (!permissions || typeof permissions !== 'object') {
       return res.status(400).json({ error: 'permissions object is required' });
     }
-    // Sanitise: only allow known keys and boolean values
-    const allowedFeatures = ['overview', 'staff', 'hours', 'leave', 'budget', 'schedule', 'audit'];
-    const opsByFeature = {
-      overview: ['read'],
-      staff: ['read', 'write', 'delete'],
-      hours: ['read', 'write', 'delete'],
-      leave: ['read', 'write', 'delete'],
-      budget: ['read'],
-      schedule: ['read', 'write', 'delete'],
-      audit: ['read'],
-    };
-    const sanitised = {};
-    for (const feature of allowedFeatures) {
-      if (!permissions[feature]) continue;
-      const ops = opsByFeature[feature];
-      if (!ops) continue;
-      sanitised[feature] = {};
-      for (const op of ops) {
-        if (op in permissions[feature]) {
-          sanitised[feature][op] = Boolean(permissions[feature][op]);
-        }
-      }
-    }
+    const sanitised = sanitizeManagerPermissions(permissions);
     await pool.query('UPDATE users SET manager_permissions = $1 WHERE id = $2', [
       JSON.stringify(sanitised),
       req.userId,

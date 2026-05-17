@@ -1,5 +1,10 @@
 import { describe, it, expect } from '@jest/globals';
-import { DEFAULT_MANAGER_PERMISSIONS, mergePermissions } from '../lib/managerPermissions.js';
+import {
+  DEFAULT_MANAGER_PERMISSIONS,
+  mergePermissions,
+  sanitizeManagerPermissions,
+  managerPortalAllowed,
+} from '../lib/managerPermissions.js';
 
 describe('Manager permissions (portal security)', () => {
   it('returns defaults when stored is null or not an object', () => {
@@ -29,5 +34,26 @@ describe('Manager permissions (portal security)', () => {
     });
     expect(merged.admin).toBeUndefined();
     expect(merged.schedule.read).toBe(true);
+  });
+
+  it('sanitizeManagerPermissions keeps only known features and boolean ops', () => {
+    const stored = sanitizeManagerPermissions({
+      schedule: { read: true, write: 'yes', hack: true },
+      admin: { superuser: true },
+    });
+    expect(stored).toEqual({ schedule: { read: true, write: true } });
+    expect(stored.admin).toBeUndefined();
+  });
+
+  it('managerPortalAllowed reflects head-office grants after merge with defaults', () => {
+    const stored = sanitizeManagerPermissions({
+      schedule: { read: true, write: true },
+      budget: { read: true },
+    });
+    expect(managerPortalAllowed(stored, 'schedule', 'read')).toBe(true);
+    expect(managerPortalAllowed(stored, 'schedule', 'write')).toBe(true);
+    expect(managerPortalAllowed(stored, 'schedule', 'delete')).toBe(false);
+    expect(managerPortalAllowed(stored, 'budget', 'read')).toBe(true);
+    expect(managerPortalAllowed(stored, 'leave', 'read')).toBe(false);
   });
 });
