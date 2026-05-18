@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: admin
       POSTGRES_DB: users
     ports:
-      - "5433:5432"  # Different port to avoid conflicts with main DB
+      - "5433:5432"
     volumes:
       - postgres_data_mock:/var/lib/postgresql/data
       - ./database-schema/mock-init.sql:/docker-entrypoint-initdb.d/001-mock-init.sql:ro
@@ -29,9 +29,3 @@ networks:
 volumes:
   postgres_data_mock:
     name: workalong-backend_postgres_data_mock
-
-
-
-
-
-

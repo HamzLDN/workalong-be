@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -36,10 +34,7 @@ services:
       - PUBLIC_API_URL=https://workalong.co.uk/api
     volumes:
       - ../workalong-frontend/docker/ssl:/etc/nginx/ssl:ro
-      # Hot-swap volume: mount local dist/ to container's nginx html directory
-      # Build locally with 'npm run build', then files appear instantly in container
       - ../workalong-frontend/dist:/usr/share/nginx/html:ro
-      # Dashboard SPA — nginx `root /usr/share/nginx/admin-panel` (see docker/nginx-frontend-ssl.conf)
       - ../admin_panel/dist:/usr/share/nginx/admin-panel:ro
     depends_on:
       - backend
@@ -48,7 +43,6 @@ services:
     networks:
       - workalong-network
 
-  # Admin panel API (support chat, Socket.IO, /api/admin) — same DB as backend
   admin-panel-api:
     build:
       context: ../admin_panel
@@ -91,12 +85,11 @@ services:
       - "8443:443"
     restart: unless-stopped
     env_file:
-     - .env
+      - .env
     environment:
       - PORT=8080
       - NODE_ENV=production
       - DOCKER=true
-      # Forward /api/admin to admin-panel-api when a client hits this backend (misconfigured nginx, or direct :8080).
       - ADMIN_PANEL_API_URL=http://admin-panel-api:5055
       - INTERNAL_SERVICE_SECRET=${INTERNAL_SERVICE_SECRET:-}
       - DB_HOST=postgres
@@ -122,7 +115,6 @@ services:
     networks:
       - workalong-network
 
-  # AI gateway — https://ai.workalong.co.uk (see ../workalong-ai/README.md)
   workalong-ai:
     build:
       context: ../workalong-ai
@@ -133,7 +125,6 @@ services:
       - ../workalong-ai/.env
     environment:
       - NODE_ENV=production
-      # Overrides host .env (Docker network service name, not localhost)
       - WORKALONG_BACKEND_URL=http://workalong-backend:8080
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://workalong.co.uk,https://www.workalong.co.uk,https://dashboard.workalong.co.uk,https://ai.workalong.co.uk}
     depends_on:
