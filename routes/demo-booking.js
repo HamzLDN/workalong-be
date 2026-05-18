@@ -16,7 +16,6 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Invalid email address.' });
     }
 
-    // Validate date is not in the past
     const chosenDate = new Date(date);
     const today = new Date();
     today.setHours(0, 0, 0, 0);

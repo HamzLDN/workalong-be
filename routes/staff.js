@@ -151,7 +151,6 @@ router.get('/portal/team', requireStaffAuth, async (req, res) => {
   }
 });
 
-// 3 minutes expressed as fractional hours (threshold for overtime approval)
 const OVERTIME_THRESHOLD_HOURS = 3 / 60;
 
 router.get('/portal/time-entries', requireStaffAuth, async (req, res) => {
@@ -240,7 +239,6 @@ router.post('/portal/time-entries/:id/approve', requireStaffAuth, async (req, re
 
     const mode = req.body?.mode === 'scheduled_only' ? 'scheduled_only' : 'with_overtime';
 
-    // Verify this entry belongs to a staff member managed by the requesting manager
     const check = await pool.query(
       `SELECT te.id, te.hours_worked, te.approved_at, te.staff_approved_at, te.clock_in_time, te.notes,
               sh.hours AS scheduled_hours
@@ -265,7 +263,6 @@ router.post('/portal/time-entries/:id/approve', requireStaffAuth, async (req, re
       });
     }
 
-    // Only allow approval when actual hours exceed scheduled by more than 3 minutes
     const extraHours =
       entry.scheduled_hours != null
         ? parseFloat(entry.hours_worked) - parseFloat(entry.scheduled_hours)
@@ -325,7 +322,6 @@ router.post('/portal/time-entries/:id/approve', requireStaffAuth, async (req, re
       return;
     }
 
-    // Recommend full overtime — head office confirms later (approved_at stays null)
     const updated = await pool.query(
       `UPDATE time_entries
        SET staff_approved_at = NOW(),
@@ -354,7 +350,6 @@ router.post('/portal/time-entries/:id/approve', requireStaffAuth, async (req, re
   }
 });
 
-// GET /api/staff/portal/permissions — manager fetches their company's permission matrix
 router.get('/portal/permissions', requireStaffAuth, async (req, res) => {
   try {
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
@@ -371,7 +366,6 @@ router.get('/portal/permissions', requireStaffAuth, async (req, res) => {
   }
 });
 
-// GET /api/staff/portal/stats — team-scoped overview stats
 router.get('/portal/stats', requireStaffAuth, async (req, res) => {
   try {
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
@@ -440,7 +434,6 @@ router.get('/portal/stats', requireStaffAuth, async (req, res) => {
   }
 });
 
-// GET /api/staff/portal/budget — team-scoped budget (read-only)
 router.get('/portal/budget', requireStaffAuth, async (req, res) => {
   try {
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
@@ -462,7 +455,6 @@ router.get('/portal/budget', requireStaffAuth, async (req, res) => {
   }
 });
 
-// POST /api/staff/portal/time-entries — create a manual time entry (requires hours.write)
 router.post('/portal/time-entries', requireStaffAuth, async (req, res) => {
   try {
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
@@ -492,7 +484,6 @@ router.post('/portal/time-entries', requireStaffAuth, async (req, res) => {
       }
     }
 
-    // Verify the staff member belongs to this manager's team
     const staffCheck = await pool.query(
       `SELECT id FROM staff WHERE id = $1 AND manager_id = $2
          AND user_id = (SELECT user_id FROM staff WHERE id = $2)`,
@@ -515,7 +506,6 @@ router.post('/portal/time-entries', requireStaffAuth, async (req, res) => {
   }
 });
 
-// DELETE /api/staff/portal/time-entries/:id — delete a manual time entry (requires hours.delete)
 router.delete('/portal/time-entries/:id', requireStaffAuth, async (req, res) => {
   try {
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
@@ -560,7 +550,6 @@ router.delete('/portal/time-entries/:id', requireStaffAuth, async (req, res) => 
   }
 });
 
-// GET /api/staff/portal/shifts — team shifts (read-only list; write via POST)
 router.get('/portal/shifts', requireStaffAuth, async (req, res) => {
   try {
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
@@ -598,7 +587,6 @@ router.get('/portal/shifts', requireStaffAuth, async (req, res) => {
   }
 });
 
-// POST /api/staff/portal/shifts — create a shift for a direct report
 router.post('/portal/shifts', requireStaffAuth, async (req, res) => {
   try {
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
@@ -705,7 +693,6 @@ router.post('/portal/shifts', requireStaffAuth, async (req, res) => {
   }
 });
 
-// DELETE /api/staff/portal/shifts/:id — remove a team shift
 router.delete('/portal/shifts/:id', requireStaffAuth, async (req, res) => {
   try {
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
@@ -764,7 +751,6 @@ router.delete('/portal/shifts/:id', requireStaffAuth, async (req, res) => {
   }
 });
 
-// GET /api/staff/portal/audit — activity relevant to the manager’s team
 router.get('/portal/audit', requireStaffAuth, async (req, res) => {
   try {
     if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
@@ -792,7 +778,6 @@ router.get('/portal/audit', requireStaffAuth, async (req, res) => {
   }
 });
 
-// GET /api/staff/manager-permissions — headoffice reads the permission matrix
 router.get('/manager-permissions', requireAuth, async (req, res) => {
   try {
     const result = await pool.query('SELECT manager_permissions FROM users WHERE id = $1', [
@@ -806,7 +791,6 @@ router.get('/manager-permissions', requireAuth, async (req, res) => {
   }
 });
 
-// PUT /api/staff/manager-permissions — headoffice saves the permission matrix
 router.put('/manager-permissions', requireAuth, async (req, res) => {
   try {
     const { permissions } = req.body;
@@ -896,35 +880,6 @@ router.post('/:id/reset-password', requireAuth, async (req, res) => {
   }
 });
 
-// ----- List & stats -----
-/**
- * @swagger
- * /staff:
- *   get:
- *     summary: Get all staff members
- *     description: Retrieve a list of all staff members for the authenticated user
- *     tags: [Staff]
- *     security:
- *       - bearerAuth: []
- *       - cookieAuth: []
- *       - apiKeyAuth: []
- *     responses:
- *       200:
- *         description: List of staff members
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 staff:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/Staff'
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Server error
- */
 router.get('/', requireAuth, async (req, res) => {
   try {
     const staff = await getStaff(req.userId);
@@ -946,7 +901,6 @@ router.get('/stats', requireAuth, async (req, res) => {
   }
 });
 
-// ----- Clock-in (long handler) -----
 router.post('/clock-in', requireStaffAuth, async (req, res) => {
   try {
     const staffId = req.staffId;
@@ -1147,7 +1101,6 @@ router.post('/clock-in', requireStaffAuth, async (req, res) => {
   }
 });
 
-// ----- Clock-out -----
 router.post('/clock-out', requireStaffAuth, async (req, res) => {
   const staffId = req.staffId;
   const { latitude: staffLat, longitude: staffLon, lateReason } = req.body;
@@ -1184,7 +1137,6 @@ router.post('/clock-out', requireStaffAuth, async (req, res) => {
       [staffId, today, yesterdayStr]
     );
 
-    // Fallback: if shift was deleted by manager, clock out via time_entry only
     if (shiftResult.rows.length === 0) {
       const entryResult = await client.query(
         `SELECT id, clock_in_time, date FROM time_entries
@@ -1242,7 +1194,6 @@ router.post('/clock-out', requireStaffAuth, async (req, res) => {
       overtimeHours = Math.round((totalHoursWorked - scheduledHours) * 100) / 100;
     }
 
-    // Compute scheduled end: shift_date + start_time + hours
     const sd = new Date(shift.shift_date);
     const [startH, startM] = (shift.start_time || '00:00').toString().split(':').map(Number);
     const scheduledEnd = new Date(sd);
@@ -1264,7 +1215,6 @@ router.post('/clock-out', requireStaffAuth, async (req, res) => {
       notesForEntry = `Late clock-out reason: ${reason}`;
     }
 
-    // Always require manager approval - no auto-approve on clock-out
     const updateShiftResult = await client.query(
       `UPDATE shifts SET clocked_out_time = $1, status = 'review_hours', approved_at = NULL, approved_by = NULL
        WHERE id = $2 RETURNING id, status, clocked_out_time, approved_at`,
@@ -1311,7 +1261,6 @@ router.post('/clock-out', requireStaffAuth, async (req, res) => {
         shiftId,
       ]);
     }
-    // Close other open entries - today and yesterday only (covers overnight; avoids overwriting entries from 2+ days ago)
     await client.query(
       `UPDATE time_entries SET clock_out_time = $1, hours_worked = EXTRACT(EPOCH FROM ($1::timestamptz - clock_in_time))/3600
        WHERE staff_id = $2 AND date >= $3::date - INTERVAL '1 day' AND date <= $3::date AND clock_in_time IS NOT NULL AND clock_out_time IS NULL`,
@@ -1418,65 +1367,6 @@ router.get('/:id', requireAuth, async (req, res) => {
   }
 });
 
-/**
- * @swagger
- * /staff:
- *   post:
- *     summary: Create a new staff member
- *     description: Create a new staff member for the authenticated user. A password setup email will be sent to the staff member's email address.
- *     tags: [Staff]
- *     security:
- *       - bearerAuth: []
- *       - cookieAuth: []
- *       - apiKeyAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - name
- *               - role
- *               - hourlyRate
- *             properties:
- *               name:
- *                 type: string
- *                 example: "John Doe"
- *               email:
- *                 type: string
- *                 format: email
- *                 example: "john@example.com"
- *               role:
- *                 type: string
- *                 example: "Manager"
- *               hourlyRate:
- *                 type: number
- *                 format: float
- *                 minimum: 0
- *                 example: 15.50
- *               employmentType:
- *                 type: string
- *                 example: "full-time"
- *     responses:
- *       201:
- *         description: Staff member created successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                 staff:
- *                   $ref: '#/components/schemas/Staff'
- *       400:
- *         description: Bad request (missing required fields or invalid hourly rate)
- *       403:
- *         description: Staff limit reached (subscription limit)
- *       500:
- *         description: Server error
- */
 router.post('/', requireAuth, async (req, res) => {
   try {
     const {

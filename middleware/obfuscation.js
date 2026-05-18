@@ -93,11 +93,6 @@ function verifyRequestSignature(method, endpoint, body, sessionId, timestamp, no
   return expectedSignature === signature;
 }
 
-/**
- * Validates signed-transport headers against the request body (before body deobfuscation).
- * Used in dev plain API when the client still sends transport + signature headers.
- * @returns {null | { status: number, body: object }}
- */
 function verifySignedTransportHeaders(req, parsedBody) {
   let sessionId = req.cookies?.sessionId;
   if (!sessionId && req.headers.authorization?.startsWith('Bearer ')) {
@@ -184,7 +179,6 @@ function deobfuscateEndpoint(obfuscated) {
   }
 }
 
-// List of public endpoints that don't require obfuscation
 const PUBLIC_ENDPOINTS = [
   '/health',
   '/api/health',
@@ -210,20 +204,14 @@ const PUBLIC_ENDPOINTS = [
   '/api/auth/csrf-token',
   '/auth/session-id',
   '/api/auth/session-id',
-  // '/activities',
-  // '/api/activities',
-  // '/activities/stats',
-  // '/api/activities/stats',
   '/payment/webhook',
   '/api/payment/webhook',
   '/payment/config',
   '/api/payment/config',
   '/payment/verify-session',
   '/api/payment/verify-session',
-  // Kiosk clocking flow (link-token + device-fingerprint based; no session)
   '/clockin/clock-action',
   '/api/clockin/clock-action',
-  // Staff portal auth (no employer session; uses staff session cookie)
   '/staff/auth/login',
   '/api/staff/auth/login',
   '/staff/auth/logout',
@@ -239,18 +227,12 @@ const PUBLIC_ENDPOINT_PREFIXES = [
   '/api/clockin/verify-link/',
   '/clockin/status/',
   '/api/clockin/status/',
-  // Staff portal routes use staff session cookie for auth, not employer obfuscation
   '/staff/portal/',
   '/api/staff/portal/',
-  // Support chat is served by admin-panel-api (port 5055). If a request hits this backend by mistake,
-  // skip obfuscation so the request fails with a normal 404 instead of "transport required".
   '/api/support',
   '/support',
 ];
 
-// Some deployments mount the backend under an extra prefix (for example /api/v1).
-// Treat these suffixes as public too so auth recovery flows don't break with
-// "Client protocol required" when the route path is prefixed by a gateway.
 const PUBLIC_ENDPOINT_SUFFIXES = [
   '/auth/public-csrf-token',
   '/auth/signup',
@@ -276,15 +258,12 @@ const PUBLIC_ENDPOINT_SUFFIXES = [
 /** Exported for tests — public routes skip transport/signature (see verifyObfuscatedRequest). */
 export function isPublicEndpoint(path) {
   if (path == null || path === '') return false;
-  // Remove query string; strip trailing slashes (proxies and browsers may send /api/foo/)
   let cleanPath = path.split('?')[0];
   cleanPath = cleanPath.replace(/\/+$/, '') || '/';
-  // Normalize path - handle both /api/activities and /activities
   let normalized = cleanPath;
   if (!normalized.startsWith('/')) {
     normalized = '/' + normalized;
   }
-  // Strip /api prefix if present (backend may receive /api/activities or /activities depending on proxy)
   if (normalized.startsWith('/api/')) {
     normalized = '/' + normalized.substring(5); // /api/activities -> /activities
   }
@@ -302,12 +281,10 @@ export function isPublicEndpoint(path) {
 }
 
 function hasRequestBody(req) {
-  // Check if request has a body with data
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'DELETE') {
     return false;
   }
 
-  // Check content-type and body
   const contentType = req.headers['content-type'] || '';
   const hasBody = req.body && Object.keys(req.body).length > 0;
   const hasRawBody = req.body && typeof req.body === 'string' && req.body.length > 0;
@@ -324,7 +301,6 @@ export async function verifyObfuscatedRequest(req, res, next) {
   try {
     if (isDevPlainApi()) {
       const rawBody = req.body;
-      // Requests that opt into signed transport must still fail on bad signatures (security tests / prod-like clients).
       if (isClientTransportActive(req)) {
         const sig = req.headers['x-request-signature'];
         const ts = req.headers['x-request-timestamp'];
@@ -336,9 +312,6 @@ export async function verifyObfuscatedRequest(req, res, next) {
           }
         }
       }
-      // Skip signature/timestamp validation for plain JSON in dev, but still decode the body when the frontend
-      // sent it in obfuscated format — otherwise req.body is the {data,format} wrapper and route
-      // handlers can't find staffId, shiftDate etc.
       if (
         rawBody &&
         rawBody.format === 'information' &&
@@ -361,15 +334,12 @@ export async function verifyObfuscatedRequest(req, res, next) {
             );
             req.body = rawBody.data === '' ? {} : JSON.parse(deobfuscateData(rawBody.data, devKey));
           } catch (_) {
-            // If deobfuscation fails in dev, leave body as-is so the route returns a useful error
           }
         }
       }
       return next();
     }
 
-    // Trusted internal service (e.g. workalong-ai): plain JSON, Docker network + shared secret.
-    // Still requires user Authorization + CSRF; route handlers enforce access control.
     const internalSecret = process.env.INTERNAL_SERVICE_SECRET;
     if (internalSecret && req.headers['x-workalong-internal-secret'] === internalSecret) {
       req.workalongInternalGateway = true;
@@ -380,12 +350,10 @@ export async function verifyObfuscatedRequest(req, res, next) {
     const pathFromUrl = req.originalUrl ? req.originalUrl.split('?')[0] : '';
     const isPublic = isPublicEndpoint(req.path) || (pathFromUrl && isPublicEndpoint(pathFromUrl));
 
-    // Public endpoints don't require obfuscation
     if (isPublic) {
       return next();
     }
 
-    // All non-public endpoints require signed transport + XOR body when applicable
     if (!transportActive) {
       await logSecurityEvent('obfuscation_required', {
         ipAddress: req.ip,
@@ -473,7 +441,6 @@ export async function verifyObfuscatedRequest(req, res, next) {
     let bodyString = '';
 
     if (parsedBody && typeof parsedBody === 'object') {
-      // Check if it's the obfuscated format - data can be empty string, so check for property existence
       if (parsedBody.format === 'information' && parsedBody.hasOwnProperty('data')) {
         bodyString = parsedBody.data || ''; // Use empty string if data is empty
       } else {
@@ -551,7 +518,6 @@ export async function verifyObfuscatedRequest(req, res, next) {
     if (parsedBody && parsedBody.format === 'information' && parsedBody.hasOwnProperty('data')) {
       try {
         const key = generateObfuscationKey(sessionId, requestTime);
-        // Handle empty string data - if data is empty, body should be empty object
         if (parsedBody.data === '') {
           req.body = {};
         } else {
@@ -600,14 +566,10 @@ export function obfuscateResponse(req, res, next) {
     return next();
   }
 
-  // Always obfuscate responses for authenticated endpoints with data
   const isPublic = isPublicEndpoint(req.path);
   const hasData = hasRequestBody(req);
   const transportRequested = isClientTransportActive(req);
 
-  // Obfuscate if:
-  // 1. Request was obfuscated (req.obfuscation exists)
-  // 2. OR it's an authenticated endpoint with data (not public)
   const shouldObfuscate =
     (req.obfuscation && req.obfuscation.enabled) ||
     (transportRequested && !isPublic && hasData) ||
@@ -617,12 +579,10 @@ export function obfuscateResponse(req, res, next) {
     return next();
   }
 
-  // Get obfuscation key
   let obfuscationKey;
   if (req.obfuscation && req.obfuscation.key) {
     obfuscationKey = req.obfuscation.key;
   } else {
-    // Generate key from session if available
     let sessionId = req.cookies?.sessionId || req.cookies?.staffSessionId;
     if (!sessionId && req.headers.authorization) {
       const authHeader = req.headers.authorization;
@@ -632,12 +592,10 @@ export function obfuscateResponse(req, res, next) {
     }
     if (sessionId && sessionId !== 'undefined' && sessionId !== 'null') {
       obfuscationKey = generateObfuscationKey(sessionId);
-      // Store in req.obfuscation for consistency
       if (!req.obfuscation) {
         req.obfuscation = { enabled: true, sessionId, key: obfuscationKey };
       }
     } else {
-      // No session, can't obfuscate - but this shouldn't happen for authenticated endpoints
       return next();
     }
   }
@@ -674,7 +632,6 @@ export async function requireSubscription(req, res, next) {
 
     const subscriptionPlan = req.headers['x-subscription-plan'];
 
-    // Verify subscription via Stripe API (source of truth)
     const { verifySubscriptionStatus } = await import('../services/stripe.js');
     const verification = await verifySubscriptionStatus(req.userId);
 

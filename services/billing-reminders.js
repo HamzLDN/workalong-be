@@ -4,10 +4,6 @@ import { createBillingPortalSession } from './stripe.js';
 
 const REMINDER_DAYS = [7, 3, 1];
 
-/**
- * Find users whose subscription_end_date falls in exactly N days and
- * who haven't already received a reminder for that interval today.
- */
 async function getUsersDueInDays(days) {
   const result = await pool.query(
     `SELECT id, email, name
@@ -25,9 +21,6 @@ async function getUsersDueInDays(days) {
   return result.rows;
 }
 
-/**
- * Ensure the billing_reminder_log table exists (auto-migrates on first run).
- */
 async function ensureLogTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS billing_reminder_log (
@@ -39,10 +32,6 @@ async function ensureLogTable() {
   `);
 }
 
-/**
- * Run the daily billing reminder check.
- * Called once per day from the main server interval.
- */
 export async function runBillingReminders() {
   try {
     await ensureLogTable();
@@ -54,12 +43,10 @@ export async function runBillingReminders() {
 
       for (const user of users) {
         try {
-          // Generate a short-lived billing portal URL per user
           let portalUrl = 'https://workalong.co.uk/plans';
           try {
             portalUrl = await createBillingPortalSession(user.id);
           } catch {
-            // Fallback to plans page if portal URL fails (e.g. no Stripe customer)
           }
 
           const renewalDate = new Date();
@@ -73,7 +60,6 @@ export async function runBillingReminders() {
             portalUrl
           );
 
-          // Record that we sent this reminder so we don't double-send
           await pool.query(
             `INSERT INTO billing_reminder_log (user_id, days_before) VALUES ($1, $2)`,
             [user.id, days]

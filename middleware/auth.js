@@ -225,13 +225,6 @@ export async function authenticateStaffOrUser(req, res) {
   return null;
 }
 
-/**
- * When the browser has both employer (`sessionId`) and staff (`staffSessionId`) cookies, the default
- * {@link authenticateStaffOrUser} chooses staff first — so the employer Schedule page hits staff
- * permission checks (e.g. schedule.read defaults false) and returns 403 even though the user is
- * viewing head-office UI. This variant validates employer session cookies / Bearer user sessions
- * first, then delegates to {@link authenticateStaffOrUser} for staff-only contexts.
- */
 export async function authenticateStaffOrUserPreferEmployer(req, res) {
   if (
     req.cookies.sessionId &&

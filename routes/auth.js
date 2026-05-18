@@ -32,8 +32,6 @@ import {
 
 const router = express.Router();
 
-// Public (pre-session) CSRF token for signup/signin flows.
-// Double-submit pattern: token is set in a non-HttpOnly cookie and must be echoed in a header.
 const PUBLIC_CSRF_COOKIE = 'publicCsrfToken';
 const PUBLIC_CSRF_HEADER = 'x-public-csrf-token';
 
@@ -153,10 +151,6 @@ async function getUserWithSubscription(userId) {
   }
 }
 
-/**
- * Prefer full profile from getUserWithSubscription; on DB/query failures (migrations, column drift),
- * fall back to the user row already loaded for auth so sign-in still completes.
- */
 async function resolveEmployerUserForResponse(userId, fallbackUserRow) {
   try {
     const row = await getUserWithSubscription(userId);
@@ -164,7 +158,6 @@ async function resolveEmployerUserForResponse(userId, fallbackUserRow) {
   } catch (e) {
     console.error('getUserWithSubscription failed:', userId, e?.message || e);
   }
-  // Compare as strings — pg often returns bigint id as string; Number() can mismatch for large ids.
   if (fallbackUserRow && String(fallbackUserRow.id) === String(userId)) {
     if (fallbackUserRow.annual_leave_hours_target == null) {
       fallbackUserRow.annual_leave_hours_target = 150;
@@ -181,62 +174,6 @@ async function resolveEmployerUserForResponse(userId, fallbackUserRow) {
   return null;
 }
 
-/**
- * @swagger
- * /auth/signup:
- *   post:
- *     summary: Create a new user account
- *     description: Register a new user with email, password, and name. Returns a session token.
- *     tags: [Authentication]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - email
- *               - password
- *               - name
- *             properties:
- *               email:
- *                 type: string
- *                 format: email
- *                 example: user@example.com
- *               password:
- *                 type: string
- *                 format: password
- *                 minLength: 8
- *                 example: securePassword123
- *               name:
- *                 type: string
- *                 example: John Doe
- *               company:
- *                 type: string
- *                 example: Acme Corp
- *     responses:
- *       201:
- *         description: User created successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                 user:
- *                   $ref: '#/components/schemas/User'
- *                 session:
- *                   $ref: '#/components/schemas/Session'
- *       400:
- *         description: Bad request (missing fields, email already exists, or password too short)
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       500:
- *         description: Internal server error
- */
 router.post(
   '/signup',
   /* createRateLimiter({ limitPerMinute: 5, limitPerHour: 20 }), */ async (req, res) => {
@@ -291,65 +228,6 @@ router.post(
   }
 );
 
-/**
- * @swagger
- * /auth/signin:
- *   post:
- *     summary: Sign in to an existing account
- *     description: Authenticate with email and password. May require 2FA verification. Returns a session token.
- *     tags: [Authentication]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - email
- *               - password
- *             properties:
- *               email:
- *                 type: string
- *                 format: email
- *                 example: user@example.com
- *               password:
- *                 type: string
- *                 format: password
- *                 example: securePassword123
- *     responses:
- *       200:
- *         description: Sign in successful (or 2FA required)
- *         content:
- *           application/json:
- *             schema:
- *               oneOf:
- *                 - type: object
- *                   properties:
- *                     message:
- *                       type: string
- *                       example: Signed in successfully
- *                     user:
- *                       $ref: '#/components/schemas/User'
- *                     session:
- *                       $ref: '#/components/schemas/Session'
- *                 - type: object
- *                   properties:
- *                     message:
- *                       type: string
- *                       example: Verification code sent to your email
- *                     requires2FA:
- *                       type: boolean
- *                       example: true
- *                     requiresEmailCode:
- *                       type: boolean
- *                       example: true
- *                     email:
- *                       type: string
- *       400:
- *         description: Missing email or password
- *       401:
- *         description: Invalid credentials
- */
 router.post(
   '/signin',
   /* createRateLimiter({ limitPerMinute: 5, limitPerHour: 20 }), */ async (req, res) => {
@@ -1012,7 +890,6 @@ router.put('/profile', async (req, res) => {
 
     const { name, email, latitude, longitude, timezone } = req.body;
 
-    // Validate email if provided
     if (email !== undefined && email !== null) {
       if (typeof email !== 'string' || !email.trim()) {
         return res.status(400).json({ error: 'Email cannot be empty' });
@@ -1020,7 +897,6 @@ router.put('/profile', async (req, res) => {
       if (!isValidEmployerEmail(email)) {
         return res.status(400).json({ error: 'Invalid email format' });
       }
-      // Check if email is already taken by another user
       const emailCheck = await pool.query('SELECT id FROM users WHERE email = $1 AND id != $2', [
         email.trim(),
         session.user_id,
@@ -1030,7 +906,6 @@ router.put('/profile', async (req, res) => {
       }
     }
 
-    // Validate latitude/longitude if provided
     if (latitude !== undefined && latitude !== null) {
       if (typeof latitude !== 'number' || latitude < -90 || latitude > 90) {
         return res.status(400).json({ error: 'Invalid latitude. Must be between -90 and 90' });
@@ -1055,7 +930,6 @@ router.put('/profile', async (req, res) => {
       updates.push(`email = $${paramCount++}`);
       const sanitizedEmail = sanitizeString(email);
       values.push(sanitizedEmail);
-      // If email changed, reset verification status
       updates.push(`is_verified = false`);
     }
     if (latitude !== undefined) {
@@ -1100,7 +974,6 @@ router.put('/profile', async (req, res) => {
   } catch (error) {
     console.error('Update profile error:', error);
     if (error.code === '23505') {
-      // Unique constraint violation
       return res.status(400).json({ error: 'Email is already in use by another account' });
     }
     res.status(500).json({ error: 'An error occurred while updating profile' });

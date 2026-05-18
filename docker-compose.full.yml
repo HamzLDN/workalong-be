@@ -122,7 +122,7 @@ services:
     networks:
       - workalong-network
 
-  # Groq assistant — https://ai.workalong.co.uk (see ../workalong-ai/README.md)
+  # AI gateway — https://ai.workalong.co.uk (see ../workalong-ai/README.md)
   workalong-ai:
     build:
       context: ../workalong-ai

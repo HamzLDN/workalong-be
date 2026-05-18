@@ -215,7 +215,6 @@ router.get('/verify-subscription', requireAuth, async (req, res) => {
   }
 });
 
-// Force re-sync subscription status from Stripe — fixes cases where DB is out of sync
 router.post('/sync-subscription', requireAuth, async (req, res) => {
   try {
     const { verifySubscriptionStatus } = await import('../services/stripe.js');

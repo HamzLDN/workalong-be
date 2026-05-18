@@ -4,7 +4,6 @@ import { requireSubscription } from '../middleware/obfuscation.js';
 
 const router = express.Router();
 
-// All fraud endpoints require subscription
 router.use(requireAuth);
 router.use(requireSubscription);
 

@@ -37,58 +37,6 @@ import { mergePermissions } from '../lib/managerPermissions.js';
 
 const router = express.Router();
 
-/**
- * @swagger
- * /shifts:
- *   get:
- *     summary: Get all shifts
- *     description: Retrieve a list of shifts. Supports filtering by date range, staff ID, and status. Can be accessed via session token, API key, or staff authentication.
- *     tags: [Shifts]
- *     security:
- *       - bearerAuth: []
- *       - cookieAuth: []
- *       - apiKeyAuth: []
- *     parameters:
- *       - in: query
- *         name: startDate
- *         schema:
- *           type: string
- *           format: date
- *         description: Filter shifts from this date (YYYY-MM-DD)
- *       - in: query
- *         name: endDate
- *         schema:
- *           type: string
- *           format: date
- *         description: Filter shifts until this date (YYYY-MM-DD)
- *       - in: query
- *         name: staffId
- *         schema:
- *           type: integer
- *         description: Filter shifts for a specific staff member
- *       - in: query
- *         name: status
- *         schema:
- *           type: string
- *           enum: [scheduled, completed, approved, cancelled, late, unattended]
- *         description: Filter shifts by status
- *     responses:
- *       200:
- *         description: List of shifts
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 shifts:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/Shift'
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Server error
- */
 router.get('/shifts', async (req, res) => {
   try {
     const apiKey =
@@ -135,8 +83,6 @@ router.get('/shifts', async (req, res) => {
       if (!isNaN(ts)) filters.clientNow = ts;
     }
 
-    // Staff browser/API sessions must not list or filter the whole company roster like an employer user.
-    // (Otherwise any employee could pass ?staffId= and read others' schedules; managers would see everyone.)
     if (req.staff && !req.apiKey) {
       const role = req.staff.accessRole || 'employee';
       if (role === 'employee') {
@@ -174,7 +120,6 @@ router.get('/shifts', async (req, res) => {
     if (res.headersSent) return;
 
     const payload = { shifts };
-    // Do not use ETag/304 for roster data — shifts change frequently; 304 + empty body breaks fetch clients.
     res.set('Cache-Control', 'private, no-store, no-cache, must-revalidate');
     res.set('Pragma', 'no-cache');
     res.set('X-Shifts-ClientNow', filters.clientNow ? 'yes' : 'no');
@@ -247,7 +192,6 @@ router.post('/shifts', requireAuth, async (req, res) => {
         conflictingShifts: conflicts,
       });
     }
-    // Sanitize string inputs to remove null bytes
     const shift = await createShift(
       req.userId,
       {

@@ -7,7 +7,6 @@ import { generateStoredCsrfToken } from '../lib/csrfSession.js';
 export async function createUser(email, password, name, company = null) {
   const passwordHash = await bcrypt.hash(password, 10);
 
-  // Sanitize string inputs to remove null bytes
   const sanitizedEmail = sanitizeString(email);
   const sanitizedName = sanitizeString(name);
 
@@ -27,7 +26,6 @@ export async function findUserByEmail(email) {
   return result.rows[0];
 }
 
-// Hash password
 export async function hashPassword(password) {
   return await bcrypt.hash(password, 10);
 }
@@ -48,7 +46,6 @@ export async function createSession(userId, ipAddress, userAgent) {
       [sessionId, userId, expiresAt, ipAddress, userAgent, csrfToken]
     );
   } catch (err) {
-    // Older DBs before add-session-csrf-token migration; CSRF layer falls back to legacy token when NULL.
     const missingCsrf =
       err?.code === '42703' &&
       String(err.message || '')
@@ -114,13 +111,11 @@ export async function verifyLoginCode(userId, code) {
     return null;
   }
 
-  // Mark code as used
   await pool.query('UPDATE login_codes SET used_at = NOW() WHERE id = $1', [result.rows[0].id]);
 
   return result.rows[0];
 }
 
-// Create password reset token
 export async function createPasswordResetToken(email) {
   const user = await findUserByEmail(email);
   if (!user) {
@@ -130,7 +125,6 @@ export async function createPasswordResetToken(email) {
   const token = uuidv4();
   const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
-  // Delete any existing tokens for this user
   await pool.query('DELETE FROM password_reset_tokens WHERE user_id = $1', [user.id]);
 
   const result = await pool.query(
@@ -146,7 +140,6 @@ export async function createPasswordResetToken(email) {
   };
 }
 
-// Verify password reset token
 export async function verifyPasswordResetToken(token) {
   const result = await pool.query(
     `SELECT prt.*, u.id as user_id, u.email, u.name
@@ -159,7 +152,6 @@ export async function verifyPasswordResetToken(token) {
   return result.rows[0] || null;
 }
 
-// Reset password with token
 export async function resetPasswordWithToken(token, newPassword) {
   const tokenData = await verifyPasswordResetToken(token);
   if (!tokenData) {
@@ -168,13 +160,11 @@ export async function resetPasswordWithToken(token, newPassword) {
 
   const passwordHash = await bcrypt.hash(newPassword, 10);
 
-  // Update password
   await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [
     passwordHash,
     tokenData.user_id,
   ]);
 
-  // Mark token as used
   await pool.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1', [
     tokenData.id,
   ]);

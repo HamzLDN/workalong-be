@@ -6,14 +6,9 @@ import { pool } from '../lib/db.js';
 const router = express.Router();
 const stripe = new Stripe(config.stripe.secretKey);
 
-// Import standard auth middleware
 import { requireAuth } from '../middleware/auth.js';
 
-// ============================================
-// PAYMENT SCHEDULE ENDPOINTS
-// ============================================
 
-// GET payment schedule for user
 router.get('/schedule', requireAuth, async (req, res) => {
   try {
     const result = await pool.query(
@@ -32,7 +27,6 @@ router.get('/schedule', requireAuth, async (req, res) => {
   }
 });
 
-// POST create or update payment schedule
 router.post('/schedule', requireAuth, async (req, res) => {
   try {
     const { scheduleType, paymentDay, customSchedule } = req.body;
@@ -41,10 +35,8 @@ router.post('/schedule', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Valid schedule type required' });
     }
 
-    // Calculate next payment date
     const nextPaymentDate = calculateNextPaymentDate(scheduleType, paymentDay);
 
-    // Check if schedule already exists
     const existingSchedule = await pool.query(
       'SELECT id FROM payment_schedules WHERE user_id = $1',
       [req.userId]
@@ -52,7 +44,6 @@ router.post('/schedule', requireAuth, async (req, res) => {
 
     let result;
     if (existingSchedule.rows.length > 0) {
-      // Update existing schedule
       result = await pool.query(
         `UPDATE payment_schedules 
          SET schedule_type = $1, payment_day = $2, custom_schedule = $3, 
@@ -62,7 +53,6 @@ router.post('/schedule', requireAuth, async (req, res) => {
         [scheduleType, paymentDay, customSchedule, nextPaymentDate, req.userId]
       );
     } else {
-      // Create new schedule
       result = await pool.query(
         `INSERT INTO payment_schedules (user_id, schedule_type, payment_day, custom_schedule, next_payment_date)
          VALUES ($1, $2, $3, $4, $5)
@@ -81,7 +71,6 @@ router.post('/schedule', requireAuth, async (req, res) => {
   }
 });
 
-// DELETE deactivate payment schedule
 router.delete('/schedule', requireAuth, async (req, res) => {
   try {
     await pool.query('UPDATE payment_schedules SET is_active = false WHERE user_id = $1', [
@@ -95,11 +84,7 @@ router.delete('/schedule', requireAuth, async (req, res) => {
   }
 });
 
-// ============================================
-// STAFF PAYMENT DETAILS ENDPOINTS
-// ============================================
 
-// GET payment details for a staff member
 router.get('/staff/:staffId/details', requireAuth, async (req, res) => {
   try {
     const { staffId } = req.params;
@@ -116,7 +101,6 @@ router.get('/staff/:staffId/details', requireAuth, async (req, res) => {
       return res.json({ paymentDetails: null });
     }
 
-    // Don't send sensitive info to frontend
     const details = result.rows[0];
     delete details.account_number;
     delete details.iban;
@@ -129,14 +113,12 @@ router.get('/staff/:staffId/details', requireAuth, async (req, res) => {
   }
 });
 
-// POST add or update staff payment details
 router.post('/staff/:staffId/details', requireAuth, async (req, res) => {
   try {
     const { staffId } = req.params;
     const { paymentMethod, accountHolderName, bankName, accountNumber, sortCode, iban, swiftBic } =
       req.body;
 
-    // Verify staff belongs to user
     const staffCheck = await pool.query('SELECT id FROM staff WHERE id = $1 AND user_id = $2', [
       staffId,
       req.userId,
@@ -146,7 +128,6 @@ router.post('/staff/:staffId/details', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Staff member not found' });
     }
 
-    // Check if payment details exist
     const existing = await pool.query(
       'SELECT id FROM staff_payment_details WHERE staff_id = $1 AND user_id = $2',
       [staffId, req.userId]
@@ -154,7 +135,6 @@ router.post('/staff/:staffId/details', requireAuth, async (req, res) => {
 
     let result;
     if (existing.rows.length > 0) {
-      // Update existing
       result = await pool.query(
         `UPDATE staff_payment_details 
          SET payment_method = $1, account_holder_name = $2, bank_name = $3,
@@ -175,7 +155,6 @@ router.post('/staff/:staffId/details', requireAuth, async (req, res) => {
         ]
       );
     } else {
-      // Create new
       result = await pool.query(
         `INSERT INTO staff_payment_details 
          (staff_id, user_id, payment_method, account_holder_name, bank_name,
@@ -206,17 +185,12 @@ router.post('/staff/:staffId/details', requireAuth, async (req, res) => {
   }
 });
 
-// ============================================
-// PAYMENT PROCESSING ENDPOINTS
-// ============================================
 
-// POST process manual payment for a staff member
 router.post('/process/:staffId', requireAuth, async (req, res) => {
   try {
     const { staffId } = req.params;
     const { periodStart, periodEnd, amount: bodyAmount, notes } = req.body;
 
-    // Get staff details
     const staffResult = await pool.query(
       `SELECT s.*, spd.payment_method, spd.stripe_account_id, spd.is_verified
        FROM staff s
@@ -235,7 +209,6 @@ router.post('/process/:staffId', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Payment details not set up for this staff member' });
     }
 
-    // Payroll = only actual clocked time for this staff in the period (deduped by shift to avoid double-counting)
     let amount = bodyAmount;
     if (periodStart && periodEnd) {
       const payrollResult = await pool.query(
@@ -274,7 +247,6 @@ router.post('/process/:staffId', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'No clocked hours in this period for this staff' });
     }
 
-    // Create payment history record
     const paymentResult = await pool.query(
       `INSERT INTO payment_history 
        (user_id, staff_id, amount, payment_period_start, payment_period_end,
@@ -286,8 +258,6 @@ router.post('/process/:staffId', requireAuth, async (req, res) => {
 
     const payment = paymentResult.rows[0];
 
-    // For demo purposes, we'll mark as processing
-    // In production, you would integrate with actual payment providers
     await pool.query(
       `UPDATE payment_history 
        SET payment_status = 'processing', processed_at = CURRENT_TIMESTAMP
@@ -295,7 +265,6 @@ router.post('/process/:staffId', requireAuth, async (req, res) => {
       [payment.id]
     );
 
-    // Simulate successful payment (in production, handle webhooks/callbacks)
     setTimeout(async () => {
       try {
         await pool.query(
@@ -322,12 +291,10 @@ router.post('/process/:staffId', requireAuth, async (req, res) => {
   }
 });
 
-// POST process automatic payments for all staff
 router.post('/process-all', requireAuth, async (req, res) => {
   try {
     const { periodStart, periodEnd } = req.body;
 
-    // Payroll: ONLY actual clock-in to clock-out (same as monthlyPayroll)
     const staffResult = await pool.query(
       `SELECT s.*, spd.payment_method, spd.is_verified, spd.is_active as payment_active,
               te.hours_worked, te.total_cost
@@ -378,7 +345,6 @@ router.post('/process-all', requireAuth, async (req, res) => {
         continue;
       }
 
-      // Create payment record
       const paymentResult = await pool.query(
         `INSERT INTO payment_history 
          (user_id, staff_id, amount, hours_worked, payment_period_start, payment_period_end,
@@ -401,7 +367,6 @@ router.post('/process-all', requireAuth, async (req, res) => {
       staffPaid++;
     }
 
-    // Log the batch payment
     const schedule = await pool.query(
       'SELECT id FROM payment_schedules WHERE user_id = $1 AND is_active = true',
       [req.userId]
@@ -428,7 +393,6 @@ router.post('/process-all', requireAuth, async (req, res) => {
   }
 });
 
-// GET payment history
 router.get('/history', requireAuth, async (req, res) => {
   try {
     const { status, staffId, limit = 50, offset = 0 } = req.query;
@@ -459,7 +423,6 @@ router.get('/history', requireAuth, async (req, res) => {
 
     const result = await pool.query(query, params);
 
-    // Get total count
     let countQuery = 'SELECT COUNT(*) FROM payment_history WHERE user_id = $1';
     const countParams = [req.userId];
     if (status) countQuery += ` AND payment_status = $2`;
@@ -488,7 +451,6 @@ router.get('/history', requireAuth, async (req, res) => {
   }
 });
 
-// GET payment statistics
 router.get('/stats', requireAuth, async (req, res) => {
   try {
     const stats = await pool.query(
@@ -512,9 +474,6 @@ router.get('/stats', requireAuth, async (req, res) => {
   }
 });
 
-// ============================================
-// HELPER FUNCTIONS
-// ============================================
 
 function calculateNextPaymentDate(scheduleType, paymentDay) {
   const today = new Date();

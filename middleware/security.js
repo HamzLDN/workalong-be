@@ -84,7 +84,6 @@ export async function requireApiKey(req, res, next) {
       }
     }
 
-    // Set user context
     req.userId = keyData.user_id;
     req.user = {
       id: keyData.user_id,
@@ -130,10 +129,6 @@ export async function requireWhitelistedIp(req, res, next) {
 const SESSION_UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-/**
- * Rate-limit bucket: prefer API key hash, then browser session (cookie / Bearer),
- * then staff session cookie, then IP. Avoids one NAT IP sharing one bucket for all users.
- */
 export function defaultRateLimitIdentifier(req) {
   const headerKey =
     req.headers['x-api-key'] ||
@@ -304,7 +299,6 @@ export async function requireSignedRequest(req, res, next) {
       });
     }
 
-    // Get signing key
     const signingKeyData = await getSigningKeyByHash(signingKeyId);
 
     if (!signingKeyData) {
@@ -360,7 +354,6 @@ export async function requestFingerprinting(req, res, next) {
     const fingerprint = generateRequestFingerprint(req);
     req.fingerprint = fingerprint;
 
-    // Detect suspicious activity
     const suspicious = await detectSuspiciousActivity(
       fingerprint,
       req.ip || req.connection.remoteAddress,
@@ -382,8 +375,6 @@ export async function requestFingerprinting(req, res, next) {
         severity: 'error',
       });
 
-      // Optionally block or rate limit more aggressively
-      // For now, just log it
     }
 
     next();
@@ -409,7 +400,6 @@ export async function requireApiKeyOnly(req, res, next) {
     }
 
     if (!apiKey.startsWith('wak_')) {
-      // Check if it's a session token being misused
       if (
         apiKey.length === 36 &&
         apiKey.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
@@ -447,7 +437,6 @@ export async function requireApiKeyOnly(req, res, next) {
       return res.status(401).json({ error: 'Invalid or expired API key' });
     }
 
-    // Check IP whitelist if configured
     if (keyData.allowed_ips && keyData.allowed_ips.length > 0) {
       const clientIp = req.ip || req.connection.remoteAddress;
       const isAllowed = keyData.allowed_ips.some((allowedIp) => {
@@ -494,7 +483,6 @@ export async function requireApiKeyOnly(req, res, next) {
       }
     }
 
-    // Set user context
     req.userId = keyData.user_id;
     req.user = {
       id: keyData.user_id,

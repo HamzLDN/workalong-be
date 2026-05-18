@@ -14,7 +14,6 @@ async function hasMultiLocation(userId) {
     );
     if (!r.rows[0]) return false;
     if (r.rows[0].multi_location_enabled === true) return true;
-    // Fallback: check Stripe metadata (fixes users who upgraded but DB wasn't synced)
     const sub = await getSubscriptionDetails(userId);
     if (!sub || sub.metadata?.multiLocation !== '1') return false;
     await pool.query('UPDATE users SET multi_location_enabled = TRUE WHERE id = $1', [userId]);

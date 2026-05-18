@@ -1,7 +1,6 @@
 import { pool } from '../lib/db.js';
 import { calculateEndTime } from './shifts.js';
 
-// Create a shift swap request
 export async function createSwapRequest(
   requesterStaffId,
   requesterShiftId,
@@ -13,7 +12,6 @@ export async function createSwapRequest(
   try {
     await client.query('BEGIN');
 
-    // Verify requester owns the requester shift
     const requesterShiftResult = await client.query(
       'SELECT id, staff_id, user_id, shift_date, status FROM shifts WHERE id = $1',
       [requesterShiftId]
@@ -32,7 +30,6 @@ export async function createSwapRequest(
       throw new Error('Cannot swap a cancelled shift');
     }
 
-    // Verify requested shift exists and get its details
     const requestedShiftResult = await client.query(
       'SELECT id, staff_id, user_id, shift_date, status FROM shifts WHERE id = $1',
       [requestedShiftId]
@@ -45,12 +42,10 @@ export async function createSwapRequest(
     const requestedShift = requestedShiftResult.rows[0];
     const requestedStaffId = requestedShift.staff_id;
 
-    // Verify both shifts belong to the same company
     if (requesterShift.user_id !== requestedShift.user_id) {
       throw new Error('Shifts must belong to the same company');
     }
 
-    // Cannot swap with yourself
     if (requesterStaffId === requestedStaffId) {
       throw new Error('Cannot swap shift with yourself');
     }
@@ -59,7 +54,6 @@ export async function createSwapRequest(
       throw new Error('Cannot swap with a cancelled shift');
     }
 
-    // Check if there's already a pending swap request between these two shifts
     const existingRequest = await client.query(
       `SELECT id FROM shift_swap_requests 
        WHERE ((requester_shift_id = $1 AND requested_shift_id = $2) 
@@ -72,7 +66,6 @@ export async function createSwapRequest(
       throw new Error('A pending swap request already exists for these shifts');
     }
 
-    // Create the swap request
     const result = await client.query(
       `INSERT INTO shift_swap_requests 
        (requester_shift_id, requested_shift_id, requester_staff_id, requested_staff_id, message, status)
@@ -91,7 +84,6 @@ export async function createSwapRequest(
   }
 }
 
-// Get swap requests for a staff member
 export async function getSwapRequestsForStaff(staffId, filters = {}) {
   let query = `
     SELECT 
@@ -131,7 +123,6 @@ export async function getSwapRequestsForStaff(staffId, filters = {}) {
 
   const result = await pool.query(query, params);
 
-  // Calculate end_time from hours for each shift
   return result.rows.map((row) => {
     if (row.requester_start_time && row.requester_hours) {
       row.requester_end_time = calculateEndTime(
@@ -149,7 +140,6 @@ export async function getSwapRequestsForStaff(staffId, filters = {}) {
   });
 }
 
-// Get swap requests for a company (user)
 export async function getSwapRequestsForCompany(userId, filters = {}) {
   let query = `
     SELECT 
@@ -189,7 +179,6 @@ export async function getSwapRequestsForCompany(userId, filters = {}) {
 
   const result = await pool.query(query, params);
 
-  // Calculate end_time from hours for each shift
   return result.rows.map((row) => {
     if (row.requester_start_time && row.requester_hours) {
       row.requester_end_time = calculateEndTime(
@@ -207,14 +196,12 @@ export async function getSwapRequestsForCompany(userId, filters = {}) {
   });
 }
 
-// Accept a swap request
 export async function acceptSwapRequest(swapRequestId, staffId) {
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
 
-    // Get the swap request
     const swapRequestResult = await client.query(
       `SELECT ssr.*, rs.user_id, rs.staff_id as requester_shift_staff_id, 
               rqs.staff_id as requested_shift_staff_id
@@ -231,17 +218,14 @@ export async function acceptSwapRequest(swapRequestId, staffId) {
 
     const swapRequest = swapRequestResult.rows[0];
 
-    // Verify the staff member is the requested staff (the one being asked)
     if (swapRequest.requested_staff_id !== staffId) {
       throw new Error('You can only accept swap requests directed to you');
     }
 
-    // Verify status is pending
     if (swapRequest.status !== 'pending') {
       throw new Error(`Cannot accept a swap request with status: ${swapRequest.status}`);
     }
 
-    // Verify both shifts still exist and are not cancelled
     const requesterShiftCheck = await client.query('SELECT status FROM shifts WHERE id = $1', [
       swapRequest.requester_shift_id,
     ]);
@@ -261,7 +245,6 @@ export async function acceptSwapRequest(swapRequestId, staffId) {
       throw new Error('Cannot accept swap for cancelled shifts');
     }
 
-    // Perform the swap: update staff_id on both shifts
     await client.query('UPDATE shifts SET staff_id = $1, updated_at = NOW() WHERE id = $2', [
       swapRequest.requested_staff_id,
       swapRequest.requester_shift_id,
@@ -272,7 +255,6 @@ export async function acceptSwapRequest(swapRequestId, staffId) {
       swapRequest.requested_shift_id,
     ]);
 
-    // Update swap request status
     await client.query(
       `UPDATE shift_swap_requests 
        SET status = 'accepted', resolved_at = NOW() 
@@ -282,7 +264,6 @@ export async function acceptSwapRequest(swapRequestId, staffId) {
 
     await client.query('COMMIT');
 
-    // Return updated swap request
     const updatedResult = await client.query('SELECT * FROM shift_swap_requests WHERE id = $1', [
       swapRequestId,
     ]);
@@ -296,7 +277,6 @@ export async function acceptSwapRequest(swapRequestId, staffId) {
   }
 }
 
-// Reject a swap request
 export async function rejectSwapRequest(swapRequestId, staffId) {
   const result = await pool.query(
     `UPDATE shift_swap_requests 
@@ -315,7 +295,6 @@ export async function rejectSwapRequest(swapRequestId, staffId) {
   return result.rows[0];
 }
 
-// Cancel a swap request (by requester)
 export async function cancelSwapRequest(swapRequestId, staffId) {
   const result = await pool.query(
     `UPDATE shift_swap_requests 
@@ -334,7 +313,6 @@ export async function cancelSwapRequest(swapRequestId, staffId) {
   return result.rows[0];
 }
 
-// Get a single swap request by ID
 export async function getSwapRequestById(swapRequestId, staffId = null, userId = null) {
   let query = `
     SELECT 
@@ -379,7 +357,6 @@ export async function getSwapRequestById(swapRequestId, staffId = null, userId =
 
   const row = result.rows[0];
 
-  // Calculate end_time from hours for each shift
   if (row.requester_start_time && row.requester_hours) {
     row.requester_end_time = calculateEndTime(
       row.requester_start_time,

@@ -19,10 +19,6 @@ import { shiftScheduledWindowTimestamps } from '../services/shifts.js';
 const router = express.Router();
 const isDev = process.env.NODE_ENV !== 'production';
 
-/**
- * Fixed SELECT fragments for staff display names — only these literals are ever interpolated into SQL.
- * (User input always uses parameterized $1, $2, … — never string-concatenated into the query text.)
- */
 const SQL_STAFF_NAME_COLS_WITH_LASTNAME = 's.name as staff_name, s.lastname as last_name';
 const SQL_STAFF_NAME_COLS_NAME_ONLY = 's.name as staff_name';
 
@@ -547,15 +543,10 @@ router.post('/clock-action', async (req, res) => {
         tzRaw !== undefined && tzRaw !== null && tzRaw !== '' ? parseInt(String(tzRaw), 10) : NaN;
       const timezoneOffset = !Number.isNaN(tzParsed) ? tzParsed : null;
       const today = now.toISOString().split('T')[0];
-      // Only enforce geofence when valid coordinates are provided (skip for desktop/kiosk without location)
       const hasValidLocation = typeof latitude === 'number' && typeof longitude === 'number';
       if (hasValidLocation) {
         const geofenceResult = await checkGeofence(staffId, latitude, longitude);
         if (!geofenceResult.allowed) {
-          console.log('[clock-action] 403: Geofence failed (clock-in)', {
-            staffId,
-            distance: geofenceResult.distance,
-          });
           return res.status(403).json({
             error: geofenceResult.error,
             code: 'GEOFENCE_FAILED',
@@ -577,9 +568,6 @@ router.post('/clock-action', async (req, res) => {
       if (existingEntry.rows.length > 0) {
         return res.status(400).json({ error: 'Already clocked in today. Please clock out first.' });
       }
-      // Primary filter: legacy Postgres window (same as years of production). Keeps DB/session semantics.
-      // When the client sends timezoneOffset (like GET /shifts), prefer the first SQL-eligible shift that
-      // also fits shiftScheduledWindowTimestamps; if none do, fall back to the first SQL row (no false reject).
       const shiftSqlEligible = await pool.query(
         `SELECT s.id, s.shift_date::text AS shift_date, s.start_time, s.hours, s.clocked_in_time
          FROM shifts s
@@ -626,8 +614,6 @@ router.post('/clock-action', async (req, res) => {
       }
 
       const shiftId = matchedShiftRow.id;
-      // Prevent duplicate time entries: delete any existing open entries for this staff/date/shift
-      // (same logic as staff API clock-in; avoids double-counting hours when using both link + app)
       const previousEntries = await pool.query(
         `SELECT id FROM time_entries WHERE staff_id = $1 AND date = $2 AND shift_id = $3 AND clock_out_time IS NULL ORDER BY clock_in_time DESC`,
         [staffId, today, shiftId]
@@ -666,12 +652,6 @@ router.post('/clock-action', async (req, res) => {
         const geofenceResult = await checkGeofence(staffId, latitude, longitude);
         if (!geofenceResult.allowed) {
           geofenceNote = geofenceResult.error || 'Clocked out outside work area';
-          console.log('[clock-action] Clock-out geofence failed, allowing with note:', {
-            staffId,
-            distance: geofenceResult.distance,
-            radius: geofenceResult.radius,
-            error: geofenceResult.error,
-          });
         }
       }
       const shiftResult = await pool.query(
@@ -680,7 +660,6 @@ router.post('/clock-action', async (req, res) => {
          ORDER BY clocked_in_time DESC`,
         [staffId]
       );
-      // Fallback: if no shift found (deleted by manager, etc), clock out via time_entry
       if (shiftResult.rows.length === 0) {
         const entryResult = await pool.query(
           `SELECT id, clock_in_time, date FROM time_entries
@@ -696,13 +675,11 @@ router.post('/clock-action', async (req, res) => {
           const fallbackNote = geofenceNote
             ? `Shift was removed by manager; clocked out via fallback. ${geofenceNote}`
             : 'Shift was removed by manager; clocked out via fallback.';
-          // Close only this entry (and any other open entries for this staff to prevent multiple clock-outs)
           await pool.query(
             `UPDATE time_entries SET clock_out_time = $1, hours_worked = $2,
              notes = CASE WHEN notes IS NOT NULL AND TRIM(notes) != '' THEN notes || E'\n' || $3 ELSE $3 END WHERE id = $4`,
             [now, totalHoursWorked, fallbackNote, entry.id]
           );
-          // Close any other open entries for this staff on the SAME date only
           await pool.query(
             `UPDATE time_entries SET clock_out_time = $1, hours_worked = EXTRACT(EPOCH FROM ($1 - clock_in_time))/3600
              WHERE staff_id = $2 AND id != $3 AND date = $4 AND clock_in_time IS NOT NULL AND clock_out_time IS NULL`,
@@ -727,7 +704,6 @@ router.post('/clock-action', async (req, res) => {
       const clockInTime = new Date(shift.clocked_in_time);
       const clockOutTime = now;
 
-      // Compute scheduled end: shift_date + start_time + hours
       const sd = new Date(shift.shift_date);
       const [startH, startM] = (shift.start_time || '00:00').toString().split(':').map(Number);
       const scheduledEnd = new Date(sd);
@@ -762,7 +738,6 @@ router.post('/clock-action', async (req, res) => {
             [clockOutTime, totalHoursWorked, notes, entryResult.rows[0].id]
           );
         }
-        // Close other open entries for this staff - today and yesterday only (covers overnight; avoids overwriting entries from 2+ days ago)
         await pool.query(
           `UPDATE time_entries SET clock_out_time = $1, hours_worked = EXTRACT(EPOCH FROM ($1::timestamptz - clock_in_time))/3600
            WHERE staff_id = $2 AND date >= $3::date - INTERVAL '1 day' AND date <= $3::date AND clock_in_time IS NOT NULL AND clock_out_time IS NULL`,
@@ -806,7 +781,6 @@ router.post('/clock-action', async (req, res) => {
           );
         }
       }
-      // Close other open entries for this staff - today and yesterday only (covers overnight; avoids overwriting entries from 2+ days ago)
       await pool.query(
         `UPDATE time_entries SET clock_out_time = $1, hours_worked = EXTRACT(EPOCH FROM ($1::timestamptz - clock_in_time))/3600
          WHERE staff_id = $2 AND date >= $3::date - INTERVAL '1 day' AND date <= $3::date AND clock_in_time IS NOT NULL AND clock_out_time IS NULL`,
@@ -852,12 +826,10 @@ router.get('/status/:linkToken', async (req, res) => {
       return res.status(404).json({ error: 'Invalid or inactive link' });
     const link = linkResult.rows[0];
     if (link.device_fingerprint && link.device_fingerprint !== deviceFingerprint) {
-      console.log('[clock-action] 403: Device fingerprint mismatch (status)');
       return res
         .status(403)
         .json({ error: 'Device fingerprint mismatch', code: 'DEVICE_MISMATCH' });
     }
-    // Lookup staff by: 1) clockin_id, 2) last 6 chars/digits of username, 3) exact username
     let staffResult = await pool.query(
       `SELECT s.id as staff_id FROM staff s WHERE s.user_id = $1 AND s.clockin_id = $2`,
       [link.user_id, code]
@@ -884,7 +856,6 @@ router.get('/status/:linkToken', async (req, res) => {
       );
     }
     if (staffResult.rows.length === 0) {
-      console.log('[clock-action] 403: Invalid clock-in code (status)', { code, raw });
       return res.status(403).json({ error: 'Invalid clock-in code', code: 'STAFF_NOT_FOUND' });
     }
     const staffId = staffResult.rows[0].staff_id;

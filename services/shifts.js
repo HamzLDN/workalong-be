@@ -11,14 +11,9 @@ function coercePositiveIntId(value) {
   return n;
 }
 
-/**
- * Normalise Postgres TIME / pg driver variants → `HH:mm:ss` for end-time modulo math.
- * Returns null only when nothing parseable remains (caller should skip auto-status updates).
- */
 function coerceShiftStartTimeString(raw) {
   if (raw == null || raw === '') return null;
   if (raw instanceof Date && !Number.isNaN(raw.getTime())) {
-    // pg sometimes represents TIME columns as JS Date anchored at 1970-01-01 in UTC.
     const h = raw.getUTCHours();
     const m = raw.getUTCMinutes();
     const s = raw.getUTCSeconds();
@@ -26,7 +21,6 @@ function coerceShiftStartTimeString(raw) {
   }
   const str = typeof raw === 'string' ? raw.trim() : String(raw).trim();
   if (!str) return null;
-  // ISO datetime fragments (e.g. "1970-01-01T09:05:06.789Z"), or bare "HH:mm[:ss]".
   let m = str.match(/T(\d{1,2}):(\d{2})(?::(\d{2}))?\b/);
   if (!m) m = str.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\b/);
   if (!m) return null;
@@ -66,10 +60,6 @@ export function calculateEndTime(startTime, hours) {
 /** Portal / schedule use ~3 minutes beyond scheduled as overtime threshold (hours). */
 const OT_EPS_HOURS = 3 / 60;
 
-/**
- * Label whether overtime beyond scheduled hours is paid after approvals (for roster UI).
- * @returns {'awaiting_head_office_ot'|'scheduled_only_no_ot_pay'|'overtime_accepted_payroll'|null}
- */
 export function deriveClockPeriodOvertimePayrollHint(teRow) {
   const notes = String(teRow.notes ?? '');
   const scheduledOnlyNote =
@@ -107,8 +97,6 @@ export function deriveClockPeriodOvertimePayrollHint(teRow) {
 export function shiftScheduledWindowTimestamps(row, tzOffset) {
   let shiftDateStr;
   if (row.shift_date instanceof Date && !Number.isNaN(row.shift_date.getTime())) {
-    // node-pg may represent Postgres DATE such that UTC-midnight from toISOString() is the wrong calendar day.
-    // en-CA yields YYYY-MM-DD in local calendar for that instant (matches kiosk wall dates).
     shiftDateStr = row.shift_date.toLocaleDateString('en-CA');
   } else if (typeof row.shift_date === 'string') {
     shiftDateStr = row.shift_date.split('T')[0];
@@ -174,10 +162,6 @@ export function shiftScheduledWindowTimestamps(row, tzOffset) {
   return { startMs: shiftStartTimestamp, endMs: shiftEndTimestamp };
 }
 
-/**
- * Promote shifts that still say scheduled/late but already have closed clock periods on time_entries
- * and the roster window has passed — keeps UI aligned when TE was updated without touching shifts.
- */
 async function syncScheduledShiftsWithCompletedClockEntries(
   rows,
   clockPeriodsByShift,
@@ -374,9 +358,6 @@ export async function getShifts(userId, filters = {}) {
   const updatePromises = [];
   const tzOffset = filters.timezoneOffset != null ? parseInt(filters.timezoneOffset, 10) : null;
 
-  console.log(
-    `[getShifts] Processing ${result.rows.length} shifts (clientNow: ${!!filters.clientNow}, tzOffset: ${tzOffset})`
-  );
 
   const shiftIdsAll = result.rows.map((r) => r.id);
   let clockPeriodsByShift = {};
@@ -432,11 +413,7 @@ export async function getShifts(userId, filters = {}) {
     if (row.status === 'approved' || row.approved_at) {
       continue;
     }
-    // Correct wrongly marked 'completed' shifts that have no clock-in (e.g. 24hr shift bug)
     if (row.status === 'completed' && !row.clocked_in_time) {
-      console.log(
-        `[getShifts] Correcting shift ${row.id}: status=completed but no clock-in → unattended`
-      );
       updatePromises.push(
         pool
           .query(`UPDATE shifts SET status = 'unattended', updated_at = NOW() WHERE id = $1`, [
@@ -453,9 +430,6 @@ export async function getShifts(userId, filters = {}) {
     }
 
     if (row.clocked_in_time && !row.clocked_out_time) {
-      console.log(
-        `[getShifts] Skipping auto-update for shift ${row.id} - currently clocked in (overnight shift in progress)`
-      );
       continue;
     }
 
@@ -472,12 +446,8 @@ export async function getShifts(userId, filters = {}) {
         if (hasClosedClockEntries) {
           continue;
         }
-        // No clock-in = no one attended → always unattended (never completed)
         const newStatus = 'unattended';
 
-        console.log(
-          `[getShifts] Auto-marking shift ${row.id} as ${newStatus} (ended at ${new Date(shiftEndTimestamp).toISOString()}, now is ${now.toISOString()}, no clock-in recorded)`
-        );
         updatePromises.push(
           pool
             .query(
@@ -486,11 +456,7 @@ export async function getShifts(userId, filters = {}) {
             )
             .then((result) => {
               if (result.rowCount > 0) {
-                console.log(`[getShifts] Successfully marked shift ${row.id} as ${newStatus}`);
               } else {
-                console.log(
-                  `[getShifts] Shift ${row.id} was not updated (may have been updated concurrently)`
-                );
               }
             })
             .catch((err) => {
@@ -503,9 +469,6 @@ export async function getShifts(userId, filters = {}) {
         nowTimestamp < shiftEndTimestamp &&
         !hasClockIn
       ) {
-        console.log(
-          `[getShifts] Auto-marking shift ${row.id} as late (started at ${new Date(shiftStartTimestamp).toISOString()}, now is ${now.toISOString()}, no clock-in)`
-        );
         updatePromises.push(
           pool
             .query(
@@ -514,11 +477,7 @@ export async function getShifts(userId, filters = {}) {
             )
             .then((result) => {
               if (result.rowCount > 0) {
-                console.log(`[getShifts] Successfully marked shift ${row.id} as late`);
               } else {
-                console.log(
-                  `[getShifts] Shift ${row.id} was not updated to late (may have been updated concurrently)`
-                );
               }
             })
             .catch((err) => {
@@ -533,13 +492,9 @@ export async function getShifts(userId, filters = {}) {
   }
 
   if (updatePromises.length > 0) {
-    console.log(
-      `[getShifts] Executing ${updatePromises.length} status update(s) before returning data`
-    );
     await Promise.all(updatePromises).catch((err) => {
       console.error('[getShifts] Error auto-updating shift statuses:', err);
     });
-    console.log(`[getShifts] All status updates completed`);
   }
 
   if (updatePromises.length > 0) {
@@ -586,9 +541,7 @@ export async function getShifts(userId, filters = {}) {
     cleaned.actual_hours_worked =
       shift.actual_hours_worked != null ? parseFloat(shift.actual_hours_worked) : 0;
     cleaned.clock_periods = clockPeriodsByShift[shift.id] || [];
-    // Normalize shift_date to YYYY-MM-DD format (PostgreSQL DATE returns as Date object or string)
     if (shift.shift_date instanceof Date) {
-      // Convert Date object to YYYY-MM-DD string using local timezone
       const year = shift.shift_date.getFullYear();
       const month = String(shift.shift_date.getMonth() + 1).padStart(2, '0');
       const day = String(shift.shift_date.getDate()).padStart(2, '0');
@@ -669,7 +622,6 @@ export async function createShift(userId, data, options = {}) {
     throw new Error(INVALID_STAFF_ID);
   }
 
-  // Verify that the staff member belongs to this user
   const staffCheck = await pool.query('SELECT id FROM staff WHERE id = $1 AND user_id = $2', [
     staffIdNum,
     userId,
@@ -680,12 +632,10 @@ export async function createShift(userId, data, options = {}) {
   }
 
   const normalizedDate = shiftDate.split('T')[0];
-  console.log('[createShift] Creating shift with date:', normalizedDate, 'original:', shiftDate);
 
   const shiftHours = parseFloat(hours) || 0;
   const calculatedEndTime = calculateEndTime(startTime, shiftHours);
 
-  // Sanitize string fields to remove null bytes
   const sanitizedLocation = location ? sanitizeString(location) : location;
   const sanitizedNotes = notes ? sanitizeString(notes) : notes;
 
@@ -713,7 +663,6 @@ export async function createShift(userId, data, options = {}) {
     ]
   );
 
-  console.log('[createShift] Shift created in DB. shift_date:', result.rows[0].shift_date);
   return result.rows[0];
 }
 
@@ -768,11 +717,9 @@ export async function updateShift(shiftId, userId, data) {
     values.push(shiftType);
   }
   if (payType !== undefined) {
-    console.log(`[updateShift] payType is defined: ${payType} for shift ${shiftId}`);
     updates.push(`pay_type = $${paramCount++}`);
     values.push(payType);
   } else {
-    console.log(`[updateShift] payType is undefined for shift ${shiftId}`);
   }
   if (status !== undefined) {
     updates.push(`status = $${paramCount++}`);
@@ -807,8 +754,6 @@ export async function updateShift(shiftId, userId, data) {
   values.push(shiftId);
   values.push(userId);
 
-  console.log(`[updateShift] Updating shift ${shiftId} with fields: ${updates.join(', ')}`);
-  console.log(`[updateShift] Values:`, values.slice(0, -2)); // Exclude shiftId and userId from log
 
   const result = await pool.query(
     `UPDATE shifts 
@@ -825,7 +770,6 @@ export async function updateShift(shiftId, userId, data) {
 
   const updatedShift = result.rows[0];
 
-  // Sync clock times to time_entries so display and monthly payroll reflect the change
   if (clockedInTime !== undefined && clockedOutTime !== undefined) {
     const teResult = await pool.query(
       `SELECT id, clock_in_time, clock_out_time FROM time_entries
@@ -846,11 +790,7 @@ export async function updateShift(shiftId, userId, data) {
           ? [clockedInTime, clockedOutTime, hoursWorked, entries[0].id, userId]
           : [clockedInTime, clockedOutTime, hoursWorked, entries[0].id]
       );
-      console.log(
-        `[updateShift] Synced clock times to time_entry ${entries[0].id} for payroll${isApproved ? ' (approved)' : ''}`
-      );
     } else if (entries.length > 1) {
-      // Multiple periods: update first entry's clock_in and last entry's clock_out
       await pool.query(
         `UPDATE time_entries SET clock_in_time = $1, updated_at = NOW() WHERE id = $2`,
         [clockedInTime, entries[0].id]
@@ -859,7 +799,6 @@ export async function updateShift(shiftId, userId, data) {
         `UPDATE time_entries SET clock_out_time = $1, updated_at = NOW() WHERE id = $2`,
         [clockedOutTime, entries[entries.length - 1].id]
       );
-      // Recalc hours_worked for first and last entries
       const firstOut = new Date(entries[0].clock_out_time);
       const firstIn = new Date(clockedInTime);
       const firstHours =
@@ -875,11 +814,7 @@ export async function updateShift(shiftId, userId, data) {
         lastHours,
         entries[entries.length - 1].id,
       ]);
-      console.log(
-        `[updateShift] Synced bookend clock times to ${entries.length} time_entries for payroll`
-      );
     } else if (entries.length === 0) {
-      // No time_entries exist – create one so approve/dashboard counts it. If shift already approved, set approved_at now.
       const d =
         updatedShift.shift_date instanceof Date
           ? updatedShift.shift_date
@@ -912,29 +847,19 @@ export async function updateShift(shiftId, userId, data) {
               shiftId,
             ]
       );
-      console.log(
-        `[updateShift] Created time_entry for actual hours (clock_in_out)${isAlreadyApproved ? ' – already approved, set approved_at' : ''}`
-      );
     }
   }
 
-  console.log(
-    `[updateShift] Shift ${shiftId} updated successfully. clocked_in_time: ${updatedShift.clocked_in_time}, clocked_out_time: ${updatedShift.clocked_out_time}, pay_type: ${updatedShift.pay_type}, shift_type: ${updatedShift.shift_type}`
-  );
 
   return updatedShift;
 }
 
 export async function deleteShift(shiftId, userId) {
-  console.log(`[Delete Shift] Deleting shift ${shiftId} for user ${userId}`);
 
   const teResult = await pool.query('DELETE FROM time_entries WHERE shift_id = $1 RETURNING id', [
     shiftId,
   ]);
   if (teResult.rowCount > 0) {
-    console.log(
-      `[Delete Shift] Deleted ${teResult.rowCount} time entry/entries linked to shift ${shiftId}`
-    );
   }
 
   const result = await pool.query(
@@ -943,13 +868,9 @@ export async function deleteShift(shiftId, userId) {
   );
 
   if (result.rowCount === 0) {
-    console.log(`[Delete Shift] No shift found with id ${shiftId} for user ${userId}`);
     throw new Error('Shift not found or you do not have permission to delete it');
   }
 
-  console.log(
-    `[Delete Shift] Successfully deleted shift ${shiftId} (${result.rowCount} row(s) deleted)`
-  );
   return result.rows[0];
 }
 
@@ -967,7 +888,6 @@ export async function createBulkShifts(userId, shifts, options = {}) {
       if (staffIdNum === null) {
         throw new Error(INVALID_STAFF_ID);
       }
-      // Verify that the staff member belongs to this user
       const staffCheck = await client.query('SELECT id FROM staff WHERE id = $1 AND user_id = $2', [
         staffIdNum,
         userId,
@@ -979,7 +899,6 @@ export async function createBulkShifts(userId, shifts, options = {}) {
 
       const shiftHours = parseFloat(shift.hours) || 0;
 
-      // Sanitize string fields to remove null bytes
       const sanitizedLocation = shift.location ? sanitizeString(shift.location) : shift.location;
       const sanitizedNotes = shift.notes ? sanitizeString(shift.notes) : shift.notes;
 
@@ -1128,7 +1047,6 @@ export async function checkShiftConflict(
       continue;
     }
 
-    // Convert times to minutes for easier comparison
     const timeToMinutes = (timeStr) => {
       const [h, m] = timeStr.split(':').map(Number);
       return h * 60 + m;
@@ -1142,36 +1060,19 @@ export async function checkShiftConflict(
     let overlaps = false;
 
     if (existingShiftDate === shiftDate) {
-      // Same date
       if (!existingIsOvernight && !isOvernight) {
-        // Both regular shifts - standard overlap: new starts before existing ends AND new ends after existing starts
         overlaps = newStart < existingEnd && newEnd > existingStart;
       } else if (existingIsOvernight && !isOvernight) {
-        // Existing is overnight (22:20-08:20), new is regular (03:00-11:30)
-        // Overnight shift spans: 22:20 (day 1) to 08:20 (day 2)
-        // New shift: 03:00-11:30 (day 2)
-        // They overlap if new shift starts before existing ends (03:00 < 08:20) AND new shift starts after existing started on day 1
-        // But wait - existing started at 22:20 on day 1, new starts at 03:00 on day 2, so they overlap if 03:00 < 08:20
         overlaps = newStart < existingEnd;
       } else if (!existingIsOvernight && isOvernight) {
-        // Existing is regular (00:00-08:00), new is overnight (17:00-01:00)
-        // On same day, new overnight runs 17:00 to 24:00 (not 01:00 - that's next day)
-        // Overlap if new starts before existing ends: e.g. 17:00 < 08:00? No.
         const newEndOnSameDay = 24 * 60; // midnight
         overlaps = newStart < existingEnd && newEndOnSameDay > existingStart;
       } else {
-        // Both overnight - they overlap
         overlaps = true;
       }
     } else if (isOvernight && existingShiftDate !== shiftDate) {
-      // New shift is overnight, existing is on next day
-      // New: 22:20 (day 1) - 08:20 (day 2), Existing: on day 2
-      // They overlap if existing starts before new ends on day 2
       overlaps = existingStart < newEnd;
     } else if (existingIsOvernight && existingShiftDate !== shiftDate) {
-      // Existing is overnight, new is on day 2
-      // Existing: 22:20 (day 1) - 08:20 (day 2), New: on day 2
-      // They overlap if new starts before existing ends on day 2
       overlaps = newStart < existingEnd;
     }
 
@@ -1199,15 +1100,12 @@ function formatLocalDate(date) {
   return `${year}-${month}-${day}`;
 }
 
-// Approve shift and convert to logged hours
 export async function approveShift(shiftId, userId, approvedBy) {
-  console.log(`[Approve] APPROVE FUNCTION CALLED for shift ${shiftId}`);
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
 
-    // Get shift details
     const shiftResult = await client.query(
       `SELECT s.*, st.name as staff_name, st.hourly_rate
        FROM shifts s
@@ -1222,10 +1120,6 @@ export async function approveShift(shiftId, userId, approvedBy) {
 
     const shift = shiftResult.rows[0];
     const scheduledHours = parseFloat(shift.hours) || 0;
-    console.log(
-      `[Approve] Shift found: id=${shift.id}, staff_id=${shift.staff_id}, status=${shift.status}, scheduled hours=${scheduledHours}`
-    );
-    // #region agent log
     try {
       fs.appendFileSync(
         '/root/.cursor/debug-9a8e14.log',
@@ -1244,7 +1138,6 @@ export async function approveShift(shiftId, userId, approvedBy) {
         }) + '\n'
       );
     } catch (_) {}
-    // #endregion
 
     if (shift.status === 'approved') {
       throw new Error('Shift has already been approved');
@@ -1311,7 +1204,6 @@ export async function approveShift(shiftId, userId, approvedBy) {
       [shiftId]
     );
     const fromTimeEntries = parseFloat(teResult.rows[0]?.total || 0);
-    // #region agent log
     try {
       fs.appendFileSync(
         '/root/.cursor/debug-9a8e14.log',
@@ -1328,7 +1220,6 @@ export async function approveShift(shiftId, userId, approvedBy) {
         }) + '\n'
       );
     } catch (_) {}
-    // #endregion
     if (fromTimeEntries > 0) {
       actualHoursWorked = Math.round(fromTimeEntries * 100) / 100;
     } else if (shift.clocked_in_time && shift.clocked_out_time) {
@@ -1346,11 +1237,7 @@ export async function approveShift(shiftId, userId, approvedBy) {
         regularHours = actualHoursWorked;
         overtimeHours = 0;
       }
-      console.log(
-        `[Approve] Actual hours worked: ${actualHoursWorked}h (scheduled: ${scheduledHours}h) → regular: ${regularHours}h, OT: ${overtimeHours}h`
-      );
       if (fromTimeEntries > 0) {
-        // #region agent log
         try {
           fs.appendFileSync(
             '/root/.cursor/debug-9a8e14.log',
@@ -1363,8 +1250,6 @@ export async function approveShift(shiftId, userId, approvedBy) {
             }) + '\n'
           );
         } catch (_) {}
-        // #endregion
-        // Approve all clock_in_out time entries for this shift (per-entry approval)
         const approveResult = await client.query(
           `UPDATE time_entries SET approved_at = NOW(), approved_by = $1
            WHERE shift_id = $2 AND entry_type = 'clock_in_out'
@@ -1381,7 +1266,6 @@ export async function approveShift(shiftId, userId, approvedBy) {
           [shiftId]
         );
         const clockSource = shift.clock_source || null;
-        // #region agent log
         try {
           fs.appendFileSync(
             '/root/.cursor/debug-9a8e14.log',
@@ -1403,7 +1287,6 @@ export async function approveShift(shiftId, userId, approvedBy) {
             }) + '\n'
           );
         } catch (_) {}
-        // #endregion
         if (existing.rows.length > 0 && clockSource !== 'manager') {
           await client.query(
             `UPDATE time_entries SET clock_in_time = $1, clock_out_time = $2, hours_worked = $3, overtime_hours = $4, entry_type = 'clock_in_out'
@@ -1418,7 +1301,6 @@ export async function approveShift(shiftId, userId, approvedBy) {
           );
           timeEntryId = existing.rows[0].id;
         } else if (clockSource === 'staff') {
-          // Edge case: staff clocked in but time_entry was lost - create with clock times
           const timeEntryResult = await client.query(
             `INSERT INTO time_entries 
              (staff_id, user_id, date, clock_in_time, clock_out_time, hours_worked, overtime_hours, notes, entry_type, shift_id)
@@ -1441,7 +1323,6 @@ export async function approveShift(shiftId, userId, approvedBy) {
           );
           timeEntryId = timeEntryResult.rows[0].id;
         } else {
-          // Manager set times (clock_source=manager or null) - create approved_shift with hours ONLY, no clock times
           const timeEntryResult = await client.query(
             `INSERT INTO time_entries 
              (staff_id, user_id, date, hours_worked, overtime_hours, notes, entry_type, shift_id)
@@ -1462,11 +1343,8 @@ export async function approveShift(shiftId, userId, approvedBy) {
         }
       }
     } else {
-      // No actual clock data: approve shift status only – do NOT add scheduled hours to dashboard.
-      // Dashboard only counts actual hours; scheduled hours without clock times must not count.
       regularHours = 0;
       overtimeHours = 0;
-      console.log(`[Approve] No clock data – approving status only, no hours added to dashboard`);
     }
 
     await client.query(
@@ -1480,7 +1358,6 @@ export async function approveShift(shiftId, userId, approvedBy) {
     );
 
     await client.query('COMMIT');
-    // #region agent log
     try {
       fs.appendFileSync(
         '/root/.cursor/debug-9a8e14.log',
@@ -1493,7 +1370,6 @@ export async function approveShift(shiftId, userId, approvedBy) {
         }) + '\n'
       );
     } catch (_) {}
-    // #endregion
     return {
       success: true,
       timeEntryId,
@@ -1511,7 +1387,6 @@ export async function approveShift(shiftId, userId, approvedBy) {
   }
 }
 
-// Approve multiple shifts at once
 export async function approveShifts(shiftIds, userId, approvedBy) {
   const results = [];
   const errors = [];
@@ -1528,14 +1403,12 @@ export async function approveShifts(shiftIds, userId, approvedBy) {
   return { results, errors };
 }
 
-// Unapprove shift (reverse approval, delete time entry)
 export async function unapproveShift(shiftId, userId) {
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
 
-    // Get shift details
     const shiftResult = await client.query(`SELECT * FROM shifts WHERE id = $1 AND user_id = $2`, [
       shiftId,
       userId,
@@ -1547,13 +1420,10 @@ export async function unapproveShift(shiftId, userId) {
 
     const shift = shiftResult.rows[0];
 
-    // Check if shift is approved - allow unapproving even if time_entry_id is null
-    // (clock-out approved shifts may not have time_entry_id set)
     if (shift.status !== 'approved') {
       throw new Error('Shift is not approved');
     }
 
-    // Check if the time entry is from clock-in/out (actual tracked hours) or manual approval
     const timeEntryResult = await client.query(
       `SELECT entry_type, clock_in_time FROM time_entries WHERE id = $1`,
       [shift.time_entry_id]
@@ -1562,33 +1432,21 @@ export async function unapproveShift(shiftId, userId) {
     if (timeEntryResult.rows.length > 0) {
       const timeEntry = timeEntryResult.rows[0];
 
-      // Only delete time entries that were manually created (approved_shift type)
-      // Keep time entries with actual clock-in/out data (clock_in_out type) as they represent real worked hours
       if (timeEntry.entry_type === 'approved_shift' || !timeEntry.clock_in_time) {
-        // Delete the manually created time entry
         await client.query('DELETE FROM time_entries WHERE id = $1', [shift.time_entry_id]);
       } else {
-        // For clock_in_out entries, clear approved_at so they no longer count for payroll
         await client.query(
           `UPDATE time_entries SET approved_at = NULL, approved_by = NULL
            WHERE shift_id = $1 AND entry_type = 'clock_in_out'`,
           [shiftId]
         );
-        console.log(`[Unapprove] Cleared approved_at on clock_in_out entries for shift ${shiftId}`);
       }
     }
 
-    // Check if shift is currently clocked in (has clocked_in_time but no clocked_out_time)
-    // If so, we need to clock them out by clearing clocked_in_time and closing any active time entries
     if (shift.clocked_in_time && !shift.clocked_out_time) {
-      console.log(
-        `[Unapprove] Shift ${shiftId} is currently clocked in - clocking out before unapproving`
-      );
 
-      // Clear clocked_in_time (this effectively clocks them out)
       await client.query(`UPDATE shifts SET clocked_in_time = NULL WHERE id = $1`, [shiftId]);
 
-      // Close any active time entries (set clock_out_time to clock_in_time if not already set)
       const activeTimeEntries = await client.query(
         `SELECT id, clock_in_time FROM time_entries 
          WHERE shift_id = $1 AND clock_out_time IS NULL`,
@@ -1602,15 +1460,8 @@ export async function unapproveShift(shiftId, userId) {
            WHERE id = $1`,
           [entry.id]
         );
-        console.log(`[Unapprove] Closed time entry ${entry.id} for shift ${shiftId}`);
       }
     }
-    // Decide what status to revert to after unapproving.
-    // If there is a late clock-out reason recorded on any time entry for this shift,
-    // restore the special 'review_hours' state so the manager can see and review it again.
-    // Otherwise, if the shift has already ended and there are no actual completed hours,
-    // mark it as 'unattended'. If the shift is in the future or still in progress,
-    // fall back to 'scheduled'.
     const lateReasonResult = await client.query(
       `SELECT 1 FROM time_entries 
        WHERE shift_id = $1 
@@ -1624,7 +1475,6 @@ export async function unapproveShift(shiftId, userId) {
     if (lateReasonResult.rows.length > 0) {
       newStatus = 'review_hours';
     } else {
-      // No late-reason flag; decide between 'unattended' vs 'scheduled'
       const now = new Date();
       const shiftDateStr =
         shift.shift_date instanceof Date
@@ -1646,7 +1496,6 @@ export async function unapproveShift(shiftId, userId) {
         endTimeParts[2] || 0
       );
 
-      // Handle overnight shifts (end time earlier than start time → next day)
       if (calculatedEndTime < shift.start_time) {
         shiftEnd.setDate(shiftEnd.getDate() + 1);
       }
@@ -1654,8 +1503,6 @@ export async function unapproveShift(shiftId, userId) {
       const hasCompletedClockTimes = shift.clocked_in_time && shift.clocked_out_time;
       const shiftHasEnded = now.getTime() > shiftEnd.getTime();
 
-      // If the shift has ended and there are no completed clock times,
-      // treat it as unattended. Otherwise keep it scheduled.
       if (shiftHasEnded && !hasCompletedClockTimes) {
         newStatus = 'unattended';
       } else {

@@ -25,7 +25,6 @@ export async function getStaff(userId) {
   return result.rows;
 }
 
-// Get single staff member
 export async function getStaffById(staffId, userId) {
   const result = await pool.query('SELECT * FROM staff WHERE id = $1 AND user_id = $2', [
     staffId,
@@ -60,9 +59,6 @@ function parseOptionalAssignmentId(value, fieldName) {
 
 const ACCESS_ROLES_ALLOWED = new Set(['employee', 'manager', 'payroll_admin']);
 
-/**
- * Canonical `access_role` for DB. Accepts any case (e.g. "Manager"). Throws if not allowed.
- */
 export function parseAccessRoleOrThrow(value) {
   if (value === undefined || value === null) return undefined;
   let s = typeof value === 'string' ? value.trim() : String(value).trim();
@@ -70,7 +66,6 @@ export function parseAccessRoleOrThrow(value) {
   try {
     s = s.normalize('NFKC');
   } catch {
-    // ignore
   }
   s = s.replace(/^\uFEFF/, '');
   const lower = s.toLowerCase();
@@ -113,7 +108,6 @@ export async function createStaff(userId, data) {
     await assertAssignmentOwnedByUser(client, 'branches', branchId, userId, 'Branch');
     await assertAssignmentOwnedByUser(client, 'staff', managerId, userId, 'Manager');
 
-    // Generate unique 6-digit suffix for username (used for clock-in - last 6 digits of username)
     let code6;
     let attempts = 0;
     while (attempts < 20) {
@@ -130,14 +124,11 @@ export async function createStaff(userId, data) {
       throw new Error('Failed to generate unique 6-digit clock-in code for username');
     }
 
-    // Username = base (from name) + '.' + 6-digit code
-    // Example: \"dan\" + 411125 -> \"dan.411125\" (staff use last 6 digits to clock in)
     const username = `${getUsernameBase(name)}.${code6}`;
 
     const tempPassword = crypto.randomBytes(32).toString('hex');
     const passwordHash = await hashPassword(tempPassword);
 
-    // Sanitize string inputs to remove null bytes
     const sanitizedName = sanitizeString(name);
     const sanitizedEmail = email ? sanitizeString(email) : email;
     const sanitizedRole = role ? sanitizeString(role) : role;
@@ -164,12 +155,10 @@ export async function createStaff(userId, data) {
     );
     const staffId = result.rows[0].id;
 
-    // Generate password setup token (expires in 7 days)
     const token = generatePasswordToken();
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
 
-    // Save token to database
     await client.query(
       `INSERT INTO staff_password_tokens (staff_id, token, expires_at)
        VALUES ($1, $2, $3)`,
@@ -178,13 +167,10 @@ export async function createStaff(userId, data) {
 
     await client.query('COMMIT');
 
-    // Send password setup email (don't await - send in background)
     sendStaffPasswordSetupEmail(email, name, username, token).catch((err) => {
       console.error('Failed to send password setup email:', err);
-      // Don't fail the request if email fails - token is still valid
     });
 
-    // Get the created staff member to return
     const staffResult = await pool.query('SELECT * FROM staff WHERE id = $1', [staffId]);
 
     return staffResult.rows[0];
@@ -196,7 +182,6 @@ export async function createStaff(userId, data) {
   }
 }
 
-// Validate password setup token
 export async function validatePasswordToken(token) {
   const result = await pool.query(
     `SELECT spt.*, s.id as staff_id, s.name, s.email, s.username
@@ -215,14 +200,12 @@ export async function validatePasswordToken(token) {
   return result.rows[0];
 }
 
-// Reset staff password - generates new token and sends email
 export async function resetStaffPassword(staffId, userId) {
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
 
-    // Verify staff belongs to user
     const staffResult = await client.query(
       'SELECT id, name, email, username FROM staff WHERE id = $1 AND user_id = $2',
       [staffId, userId]
@@ -234,19 +217,16 @@ export async function resetStaffPassword(staffId, userId) {
 
     const staff = staffResult.rows[0];
 
-    // Generate new password setup token (expires in 7 days)
     const token = generatePasswordToken();
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
 
-    // Delete any existing unused tokens for this staff member
     await client.query(
       `DELETE FROM staff_password_tokens 
        WHERE staff_id = $1 AND used_at IS NULL`,
       [staffId]
     );
 
-    // Save new token to database
     await client.query(
       `INSERT INTO staff_password_tokens (staff_id, token, expires_at)
        VALUES ($1, $2, $3)`,
@@ -255,16 +235,10 @@ export async function resetStaffPassword(staffId, userId) {
 
     await client.query('COMMIT');
 
-    // Send password reset email
-    console.log(
-      `[resetStaffPassword] Sending password reset email to ${staff.email} for staff ${staff.name} (ID: ${staffId})`
-    );
     try {
       await sendStaffPasswordSetupEmail(staff.email, staff.name, staff.username, token);
-      console.log(`[resetStaffPassword] Password reset email sent successfully to ${staff.email}`);
     } catch (emailError) {
       console.error(`[resetStaffPassword] Failed to send email to ${staff.email}:`, emailError);
-      // Don't fail the request if email fails - token is still valid and user can request again
       throw new Error(
         `Password reset token created but email failed to send: ${emailError.message}`
       );
@@ -282,23 +256,19 @@ export async function resetStaffPassword(staffId, userId) {
   }
 }
 
-// Set password using token
 export async function setPasswordWithToken(token, newPassword) {
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
 
-    // Validate token
     const tokenData = await validatePasswordToken(token);
     if (!tokenData) {
       throw new Error('Invalid or expired token');
     }
 
-    // Hash new password
     const passwordHash = await hashPassword(newPassword);
 
-    // Update staff password and mark as set
     await client.query(
       `UPDATE staff 
        SET password_hash = $1, password_set = TRUE 
@@ -306,7 +276,6 @@ export async function setPasswordWithToken(token, newPassword) {
       [passwordHash, tokenData.staff_id]
     );
 
-    // Mark token as used
     await client.query(
       `UPDATE staff_password_tokens 
        SET used_at = NOW() 
@@ -329,14 +298,12 @@ export async function setPasswordWithToken(token, newPassword) {
   }
 }
 
-// Update staff member
 export async function updateStaff(staffId, userId, data) {
   const { name, email, role, hourlyRate, employmentType, status, accessRole } = data;
   const departmentId = parseOptionalAssignmentId(data.departmentId, 'department ID');
   const branchId = parseOptionalAssignmentId(data.branchId, 'branch ID');
   const managerId = parseOptionalAssignmentId(data.managerId, 'manager ID');
 
-  // Sanitize string inputs to remove null bytes
   const sanitizedName = name !== undefined ? (name ? sanitizeString(name) : name) : undefined;
   const sanitizedEmail = email !== undefined ? (email ? sanitizeString(email) : email) : undefined;
   const sanitizedRole = role !== undefined ? (role ? sanitizeString(role) : role) : undefined;
@@ -433,19 +400,16 @@ export async function updateStaff(staffId, userId, data) {
   }
 }
 
-// Delete staff member
 export async function deleteStaff(staffId, userId) {
   await pool.query('DELETE FROM staff WHERE id = $1 AND user_id = $2', [staffId, userId]);
 }
 
-// Get staff statistics
 export async function getStaffStats(userId, clientDate = null) {
   const totalStaffResult = await pool.query(
     'SELECT COUNT(*) as count FROM staff WHERE user_id = $1 AND status = $2',
     [userId, 'active']
   );
 
-  // Monthly hours: use client's local date for "this month" so timezone matches user
   let startStr, endStr;
   if (clientDate && /^\d{4}-\d{2}-\d{2}$/.test(clientDate)) {
     const [y, m] = clientDate.split('-').map(Number);
@@ -459,7 +423,6 @@ export async function getStaffStats(userId, clientDate = null) {
     endStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(new Date(y, m + 1, 0).getDate()).padStart(2, '0')}`;
   }
 
-  // Hours This Month: actual hours from clock_in_out (approved) + approved_shift + manual (no cap, include all)
   const hoursResult = await pool.query(
     `WITH from_clocked AS (
        SELECT te.staff_id, te.date, te.shift_id,
@@ -506,7 +469,6 @@ export async function getStaffStats(userId, clientDate = null) {
     [userId, startStr, endStr]
   );
 
-  // Per-staff actual hours this month (clock_in_out + approved_shift + manual)
   const attendanceHoursResult = await pool.query(
     `WITH from_clocked AS (
        SELECT te.staff_id, te.date, te.shift_id,
@@ -557,7 +519,6 @@ export async function getStaffStats(userId, clientDate = null) {
     attendanceHoursByStaff[r.staff_id] = parseFloat(r.hours || 0);
   });
 
-  // Monthly payroll: same sources as hours; clock_in_out pays actual approved clock duration × rate (matches Hours This Month)
   const payrollResult = await pool.query(
     `WITH from_clocked AS (
        SELECT te.staff_id, te.date, te.shift_id, COALESCE(s.hours, 24)::numeric as shift_hours,
@@ -622,7 +583,6 @@ export async function getStaffStats(userId, clientDate = null) {
     [userId, startStr, endStr]
   );
 
-  // Try to get active budget stats for current month (may be null if no budget)
   let budgetSummary = {
     budgetMonthly: null,
     budgetSpentThisMonth: null,
@@ -640,7 +600,6 @@ export async function getStaffStats(userId, clientDate = null) {
       };
     }
   } catch (err) {
-    console.log('Budget stats not available for dashboard:', err.message || err);
   }
 
   return {
@@ -903,14 +862,11 @@ export async function getPayrollForPeriod(userId, startDate, endDate) {
   return { staff, totals };
 }
 
-// Get monthly earnings chart data (daily breakdown)
 export async function getMonthlyEarningsChart(userId, year, month) {
-  // Default to current month if not provided
   const now = new Date();
   const targetYear = year || now.getFullYear();
   const targetMonth = month !== undefined ? month : now.getMonth();
 
-  // Get first and last day of the month (local YYYY-MM-DD, avoid toISOString timezone shift)
   const startStr = `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-01`;
   const daysInMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
   const endStr = `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
@@ -998,7 +954,6 @@ export async function getMonthlyEarningsChart(userId, year, month) {
     totalThisMonth += cost;
   });
 
-  // Build array with all days of the month
   const chartData = [];
   for (let day = 1; day <= daysInMonth; day++) {
     const dateStr = `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -1063,58 +1018,43 @@ export async function deleteTimeEntry(entryId, userId) {
 export async function createBudget(userId, data) {
   const { name, monthlyBudget, startDate, endDate } = data;
 
-  // Validate required fields
   if (!name || monthlyBudget === undefined || monthlyBudget === null || !startDate) {
     throw new Error('Name, monthly budget, and start date are required');
   }
 
-  // Validate and format startDate
   const startDateObj = new Date(startDate);
   if (isNaN(startDateObj.getTime())) {
     throw new Error('Invalid start date format. Expected YYYY-MM-DD format.');
   }
   const formattedStartDate = startDateObj.toISOString().split('T')[0];
 
-  // Set endDate to end of month if not provided or empty
   let finalEndDate = endDate;
   if (!finalEndDate || finalEndDate === '' || finalEndDate === null || finalEndDate === undefined) {
-    // Calculate end of month from start date
     const end = new Date(startDateObj.getFullYear(), startDateObj.getMonth() + 1, 0);
     finalEndDate = end.toISOString().split('T')[0];
   } else {
-    // Validate endDate format if provided
     const endDateObj = new Date(finalEndDate);
     if (isNaN(endDateObj.getTime())) {
       throw new Error('Invalid end date format. Expected YYYY-MM-DD format.');
     }
     finalEndDate = endDateObj.toISOString().split('T')[0];
 
-    // Ensure endDate is after startDate
     if (endDateObj < startDateObj) {
       throw new Error('End date must be after start date');
     }
   }
 
-  // Ensure monthlyBudget is a number
   const budgetAmount = parseFloat(monthlyBudget);
   if (isNaN(budgetAmount) || budgetAmount < 0) {
     throw new Error('Monthly budget must be a positive number');
   }
 
   try {
-    // Validate userId is a valid number
     const userIdNum = parseInt(userId);
     if (isNaN(userIdNum) || userIdNum <= 0) {
       throw new Error('Invalid user ID');
     }
 
-    console.log('Creating budget with data:', {
-      userId: userIdNum,
-      name,
-      monthly_budget: budgetAmount,
-      start_date: formattedStartDate,
-      end_date: finalEndDate,
-    });
 
     const result = await pool.query(
       `INSERT INTO budgets (user_id, name, monthly_budget, start_date, end_date, status) 
@@ -1130,7 +1070,6 @@ export async function createBudget(userId, data) {
     return result.rows[0];
   } catch (dbError) {
     console.error('Database error in createBudget:', dbError);
-    // Re-throw with more context if it's a database error
     if (dbError.code) {
       throw new Error(
         `Database error: ${dbError.message || dbError.detail || 'Failed to create budget'}`
@@ -1161,49 +1100,40 @@ export async function getBudgets(userId) {
   return result.rows;
 }
 
-// Update budget
 export async function updateBudget(userId, budgetId, data) {
   const { name, monthlyBudget, startDate, endDate, status } = data;
 
-  // Validate required fields
   if (!name || monthlyBudget === undefined || monthlyBudget === null || !startDate) {
     throw new Error('Name, monthly budget, and start date are required');
   }
 
-  // Validate and format startDate
   const startDateObj = new Date(startDate);
   if (isNaN(startDateObj.getTime())) {
     throw new Error('Invalid start date format. Expected YYYY-MM-DD format.');
   }
   const formattedStartDate = startDateObj.toISOString().split('T')[0];
 
-  // Set endDate to end of month if not provided or empty
   let finalEndDate = endDate;
   if (!finalEndDate || finalEndDate === '' || finalEndDate === null || finalEndDate === undefined) {
-    // Calculate end of month from start date
     const end = new Date(startDateObj.getFullYear(), startDateObj.getMonth() + 1, 0);
     finalEndDate = end.toISOString().split('T')[0];
   } else {
-    // Validate endDate format if provided
     const endDateObj = new Date(finalEndDate);
     if (isNaN(endDateObj.getTime())) {
       throw new Error('Invalid end date format. Expected YYYY-MM-DD format.');
     }
     finalEndDate = endDateObj.toISOString().split('T')[0];
 
-    // Ensure endDate is after startDate
     if (endDateObj < startDateObj) {
       throw new Error('End date must be after start date');
     }
   }
 
-  // Ensure monthlyBudget is a number
   const budgetAmount = parseFloat(monthlyBudget);
   if (isNaN(budgetAmount) || budgetAmount < 0) {
     throw new Error('Monthly budget must be a positive number');
   }
 
-  // Validate userId and budgetId
   const userIdNum = parseInt(userId);
   const budgetIdNum = parseInt(budgetId);
   if (isNaN(userIdNum) || userIdNum <= 0 || isNaN(budgetIdNum) || budgetIdNum <= 0) {
@@ -1211,7 +1141,6 @@ export async function updateBudget(userId, budgetId, data) {
   }
 
   try {
-    // Update the budget
     const result = await pool.query(
       `UPDATE budgets 
        SET name = $1, monthly_budget = $2, start_date = $3, end_date = $4, 
@@ -1245,16 +1174,13 @@ export async function updateBudget(userId, budgetId, data) {
   }
 }
 
-// Get budget statistics (spent vs budget for current month)
 export async function getBudgetStats(userId, clientDate = null) {
   try {
-    // Get active budget
     const budget = await getActiveBudget(userId);
     if (!budget) {
       return null;
     }
 
-    // Use client's local date for month range when provided (same as getStaffStats)
     let startDateStr, endDateStr;
     if (clientDate && /^\d{4}-\d{2}-\d{2}$/.test(clientDate)) {
       const [y, m] = clientDate.split('-').map(Number);
@@ -1268,7 +1194,6 @@ export async function getBudgetStats(userId, clientDate = null) {
       endDateStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(new Date(y, m + 1, 0).getDate()).padStart(2, '0')}`;
     }
 
-    // Same as monthlyPayroll: clock_in_out + approved_shift + manual
     const spentResult = await pool.query(
       `WITH from_clocked AS (
          SELECT te.staff_id, te.date, te.shift_id, COALESCE(s.hours, 24)::numeric as shift_hours,

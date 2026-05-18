@@ -3,15 +3,11 @@ import { config } from '../lib/config.js';
 import { pool } from '../lib/db.js';
 import { getTrialPeriodDays } from '../lib/appSettings.js';
 
-// Initialize Stripe with your secret key
 const stripeSecretKey = config.stripe?.secretKey || process.env.STRIPE_SECRET_KEY;
 let stripe;
 
 if (!stripeSecretKey || !String(stripeSecretKey).startsWith('sk_')) {
   console.warn('Stripe secret key missing or invalid; payment endpoints will fail.');
-  // Use a properly formatted dummy test key to prevent Stripe initialization errors
-  // Stripe test keys must match the format: sk_test_[at least 32 chars]
-  // This allows the server to start but payment endpoints will fail gracefully with API errors
   const dummyKey = 'sk_test_51AbCdEfGhIjKlMnOpQrStUvWxYz1234567890AbCdEfGhIjKlMnOpQrStUvWxYz';
   console.warn('Using dummy Stripe key - payment endpoints will fail with API errors');
   stripe = new Stripe(dummyKey);
@@ -21,7 +17,6 @@ if (!stripeSecretKey || !String(stripeSecretKey).startsWith('sk_')) {
 
 export { stripe };
 
-// Stripe Price IDs (created automatically)
 const STRIPE_PRICE_IDS = {
   professional_monthly: 'price_1Sf90UIrkFfXWFRhinFt9vSh',
   professional_yearly: 'price_1Sf90VIrkFfXWFRhQEPBMUMR',
@@ -29,10 +24,6 @@ const STRIPE_PRICE_IDS = {
   enterprise_yearly: 'price_1Sf90VIrkFfXWFRhxGQSGWdS',
 };
 
-/**
- * Create a Checkout Session for subscription payment (fixed price ID)
- * @param {boolean} _retried - internal: true when retrying after clearing invalid customer
- */
 export async function createCheckoutSession(userId, email, priceId, planName, _retried = false) {
   try {
     let customerId = await getStripeCustomerId(userId);
@@ -74,11 +65,6 @@ export async function createCheckoutSession(userId, email, priceId, planName, _r
   }
 }
 
-/**
- * Create a Checkout Session with the calculated plan amount (dynamic pricing)
- * totalPrice is in GBP; Stripe expects amount in pence for GBP.
- * @param {boolean} _retried - internal: true when retrying after clearing invalid customer
- */
 export async function createCheckoutSessionWithAmount(userId, email, planConfig, _retried = false) {
   const { totalPrice, billingCycle, staffCount, multiLocation, promoCode } = planConfig;
 
@@ -93,7 +79,6 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
     throw new Error('Billing cycle must be monthly or yearly');
   }
 
-  // Check active staff count - block if new limit is too low
   const newStaffLimit = parseInt(String(staffCount || 3), 10);
   const activeStaffResult = await pool.query(
     `SELECT COUNT(*) as count FROM staff 
@@ -124,7 +109,6 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
       ]);
     }
 
-    // Amount in pence (Stripe uses smallest currency unit for GBP)
     const amountPence = Math.round(numPrice * 100);
     if (amountPence < 50) {
       throw new Error('Minimum charge is £0.50');
@@ -136,7 +120,6 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
         ? `Workalong Plan (Yearly) — £${numPrice.toFixed(2)}/year`
         : `Workalong Plan (Monthly) — £${numPrice.toFixed(2)}/month`;
 
-    // Check if user already has an active subscription - cancel it first to avoid duplicates
     const existingSubResult = await pool.query(
       'SELECT stripe_subscription_id FROM users WHERE id = $1',
       [userId]
@@ -146,31 +129,21 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
       try {
         const existingSub = await stripe.subscriptions.retrieve(existingSubId);
         if (existingSub.status === 'active' || existingSub.status === 'trialing') {
-          console.log(
-            `[Checkout] Canceling existing subscription ${existingSubId} before creating new one`
-          );
           await stripe.subscriptions.cancel(existingSubId);
         }
       } catch (e) {
-        // Subscription might not exist in Stripe, ignore
-        console.log(`[Checkout] Could not cancel existing subscription: ${e.message}`);
       }
     }
 
-    // Optional: Stripe promotion code (for coupons/discounts)
     let stripePromotionCodeId = null;
     let is100PercentFreeForever = false;
 
     if (promoCode && String(promoCode).trim()) {
       try {
-        // Promo codes are only allowed on monthly plans so they effectively give
-        // at most one month of discount (first invoice). The actual "one month only"
-        // behavior is controlled in Stripe by configuring the Coupon duration.
         if (billingCycle !== 'monthly') {
           throw new Error('Promo code can only be used with monthly billing.');
         }
 
-        // Look up the promotion code by code string in the current Stripe mode (test/live)
         const promoList = await stripe.promotionCodes.list({
           code: String(promoCode).trim(),
           active: true,
@@ -184,49 +157,20 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
         const promo = promoList.data[0];
         stripePromotionCodeId = promo.id;
 
-        // Check if this is a 100% free forever promo code
-        // Retrieve the coupon to check discount and duration
-        // Handle both cases: coupon can be a string ID or an expanded object
         const couponId = typeof promo.coupon === 'string' ? promo.coupon : promo.coupon?.id;
         if (couponId) {
           try {
             const coupon = await stripe.coupons.retrieve(couponId);
-            console.log(`[Checkout] Promo code ${promoCode} - Coupon details:`, {
-              id: coupon.id,
-              percent_off: coupon.percent_off,
-              amount_off: coupon.amount_off,
-              duration: coupon.duration,
-              duration_in_months: coupon.duration_in_months,
-              valid: coupon.valid,
-            });
 
-            // Check for 100% free: either 100% percent_off, or amount_off that makes it free
-            // For ANY 100% off promo code, remove trial period (not just "forever" ones)
             const is100PercentOff = coupon.percent_off === 100;
             const isForever =
               coupon.duration === 'forever' ||
               (coupon.duration === 'repeating' && !coupon.duration_in_months);
             const makesItFree = coupon.amount_off && coupon.amount_off >= amountPence;
 
-            // If it's 100% off (regardless of duration), treat as free and remove trial
-            // This ensures "14 days free" doesn't show when the subscription is already free
             if (is100PercentOff || makesItFree) {
               is100PercentFreeForever = true;
-              console.log(`[Checkout] ✅✅✅ DETECTED 100% OFF PROMO CODE: ${promoCode}`);
-              console.log(
-                `[Checkout] ✅✅✅ percent_off: ${coupon.percent_off}, duration: ${coupon.duration}, amount_off: ${coupon.amount_off}`
-              );
-              console.log(
-                `[Checkout] ✅✅✅ NO TRIAL PERIOD WILL BE SET - SUBSCRIPTION STARTS IMMEDIATELY`
-              );
             } else {
-              console.log(`[Checkout] ❌ Promo code ${promoCode} is NOT 100% off:`);
-              console.log(
-                `[Checkout] ❌ percent_off: ${coupon.percent_off}, duration: ${coupon.duration}, amount_off: ${coupon.amount_off}`
-              );
-              console.log(
-                `[Checkout] ❌ is100PercentOff: ${is100PercentOff}, makesItFree: ${makesItFree}`
-              );
             }
           } catch (couponErr) {
             console.error(`[Checkout] Error retrieving coupon ${couponId}:`, couponErr.message);
@@ -243,8 +187,6 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
       }
     }
 
-    // 14-day free trial for first-time subscribers only (no previous subscription in our DB)
-    // IMPORTANT: NEVER add trial period if using a 100% free forever promo code
     const firstTimeSubscriber = !existingSubId;
     const subscriptionData = {
       metadata: {
@@ -256,78 +198,35 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
       },
     };
 
-    // CRITICAL: Only add trial period if:
-    // 1. User is a first-time subscriber AND
-    // 2. NOT using a 100% free forever promo code
-    // For 100% free forever codes, subscription must start immediately with NO trial
-    console.log(
-      `[Checkout] Trial check - firstTimeSubscriber: ${firstTimeSubscriber}, is100PercentFreeForever: ${is100PercentFreeForever}, promoCode: ${promoCode || 'none'}`
-    );
 
-    // SIMPLE RULE: If ANY promo code exists, NO TRIAL PERIOD
-    // In this system, promo codes are only used for 100% off, so if a promo code exists, remove trial
     const hasPromoCode = stripePromotionCodeId !== null;
     const shouldRemoveTrialPeriod = is100PercentFreeForever || hasPromoCode;
 
     const trialDays = await getTrialPeriodDays();
 
     if (shouldRemoveTrialPeriod) {
-      console.log(
-        `[Checkout] 🚫🚫🚫 PROMO CODE DETECTED - NO TRIAL PERIOD (is100PercentFreeForever: ${is100PercentFreeForever}, hasPromoCode: ${hasPromoCode})`
-      );
-      console.log(`[Checkout] 🚫 subscriptionData will NOT have trial_period_days`);
-      // DO NOTHING - don't set trial_period_days at all
     } else if (firstTimeSubscriber) {
-      // Only add trial for first-time subscribers WITHOUT promo codes (length from app_settings / dashboard)
       subscriptionData.trial_period_days = trialDays;
-      console.log(`[Checkout] ✅ Adding ${trialDays}-day trial period for first-time subscriber`);
     } else {
-      console.log(`[Checkout] ❌ Skipping trial period (not first-time subscriber)`);
     }
 
-    // CRITICAL SAFETY CHECK: Remove trial_period_days if promo code exists
     if (shouldRemoveTrialPeriod) {
       if ('trial_period_days' in subscriptionData) {
-        console.log(
-          `[Checkout] ⚠️  CRITICAL: trial_period_days found with promo code - DELETING NOW!`
-        );
         delete subscriptionData.trial_period_days;
       }
-      // Also explicitly set to undefined to be absolutely sure
       subscriptionData.trial_period_days = undefined;
       delete subscriptionData.trial_period_days;
-      console.log(`[Checkout] ✅ Verified: trial_period_days removed from subscriptionData`);
     }
 
-    // Build product description - exclude trial text if ANY promo code exists
-    // Simple rule: If promo code exists, no trial text in description
     const trialText =
       firstTimeSubscriber && !shouldRemoveTrialPeriod ? `. ${trialDays}-day free trial.` : '';
     const productDescription = `Staff: ${staffCount}, Multi-location: ${multiLocation ? 'Yes' : 'No'}${trialText}`;
-    console.log(`[Checkout] Product description: "${productDescription}"`);
-    console.log(
-      `[Checkout] shouldRemoveTrialPeriod: ${shouldRemoveTrialPeriod}, hasPromoCode: ${hasPromoCode}, is100PercentFreeForever: ${is100PercentFreeForever}`
-    );
 
-    // FINAL SAFETY CHECK: Ensure trial_period_days is NEVER in subscriptionData if promo code exists
     if (shouldRemoveTrialPeriod) {
-      // Remove trial_period_days completely
       delete subscriptionData.trial_period_days;
-      // Also ensure trial_settings is not set (newer Stripe API)
       delete subscriptionData.trial_settings;
-      console.log(
-        `[Checkout] ✅ Final check: subscriptionData.trial_period_days = ${subscriptionData.trial_period_days} (should be undefined)`
-      );
-      console.log(
-        `[Checkout] ✅ Final subscription_data:`,
-        JSON.stringify(subscriptionData, null, 2)
-      );
     }
 
-    console.log(
-      `[Checkout] Creating checkout session with subscription_data:`,
-      JSON.stringify(subscriptionData, null, 2)
-    );
 
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
@@ -385,25 +284,16 @@ export async function createCheckoutSessionWithAmount(userId, email, planConfig,
   }
 }
 
-/**
- * Retrieve a Checkout Session by ID (for verify-session endpoint)
- */
 export async function retrieveCheckoutSession(sessionId) {
   return stripe.checkout.sessions.retrieve(sessionId);
 }
 
-/**
- * Get Stripe customer ID for a user
- */
 async function getStripeCustomerId(userId) {
   const result = await pool.query('SELECT stripe_customer_id FROM users WHERE id = $1', [userId]);
 
   return result.rows[0]?.stripe_customer_id || null;
 }
 
-/**
- * Handle successful subscription payment
- */
 export async function handleSubscriptionSuccess(session) {
   try {
     const metadata = session.metadata || {};
@@ -431,19 +321,15 @@ export async function handleSubscriptionSuccess(session) {
       (subscription.metadata?.multiLocation || metadata.multiLocation) === '1';
     const dbStatus = subscription.status === 'trialing' ? 'trial' : 'paid';
 
-    // Extract discount percentage from subscription
     let discountPercent = null;
     if (subscription.discount && subscription.discount.coupon) {
       if (subscription.discount.coupon.percent_off) {
         discountPercent = subscription.discount.coupon.percent_off;
       } else if (subscription.discount.coupon.amount_off) {
-        // For fixed amount discounts, we'd need to calculate percentage based on price
-        // For now, store as 0 to indicate there's a discount but it's amount-based
         discountPercent = 0;
       }
     }
 
-    // Try with subscription_staff_limit, multi_location_enabled, and subscription_discount_percent; if columns missing, retry without them
     try {
       await pool.query(
         `UPDATE users 
@@ -479,7 +365,6 @@ export async function handleSubscriptionSuccess(session) {
         String(updateErr.message || '').includes('multi_location_enabled') ||
         String(updateErr.message || '').includes('subscription_discount_percent')
       ) {
-        console.log('Some subscription columns missing; trying without discount_percent');
         try {
           await pool.query(
             `UPDATE users 
@@ -498,7 +383,6 @@ export async function handleSubscriptionSuccess(session) {
             ]
           );
         } catch (e2) {
-          // Final fallback without staff_limit
           await pool.query(
             `UPDATE users 
              SET subscription_status = $1, subscription_plan = $2, subscription_start_date = to_timestamp($3),
@@ -520,7 +404,6 @@ export async function handleSubscriptionSuccess(session) {
       }
     }
 
-    console.log(`Subscription activated for user ${userId}`);
     return true;
   } catch (error) {
     console.error('Error handling subscription success:', error);
@@ -528,9 +411,6 @@ export async function handleSubscriptionSuccess(session) {
   }
 }
 
-/**
- * Sync DB when subscription is updated (e.g. from billing portal, renewal)
- */
 export async function handleSubscriptionUpdated(subscription) {
   try {
     const subscriptionId = subscription.id;
@@ -541,8 +421,6 @@ export async function handleSubscriptionUpdated(subscription) {
 
     const userId = result.rows[0].id;
 
-    // cancel_at_period_end=true means the user requested cancellation but is STILL ACTIVE until
-    // current_period_end. Only 'canceled', 'unpaid', or 'past_due' mean the user has lost access.
     const dbStatus =
       subscription.status === 'canceled' ||
       subscription.status === 'unpaid' ||
@@ -560,7 +438,6 @@ export async function handleSubscriptionUpdated(subscription) {
       ? new Date(subscription.current_period_end * 1000)
       : null;
 
-    // Get discount percentage from subscription
     let discountPercent = null;
     if (subscription.discount && subscription.discount.coupon) {
       if (subscription.discount.coupon.percent_off) {
@@ -579,9 +456,6 @@ export async function handleSubscriptionUpdated(subscription) {
              updated_at = NOW()
          WHERE id = $6`,
         [dbStatus, periodEnd, staffLimit, multiLocationEnabled, discountPercent, userId]
-      );
-      console.log(
-        `Subscription synced for user ${userId}: ${dbStatus}${discountPercent ? ` (${discountPercent}% discount)` : ''}`
       );
     } catch (e) {
       if (
@@ -615,10 +489,6 @@ export async function handleSubscriptionUpdated(subscription) {
   }
 }
 
-/**
- * Handle invoice payment succeeded (fires on every renewal + initial payment)
- * Keeps subscription_end_date and subscription_status up to date after each billing cycle.
- */
 export async function handleInvoicePaymentSucceeded(invoice) {
   try {
     const subscriptionId =
@@ -632,7 +502,6 @@ export async function handleInvoicePaymentSucceeded(invoice) {
 
     const userId = result.rows[0].id;
 
-    // Retrieve the subscription to get the updated period end
     const subscription = await stripe.subscriptions.retrieve(subscriptionId);
     const periodEnd = subscription.current_period_end
       ? new Date(subscription.current_period_end * 1000)
@@ -655,18 +524,12 @@ export async function handleInvoicePaymentSucceeded(invoice) {
          WHERE id = $3`,
         [dbStatus, periodEnd, userId]
       );
-      console.log(
-        `Invoice payment succeeded — subscription renewed for user ${userId} until ${periodEnd}`
-      );
     }
   } catch (error) {
     console.error('Error handling invoice payment succeeded:', error);
   }
 }
 
-/**
- * Handle subscription cancellation
- */
 export async function handleSubscriptionCanceled(subscription) {
   try {
     const userId = parseInt(subscription.metadata.userId);
@@ -681,7 +544,6 @@ export async function handleSubscriptionCanceled(subscription) {
       [userId]
     );
 
-    console.log(`Subscription canceled for user ${userId}`);
     return true;
   } catch (error) {
     console.error('Error handling subscription cancellation:', error);
@@ -689,14 +551,8 @@ export async function handleSubscriptionCanceled(subscription) {
   }
 }
 
-/**
- * Cancel a subscription.
- * - If it's been less than 3 days since subscription_start_date, cancel immediately and refund latest payment.
- * - Otherwise, cancel at period end (no refund).
- */
 export async function cancelSubscription(userId) {
   try {
-    // Get user's subscription info
     const result = await pool.query(
       'SELECT stripe_subscription_id, subscription_start_date FROM users WHERE id = $1',
       [userId]
@@ -720,7 +576,6 @@ export async function cancelSubscription(userId) {
     }
 
     if (eligibleForRefund) {
-      // Try to refund the latest payment (if available)
       let paymentIntentId = null;
       try {
         const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
@@ -749,10 +604,8 @@ export async function cancelSubscription(userId) {
         }
       } catch (refundErr) {
         console.error('Error attempting refund during cancellation:', refundErr);
-        // Continue with cancellation even if refund fails
       }
 
-      // Cancel immediately
       await stripe.subscriptions.cancel(subscriptionId);
 
       await pool.query(
@@ -767,7 +620,6 @@ export async function cancelSubscription(userId) {
       return { refunded: true };
     }
 
-    // Not eligible for refund: cancel at period end (user keeps access until end of billing cycle)
     await stripe.subscriptions.update(subscriptionId, {
       cancel_at_period_end: true,
     });
@@ -779,31 +631,23 @@ export async function cancelSubscription(userId) {
   }
 }
 
-/**
- * Create a Stripe Billing Portal session URL for subscription management.
- * Lets users update payment method, view invoices, cancel subscription, etc.
- */
 export async function createBillingPortalSession(userId) {
   try {
-    console.log(`[Billing Portal] Creating session for user ${userId}`);
     const result = await pool.query('SELECT stripe_customer_id FROM users WHERE id = $1', [userId]);
 
     const customerId = result.rows[0]?.stripe_customer_id;
-    console.log(`[Billing Portal] Customer ID: ${customerId || 'NOT FOUND'}`);
 
     if (!customerId) {
       throw new Error('No billing account found. Subscribe first to manage your subscription.');
     }
 
     const frontendUrl = process.env.FRONTEND_URL || 'https://workalong.co.uk';
-    console.log(`[Billing Portal] Creating Stripe session for customer ${customerId}`);
 
     const session = await stripe.billingPortal.sessions.create({
       customer: customerId,
       return_url: `${frontendUrl}/plans`,
     });
 
-    console.log(`[Billing Portal] Session created: ${session.url}`);
     return session.url;
   } catch (error) {
     console.error('[Billing Portal] Error:', error.message);
@@ -814,10 +658,6 @@ export async function createBillingPortalSession(userId) {
   }
 }
 
-/**
- * Update existing subscription with new plan (immediate, with proration)
- * Replaces old plan - Stripe credits unused time and charges prorated new amount
- */
 export async function updateSubscription(userId, planConfig) {
   const { totalPrice, billingCycle, staffCount, multiLocation } = planConfig;
 
@@ -829,7 +669,6 @@ export async function updateSubscription(userId, planConfig) {
     throw new Error('Billing cycle must be monthly or yearly');
   }
 
-  // Check active staff count - block downgrade if new limit is too low
   const newStaffLimit = parseInt(String(staffCount || 3), 10);
   const activeStaffResult = await pool.query(
     `SELECT COUNT(*) as count FROM staff 
@@ -867,17 +706,14 @@ export async function updateSubscription(userId, planConfig) {
     throw new Error('Subscription has no items');
   }
 
-  // Check if subscription has an existing discount/coupon
   const existingDiscount = subscription.discount;
   let discountPercent = null;
 
-  // Get discount percentage from subscription or database
   if (existingDiscount && existingDiscount.coupon) {
     if (existingDiscount.coupon.percent_off) {
       discountPercent = existingDiscount.coupon.percent_off;
     }
   } else {
-    // Fallback: check database for stored discount percentage
     const userResult = await pool.query(
       'SELECT subscription_discount_percent FROM users WHERE id = $1',
       [userId]
@@ -887,14 +723,10 @@ export async function updateSubscription(userId, planConfig) {
     }
   }
 
-  // Calculate final amount based on discount percentage
   let finalAmountPence = Math.round(numPrice * 100);
   if (discountPercent != null && discountPercent > 0) {
     const discountAmount = Math.round(finalAmountPence * (discountPercent / 100));
     finalAmountPence = Math.max(0, finalAmountPence - discountAmount);
-    console.log(
-      `Applying ${discountPercent}% discount: £${numPrice.toFixed(2)} → £${(finalAmountPence / 100).toFixed(2)}`
-    );
   }
 
   if (finalAmountPence > 0 && finalAmountPence < 50) {
@@ -903,7 +735,6 @@ export async function updateSubscription(userId, planConfig) {
 
   const interval = billingCycle === 'yearly' ? 'year' : 'month';
 
-  // Create a new product for this plan (Stripe auto-created products can't be updated)
   const productName =
     billingCycle === 'yearly'
       ? `Workalong Plan (Yearly) — £${(finalAmountPence / 100).toFixed(2)}/year`
@@ -921,7 +752,6 @@ export async function updateSubscription(userId, planConfig) {
   });
   const productId = newProduct.id;
 
-  // Prepare subscription update
   const updateParams = {
     items: [
       {
@@ -944,16 +774,11 @@ export async function updateSubscription(userId, planConfig) {
     },
   };
 
-  // Preserve existing discount if present
   if (existingDiscount && existingDiscount.coupon) {
-    // Discount is automatically preserved by Stripe when updating subscription
-    // But we can explicitly ensure it's maintained
-    console.log(`Preserving existing discount: ${existingDiscount.coupon.id}`);
   }
 
   const updatedSubscription = await stripe.subscriptions.update(subscriptionId, updateParams);
 
-  // Get discount percentage from updated subscription
   const updatedSubscriptionWithDiscount = await stripe.subscriptions.retrieve(
     updatedSubscription.id,
     {
@@ -966,12 +791,10 @@ export async function updateSubscription(userId, planConfig) {
       updatedDiscountPercent = updatedSubscriptionWithDiscount.discount.coupon.percent_off;
     }
   }
-  // If no discount in subscription but we had one before, preserve it
   if (updatedDiscountPercent == null && discountPercent != null) {
     updatedDiscountPercent = discountPercent;
   }
 
-  // Sync our DB with new staff limit, multi_location, discount, and dates
   const staffLimit = parseInt(String(staffCount || 3), 10) || null;
   const multiLocationEnabled = !!multiLocation;
   try {
@@ -1014,7 +837,6 @@ export async function updateSubscription(userId, planConfig) {
           ]
         );
       } catch (e2) {
-        // Final fallback without discount_percent
         await pool.query(
           `UPDATE users SET subscription_plan = 'custom', subscription_start_date = to_timestamp($1), subscription_end_date = to_timestamp($2), subscription_staff_limit = $3, last_payment_date = NOW(), updated_at = NOW() WHERE id = $4`,
           [
@@ -1039,7 +861,6 @@ export async function updateSubscription(userId, planConfig) {
     }
   }
 
-  // If proration created an invoice that needs payment (e.g. 3D Secure), return URL
   const latestInvoiceId = updatedSubscription.latest_invoice;
   let hostedInvoiceUrl = null;
   if (latestInvoiceId) {
@@ -1052,9 +873,6 @@ export async function updateSubscription(userId, planConfig) {
     }
   }
 
-  console.log(
-    `Subscription updated for user ${userId}: staff=${staffCount}, £${numPrice}/${interval}`
-  );
   return {
     subscription: updatedSubscription,
     requiresAction: !!hostedInvoiceUrl,
@@ -1062,9 +880,6 @@ export async function updateSubscription(userId, planConfig) {
   };
 }
 
-/**
- * Get subscription details from Stripe
- */
 export async function getSubscriptionDetails(userId) {
   try {
     const result = await pool.query('SELECT stripe_subscription_id FROM users WHERE id = $1', [
@@ -1085,13 +900,8 @@ export async function getSubscriptionDetails(userId) {
   }
 }
 
-/**
- * Verify subscription status with Stripe API and update database
- * Returns current subscription status
- */
 export async function verifySubscriptionStatus(userId) {
   try {
-    // Get user's Stripe customer ID and subscription ID from database
     let result;
     try {
       result = await pool.query(
@@ -1135,7 +945,6 @@ export async function verifySubscriptionStatus(userId) {
     const customerId = user.stripe_customer_id;
     const subscriptionId = user.stripe_subscription_id;
 
-    // If no Stripe IDs, user is on free plan
     if (!customerId && !subscriptionId) {
       return {
         isActive: false,
@@ -1148,7 +957,6 @@ export async function verifySubscriptionStatus(userId) {
       };
     }
 
-    // Verify subscription with Stripe API
     let subscription = null;
     let isActive = false;
     let stripeStatus = 'free';
@@ -1159,15 +967,12 @@ export async function verifySubscriptionStatus(userId) {
         subscription = await stripe.subscriptions.retrieve(subscriptionId);
         stripeStatus = subscription.status; // active, canceled, past_due, etc.
 
-        // cancel_at_period_end=true means user cancelled but is still active until period end.
-        // Only treat as inactive when Stripe status is literally 'canceled', 'unpaid', or 'past_due'.
         isActive =
           (subscription.status === 'active' || subscription.status === 'trialing') &&
           subscription.status !== 'canceled' &&
           subscription.status !== 'unpaid' &&
           subscription.status !== 'past_due';
 
-        // Sync staff limit from Stripe metadata (for existing subscriptions; column may not exist before migration)
         const staffLimitFromStripe = parseInt(subscription.metadata?.staffCount || '0', 10) || null;
         if (staffLimitFromStripe != null) {
           try {
@@ -1181,7 +986,6 @@ export async function verifySubscriptionStatus(userId) {
               throw e;
           }
         }
-        // Sync multi_location_enabled from Stripe metadata (fixes users who upgraded but DB wasn't updated)
         const multiLocationFromStripe = subscription.metadata?.multiLocation === '1';
         try {
           await pool.query(`UPDATE users SET multi_location_enabled = $1 WHERE id = $2`, [
@@ -1193,7 +997,6 @@ export async function verifySubscriptionStatus(userId) {
             throw e;
         }
 
-        // Sync DB status from Stripe — cancel_at_period_end keeps the user as 'paid' until period ends.
         let dbStatus = 'free';
         if (
           subscription.status === 'canceled' ||
@@ -1206,7 +1009,6 @@ export async function verifySubscriptionStatus(userId) {
         } else if (subscription.status === 'trialing') {
           dbStatus = 'trial';
         }
-        // Update database if status changed
         if (user.subscription_status !== dbStatus) {
           await pool.query(
             `UPDATE users 
@@ -1223,7 +1025,6 @@ export async function verifySubscriptionStatus(userId) {
           );
         }
       } catch (error) {
-        // Subscription not found in Stripe (may have been deleted)
         if (error.code === 'resource_missing') {
           try {
             await pool.query(
@@ -1255,7 +1056,6 @@ export async function verifySubscriptionStatus(userId) {
         };
       }
     } else if (customerId) {
-      // Check if customer has any active subscriptions
       const subscriptions = await stripe.subscriptions.list({
         customer: customerId,
         status: 'active',
@@ -1348,10 +1148,6 @@ export async function verifySubscriptionStatus(userId) {
   }
 }
 
-/**
- * Helper: Map Stripe Price ID to plan name
- * TODO: Replace Price IDs with your actual ones from Stripe Dashboard
- */
 function getPlanFromPriceId(priceId) {
   const priceToPlan = {
     [STRIPE_PRICE_IDS.professional_monthly]: 'professional',
@@ -1363,9 +1159,6 @@ function getPlanFromPriceId(priceId) {
   return priceToPlan[priceId] || 'professional';
 }
 
-/**
- * Verify Stripe webhook signature
- */
 export function verifyWebhookSignature(payload, signature) {
   try {
     const webhookSecret = config.stripe?.webhookSecret || process.env.STRIPE_WEBHOOK_SECRET;
@@ -1377,21 +1170,13 @@ export function verifyWebhookSignature(payload, signature) {
   }
 }
 
-/**
- * Get Price ID based on plan and billing cycle
- */
 export function getPriceId(plan, billingCycle) {
   const key = `${plan}_${billingCycle}`;
   return STRIPE_PRICE_IDS[key];
 }
 
-/**
- * Get payment reference numbers for a user (for proof of purchase)
- * Queries Stripe API directly to get all payment information
- */
 export async function getPaymentReferenceNumbers(userId) {
   try {
-    // Get user's Stripe customer ID and subscription ID from database
     const result = await pool.query(
       `SELECT stripe_customer_id, stripe_subscription_id 
        FROM users 
@@ -1406,7 +1191,6 @@ export async function getPaymentReferenceNumbers(userId) {
     const customerId = result.rows[0].stripe_customer_id;
     const subscriptionId = result.rows[0].stripe_subscription_id;
 
-    // Get subscription details from Stripe with expanded invoice and payment intent
     let subscription = null;
     let latestInvoice = null;
     let paymentIntent = null;
@@ -1431,7 +1215,6 @@ export async function getPaymentReferenceNumbers(userId) {
       }
     }
 
-    // Get checkout sessions for this customer
     if (customerId) {
       const sessions = await stripe.checkout.sessions.list({
         customer: customerId,
@@ -1440,30 +1223,23 @@ export async function getPaymentReferenceNumbers(userId) {
       checkoutSessions = sessions.data.filter((s) => s.payment_status === 'paid');
     }
 
-    // Return all reference numbers from Stripe
     return {
       customerId: customerId,
       subscriptionId: subscriptionId,
-      // Most recent checkout session
       checkoutSessionId: checkoutSessions[0]?.id || null,
-      // Latest invoice (primary reference for proof of purchase)
       invoiceId: latestInvoice?.id || null,
       invoiceNumber: latestInvoice?.number || null,
-      // Payment intent
       paymentIntentId: paymentIntent?.id || null,
-      // Subscription details
       subscriptionStatus: subscription?.status || null,
       subscriptionCurrentPeriodEnd: subscription?.current_period_end
         ? new Date(subscription.current_period_end * 1000)
         : null,
-      // Primary reference number (most useful for proof of purchase)
       primaryReference:
         latestInvoice?.number ||
         latestInvoice?.id ||
         subscriptionId ||
         checkoutSessions[0]?.id ||
         null,
-      // All invoices for this subscription
       allInvoices: subscriptionId ? await getSubscriptionInvoices(subscriptionId) : [],
     };
   } catch (error) {
@@ -1472,9 +1248,6 @@ export async function getPaymentReferenceNumbers(userId) {
   }
 }
 
-/**
- * Get all invoices for a subscription
- */
 async function getSubscriptionInvoices(subscriptionId) {
   try {
     const invoices = await stripe.invoices.list({
