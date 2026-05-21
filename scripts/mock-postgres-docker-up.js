@@ -1,7 +1,3 @@
-/**
- * Starts mock Postgres the same way as docker-compose.mock.yml without docker compose
- * (avoids compose v2 -f quirks and docker-compose/http+docker DOCKER_HOST issues).
- */
 import { spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -73,7 +69,7 @@ function runNewContainer() {
     '-e',
     'POSTGRES_USER=workalong',
     '-e',
-    'POSTGRES_PASSWORD=admin',
+    'POSTGRES_PASSWORD=admin', // only for testing mode. Dont use same password in reallife 
     '-e',
     'POSTGRES_DB=users',
     '-p',
