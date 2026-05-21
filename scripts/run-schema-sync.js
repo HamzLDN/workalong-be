@@ -385,7 +385,7 @@ async function syncSchema() {
   if (!process.env.DB_PORT) {
     console.error(
       '❌  DB_PORT is not set.\n' +
-        '    To sync the mock DB run:  npm run db:mock:sync\n' +
+        '    For mock CI DB: npm run db:mock:recreate then set DB_PORT=5433.\n' +
         '    For production, set DB_PORT explicitly before running this script.'
     );
     process.exit(1);

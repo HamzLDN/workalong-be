@@ -1,7 +1,6 @@
 import fetch from 'node-fetch';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { execSync } from 'child_process';
 import bcrypt from 'bcrypt';
 import { pool } from '../lib/db.js';
 import {
@@ -3265,19 +3264,6 @@ async function runAllTests() {
     console.error(`\n${RED}CRITICAL:${RESET} Failed to test connectivity:`, error.message);
     console.error(`   Stack: ${error.stack?.split('\n').slice(0, 3).join('\n')}`);
     return false;
-  }
-
-  // Ensure time_entries has approved_at (needed for staff stats, payroll, earnings)
-  try {
-    execSync('node scripts/run-time-entry-approval-migration.js', {
-      stdio: 'pipe',
-      cwd: process.cwd(),
-    });
-    console.log(`  ${GREEN}Migration:${RESET} time_entries approved_at/approved_by`);
-  } catch (err) {
-    console.log(
-      `  ${YELLOW}Note:${RESET} Migration skipped or already applied (${err.message?.slice(0, 80)})`
-    );
   }
 
   const results = {

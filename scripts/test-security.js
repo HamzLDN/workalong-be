@@ -523,7 +523,7 @@ async function setupTestUsers() {
 }
 
 /**
- * Remove User A / User B rows created for this run (direct DB delete — same FK fixes as cleanup-test-users.js).
+ * Remove User A / User B rows created for this run (direct DB delete with FK-safe ordering).
  * Runs in `finally` so test DB does not accumulate security-test users.
  */
 async function cleanupTestUsers() {
