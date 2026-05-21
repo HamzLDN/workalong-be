@@ -1,12 +1,4 @@
-/**
- * Additively sync the configured DB schema to match `database-schema/`.
- *
- * The target database is controlled only by DB_* environment variables.
- * This is intentionally non-destructive:
- * - creates missing tables/sequences/indexes/constraints
- * - applies additive migrations for newer columns/tables (listed + any `add*.sql` in database-schema/ not in the list)
- * - does not drop tables/columns or wipe data
- */
+// additive schema sync from database-schema/ (no drops)
 import { pool } from '../lib/db.js';
 import fs from 'fs';
 import path from 'path';
@@ -16,9 +8,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const SCHEMA_DIR = path.join(__dirname, '..', 'database-schema');
 
-// Mock Postgres docker init aggregates these files via `npm run db:mock:init` —
-// scripts/generate-mock-init.js `MOCK_INIT_ORDER` mirrors this list (with
-// `00_functions_and_triggers.sql` first). Divergence causes docker init to stop on first `\i` error.
+// keep in sync with scripts/generate-mock-init.js MOCK_INIT_ORDER
 const BASE_SCHEMA_FILES = [
   'users.sql',
   'sessions.sql',
@@ -45,64 +35,19 @@ const BASE_SCHEMA_FILES = [
 ];
 
 const ADDITIVE_MIGRATIONS = [
-  {
-    name: 'users (discount, timezone, payroll prefs, head_office, manager_permissions)',
-    file: 'add-users.sql',
-    dir: SCHEMA_DIR,
-  },
-  {
-    name: 'sessions csrf_token',
-    file: 'add-session-csrf-token.sql',
-    dir: SCHEMA_DIR,
-  },
-  {
-    name: 'time_entries (leave_category, approvals, sick_leave check)',
-    file: 'add-time-entries.sql',
-    dir: SCHEMA_DIR,
-  },
-  {
-    name: 'staff_face_profiles (Face ID kiosk)',
-    file: 'add-staff-face-profiles.sql',
-    dir: SCHEMA_DIR,
-  },
-  {
-    name: 'staff.lastname (full name on kiosk)',
-    file: 'add_staff_lastname.sql',
-    dir: SCHEMA_DIR,
-  },
-  {
-    name: 'staff_face_profiles.face_embeddings (Face API descriptors)',
-    file: 'add-face-embeddings-column.sql',
-    dir: SCHEMA_DIR,
-  },
-  {
-    name: 'company structure (branches, departments, staff assignments)',
-    file: 'add-company-structure.sql',
-    dir: SCHEMA_DIR,
-  },
-  {
-    name: 'shifts created_by user/staff',
-    file: 'add-shift-creator-columns.sql',
-    dir: SCHEMA_DIR,
-  },
-  {
-    name: 'shifts clock_source',
-    file: 'add-shifts-clock-source.sql',
-    dir: SCHEMA_DIR,
-  },
-  {
-    name: 'users workspace_slug (employer subdomain)',
-    file: 'add-workspace-subdomain.sql',
-    dir: SCHEMA_DIR,
-  },
+  { name: 'users (discount, timezone, payroll prefs, head_office, manager_permissions)', file: 'add-users.sql', dir: SCHEMA_DIR },
+  { name: 'sessions csrf_token', file: 'add-session-csrf-token.sql', dir: SCHEMA_DIR },
+  { name: 'time_entries (leave_category, approvals, sick_leave check)', file: 'add-time-entries.sql', dir: SCHEMA_DIR },
+  { name: 'staff_face_profiles (Face ID kiosk)', file: 'add-staff-face-profiles.sql', dir: SCHEMA_DIR },
+  { name: 'staff.lastname (full name on kiosk)', file: 'add_staff_lastname.sql', dir: SCHEMA_DIR },
+  { name: 'staff_face_profiles.face_embeddings (Face API descriptors)', file: 'add-face-embeddings-column.sql', dir: SCHEMA_DIR },
+  { name: 'company structure (branches, departments, staff assignments)', file: 'add-company-structure.sql', dir: SCHEMA_DIR },
+  { name: 'shifts created_by user/staff', file: 'add-shift-creator-columns.sql', dir: SCHEMA_DIR },
+  { name: 'shifts clock_source', file: 'add-shifts-clock-source.sql', dir: SCHEMA_DIR },
+  { name: 'users workspace_slug (employer subdomain)', file: 'add-workspace-subdomain.sql', dir: SCHEMA_DIR },
 ];
 
-/**
- * Split SQL on top-level ';' boundaries (handles single-quoted strings, line
- * comments, block comments, and dollar-quoted plpgsql/function bodies).
- * Needed so base DDL and pg_dump-derived files execute one statement per
- * pg query — node-postgres SimpleQuery multi-statement payloads are unreliable on some setups.
- */
+// split sql on top-level semicolons (quotes, comments, dollar-quoting)
 function splitPgSqlStatements(sql) {
   const stmts = [];
   let buf = '';
@@ -157,7 +102,7 @@ function splitPgSqlStatements(sql) {
         const delim = `$${tag}$`;
         const closeIdx = sql.indexOf(delim, j + 1);
         if (closeIdx === -1) {
-          throw new Error('Unterminated dollar-quoted literal in schema SQL.');
+          throw new Error('unterminated dollar-quoted literal in schema sql');
         }
         buf += sql.slice(i, closeIdx + delim.length);
         i = closeIdx + delim.length;
@@ -183,7 +128,6 @@ function splitPgSqlStatements(sql) {
   return stmts;
 }
 
-/** True when a quick retry may succeed (TCP not open yet, or PG still in startup/recovery). */
 function isTransientDatabaseConnectError(err) {
   const code = err?.code;
   const msg = String(err?.message || '');
@@ -196,7 +140,6 @@ function isTransientDatabaseConnectError(err) {
   ) {
     return true;
   }
-  // PostgreSQL: database still starting / cannot accept connections yet (common right after docker start).
   if (code === '57P03' || code === '57P01') return true;
   if (/not yet accepting connections|the database system is starting up|recovery mode/i.test(msg)) {
     return true;
@@ -213,7 +156,7 @@ async function waitForDbReady() {
     try {
       await pool.query('SELECT 1 AS ok');
       if (attempt > 1) {
-        console.log(`✅ PostgreSQL reachable after ${attempt} attempt(s).\n`);
+        console.log(`postgres reachable after ${attempt} attempt(s)\n`);
       }
       return;
     } catch (err) {
@@ -227,7 +170,7 @@ async function waitForDbReady() {
       }
 
       console.warn(
-        `⏳ Database not reachable yet (${code || msg.slice(0, 120) || 'unknown'}, attempt ${attempt}/${maxAttempts}) — retry in ${delayMs}ms`
+        `database not reachable (${code || msg.slice(0, 120) || 'unknown'}, attempt ${attempt}/${maxAttempts}), retry in ${delayMs}ms`
       );
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
@@ -239,19 +182,16 @@ async function waitForDbReady() {
 function isIgnorableSchemaError(err) {
   return (
     err?.message?.includes('already exists') ||
-    err?.code === '42701' || // duplicate_column
-    err?.code === '42P07' || // duplicate_table / relation already exists
-    err?.code === '42710' || // duplicate_object
-    err?.code === '42723' || // duplicate_function
-    err?.code === '42P16' // invalid_table_definition (e.g. second PK)
+    err?.code === '42701' ||
+    err?.code === '42P07' ||
+    err?.code === '42710' ||
+    err?.code === '42723' ||
+    err?.code === '42P16'
   );
 }
 
 function isRetryableDependencyError(err) {
-  return (
-    err?.code === '42P01' || // undefined_table
-    err?.code === '42703' // undefined_column
-  );
+  return err?.code === '42P01' || err?.code === '42703';
 }
 
 async function applyStatementBatch(name, sql, { allowRetryableDependencies = false } = {}) {
@@ -281,12 +221,12 @@ async function applyFunctionsFile() {
     .readFileSync(file, 'utf8')
     .replace(/^CREATE FUNCTION /gm, 'CREATE OR REPLACE FUNCTION ');
 
-  console.log('📦 Syncing shared functions...');
+  console.log('syncing shared functions...');
   const statements = splitPgSqlStatements(sql);
   for (const statement of statements) {
     await pool.query(statement);
   }
-  console.log('✅ Shared functions synced');
+  console.log('shared functions synced');
 }
 
 async function syncBaseSchema() {
@@ -294,12 +234,12 @@ async function syncBaseSchema() {
 
   for (let pass = 1; pass <= maxPasses; pass += 1) {
     let deferredCount = 0;
-    console.log(`\n📚 Base schema sync pass ${pass}/${maxPasses}`);
+    console.log(`\nbase schema pass ${pass}/${maxPasses}`);
 
     for (const file of BASE_SCHEMA_FILES) {
       const sqlPath = path.join(SCHEMA_DIR, file);
       if (!fs.existsSync(sqlPath)) {
-        console.log(`⏭️  Skipping missing schema file: ${file}`);
+        console.log(`skip missing: ${file}`);
         continue;
       }
 
@@ -309,41 +249,39 @@ async function syncBaseSchema() {
       });
 
       if (deferred) deferredCount += 1;
-      console.log(`${deferred ? '↻' : '✅'} ${file}`);
+      console.log(`${deferred ? 'deferred' : 'ok'} ${file}`);
     }
 
     if (deferredCount === 0) return;
   }
 
-  throw new Error(
-    'Base schema sync still has unresolved table/column dependencies after 3 passes.'
-  );
+  throw new Error('base schema sync: unresolved dependencies after 3 passes');
 }
 
 async function runAdditiveMigrations() {
   for (const migration of ADDITIVE_MIGRATIONS) {
     const sqlPath = path.join(migration.dir, migration.file);
     if (!fs.existsSync(sqlPath)) {
-      console.log(`⏭️  Skipping ${migration.name} (file not found: ${migration.file})`);
+      console.log(`skip ${migration.name} (missing ${migration.file})`);
       continue;
     }
 
-    console.log(`📦 Applying ${migration.name}...`);
+    console.log(`applying ${migration.name}...`);
     const sql = fs.readFileSync(sqlPath, 'utf8');
     try {
       await pool.query(sql);
     } catch (err) {
       if (isIgnorableSchemaError(err)) {
-        console.log(`⏭️  ${migration.name} already applied (${err.code || 'n/a'})`);
+        console.log(`skip ${migration.name} (already applied, ${err.code || 'n/a'})`);
         continue;
       }
       throw new Error(`${migration.name} failed (${err.code || 'no-code'}): ${err.message}`);
     }
-    console.log(`✅ ${migration.name}`);
+    console.log(`ok ${migration.name}`);
   }
 }
 
-/** Pick up new database-schema/add*.sql migrations without editing ADDITIVE_MIGRATIONS. */
+// any add-*.sql / add_*.sql not listed above
 async function applyRemainingSchemaAdditiveSqlFiles() {
   const trackedFromSchemaDir = new Set(
     ADDITIVE_MIGRATIONS.filter((m) => m.dir === SCHEMA_DIR).map((m) => m.file)
@@ -362,31 +300,31 @@ async function applyRemainingSchemaAdditiveSqlFiles() {
 
   if (extras.length === 0) return;
 
-  console.log('\n📂 Applying remaining additive SQL files from database-schema/…');
+  console.log('\napplying remaining additive sql files...');
 
   for (const file of extras) {
     const sqlPath = path.join(SCHEMA_DIR, file);
-    console.log(`📦 Applying ${file}…`);
+    console.log(`applying ${file}...`);
     const sql = fs.readFileSync(sqlPath, 'utf8');
     try {
       await pool.query(sql);
     } catch (err) {
       if (isIgnorableSchemaError(err)) {
-        console.log(`⏭️  ${file} already applied (${err.code || 'n/a'})`);
+        console.log(`skip ${file} (already applied, ${err.code || 'n/a'})`);
         continue;
       }
       throw new Error(`${file} failed (${err.code || 'no-code'}): ${err.message}`);
     }
-    console.log(`✅ ${file}`);
+    console.log(`ok ${file}`);
   }
 }
 
 async function syncSchema() {
   if (!process.env.DB_PORT) {
     console.error(
-      '❌  DB_PORT is not set.\n' +
-        '    For mock CI DB: npm run db:mock:recreate then set DB_PORT=5433.\n' +
-        '    For production, set DB_PORT explicitly before running this script.'
+      'db_port is not set.\n' +
+        'mock ci: npm run db:mock:recreate then DB_PORT=5433.\n' +
+        'production: set db_port before running this script.'
     );
     process.exit(1);
   }
@@ -394,12 +332,12 @@ async function syncSchema() {
   const dbHost = process.env.DB_HOST || 'localhost';
   const isLocal = ['localhost', '127.0.0.1', '0.0.0.0'].includes(dbHost);
 
-  console.log('Syncing schema against database:');
-  console.log(`  DB_HOST=${dbHost}`);
-  console.log(`  DB_PORT=${process.env.DB_PORT}`);
-  console.log(`  DB_NAME=${process.env.DB_NAME || 'users'}`);
+  console.log('syncing schema:');
+  console.log(`  db_host=${dbHost}`);
+  console.log(`  db_port=${process.env.DB_PORT}`);
+  console.log(`  db_name=${process.env.DB_NAME || 'users'}`);
   if (!isLocal) {
-    console.log('\n⚠️  Target is not localhost - ensure this is intended for production.');
+    console.log('\nwarning: target is not localhost');
   }
   console.log('');
 
@@ -410,13 +348,13 @@ async function syncSchema() {
   await runAdditiveMigrations();
   await applyRemainingSchemaAdditiveSqlFiles();
 
-  console.log('\n✅ Schema sync completed.');
+  console.log('\nschema sync completed');
   await pool.end();
   process.exit(0);
 }
 
 syncSchema().catch(async (err) => {
-  console.error('Fatal schema sync error:', err.message || err);
+  console.error('schema sync error:', err.message || err);
   await pool.end().catch(() => {});
   process.exit(1);
 });
