@@ -249,25 +249,7 @@ export async function getShifts(userId, filters = {}) {
       s.id,
       s.user_id,
       s.staff_id,
-      s.created_by_user_id,
-      s.created_by_staff_id,
-      CASE
-        WHEN s.created_by_staff_id IS NOT NULL THEN
-          NULLIF(
-            TRIM(
-              CONCAT(
-                COALESCE(shift_creator_staff.name, ''),
-                ' ',
-                COALESCE(shift_creator_staff.lastname, '')
-              )
-            ),
-            ''
-          )
-        WHEN s.created_by_user_id IS NOT NULL THEN
-          COALESCE(NULLIF(TRIM(shift_creator_user.name), ''), shift_creator_user.email)
-        ELSE COALESCE(NULLIF(TRIM(account_user.name), ''), account_user.email)
-      END AS created_by_label,
-      s.shift_date::text as shift_date,
+      s.shift_date::text,
       s.start_time,
       s.hours,
       s.break_minutes,
@@ -278,34 +260,61 @@ export async function getShifts(userId, filters = {}) {
       s.notes,
       s.created_at,
       s.updated_at,
-      s.approved_at,
-      s.approved_by,
-      COALESCE(NULLIF(TRIM(approver.name), ''), approver.email) AS approved_by_user_name,
-      s.time_entry_id,
-      s.clocked_in_time,
-      s.clocked_out_time,
-      s.clock_source,
-      (COALESCE(
-        NULLIF((SELECT SUM(EXTRACT(EPOCH FROM (te.clock_out_time - te.clock_in_time)) / 3600.0) FROM time_entries te WHERE te.shift_id = s.id AND te.entry_type = 'clock_in_out' AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL), 0),
-        NULLIF((SELECT SUM((COALESCE(te.hours_worked, 0)::numeric + COALESCE(te.overtime_hours, 0)::numeric)) FROM time_entries te WHERE te.shift_id = s.id AND te.entry_type = 'approved_shift'), 0),
-        CASE WHEN s.clocked_in_time IS NOT NULL AND s.clocked_out_time IS NOT NULL THEN EXTRACT(EPOCH FROM (s.clocked_out_time - s.clocked_in_time)) / 3600.0 ELSE 0 END
-      ))::numeric(10,2) as actual_hours_worked,
-      (SELECT NULLIF(TRIM(SUBSTRING(te.notes FROM 'Late clock-out reason: (.+)')), '')
-       FROM time_entries te
-       WHERE te.shift_id = s.id AND te.clock_in_time IS NOT NULL AND te.clock_out_time IS NOT NULL
-         AND te.notes IS NOT NULL AND te.notes LIKE 'Late clock-out reason:%'
-       ORDER BY te.clock_out_time DESC LIMIT 1) as late_clock_out_reason,
-      st.name as staff_name,
+
+      st.name AS staff_name,
       st.role,
-      st.hourly_rate
+      st.hourly_rate,
+
+      COALESCE(
+        NULLIF(te.clock_hours, 0),
+        NULLIF(te.approved_hours, 0),
+        CASE
+          WHEN s.clocked_in_time IS NOT NULL
+           AND s.clocked_out_time IS NOT NULL
+          THEN EXTRACT(EPOCH FROM (
+            s.clocked_out_time - s.clocked_in_time
+          )) / 3600.0
+          ELSE 0
+        END
+      )::numeric(10,2) AS actual_hours_worked
+
     FROM shifts s
-    JOIN staff st ON s.staff_id = st.id
-    LEFT JOIN users approver ON approver.id = s.approved_by
-    LEFT JOIN users shift_creator_user ON shift_creator_user.id = s.created_by_user_id
-    LEFT JOIN staff shift_creator_staff ON shift_creator_staff.id = s.created_by_staff_id
-    LEFT JOIN users account_user ON account_user.id = s.user_id
+
+    JOIN staff st
+      ON s.staff_id = st.id
+
+    LEFT JOIN (
+      SELECT
+        shift_id,
+
+        SUM(
+          CASE
+            WHEN entry_type = 'clock_in_out'
+             AND clock_in_time IS NOT NULL
+             AND clock_out_time IS NOT NULL
+            THEN EXTRACT(EPOCH FROM (
+              clock_out_time - clock_in_time
+            )) / 3600.0
+            ELSE 0
+          END
+        ) AS clock_hours,
+
+        SUM(
+          CASE
+            WHEN entry_type = 'approved_shift'
+            THEN COALESCE(hours_worked, 0)
+               + COALESCE(overtime_hours, 0)
+            ELSE 0
+          END
+        ) AS approved_hours
+
+      FROM time_entries
+      GROUP BY shift_id
+    ) te
+      ON te.shift_id = s.id
+
     WHERE s.user_id = $1
-  `;
+  `; // found a simpler way of doing the query
 
   const params = [userId];
   let paramCount = 1;
