@@ -16,6 +16,7 @@ import healthRouter from './health.js';
 import publicSettingsRouter from './public-settings.js';
 import paymentsRouter from './payments.js';
 import companyStructureRouter from './company-structure.js';
+import hrRouter from './hr.js';
 
 export function registerRoutes(app) {
   app.use('/api/health', healthRouter);
@@ -36,4 +37,5 @@ export function registerRoutes(app) {
   app.use('/api/security', securityRouter);
   app.use('/api/payments', paymentsRouter);
   app.use('/api/company-structure', companyStructureRouter);
+  app.use('/api/hr', hrRouter);
 }

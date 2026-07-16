@@ -49,6 +49,8 @@ const MOCK_INIT_ORDER = [
   'add-shift-creator-columns.sql',
   'add-shifts-clock-source.sql',
   'add-device-links.sql',
+  'add-hr-modules.sql',
+  'add-escalation-reports.sql',
 ];
 
 function listSchemaFiles() {

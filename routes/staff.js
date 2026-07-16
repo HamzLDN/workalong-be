@@ -34,6 +34,21 @@ import {
   mergePermissions,
   sanitizeManagerPermissions,
 } from '../lib/managerPermissions.js';
+import {
+  listAvailability,
+  upsertAvailability,
+  listLeaveRequests,
+  createLeaveRequest,
+  listExpenses,
+  createExpense,
+  listNotifications,
+  reviewLeaveRequest,
+  reviewExpense,
+} from '../services/hr.js';
+import {
+  listEscalationReports,
+  createEscalationReport,
+} from '../services/escalationReports.js';
 
 const router = express.Router();
 
@@ -775,6 +790,141 @@ router.get('/portal/audit', requireStaffAuth, async (req, res) => {
   } catch (error) {
     console.error('Portal audit error:', error);
     res.status(500).json({ error: 'Failed to load audit log' });
+  }
+});
+
+router.get('/portal/availability', requireStaffAuth, async (req, res) => {
+  try {
+    const rows = await listAvailability(req.staff.companyUserId, { staffId: req.staffId });
+    res.json({ availability: rows });
+  } catch (error) {
+    console.error('Portal availability error:', error);
+    res.status(500).json({ error: 'Failed to list availability' });
+  }
+});
+
+router.post('/portal/availability', requireStaffAuth, async (req, res) => {
+  try {
+    const row = await upsertAvailability(req.staff.companyUserId, req.staffId, req.body);
+    res.status(201).json({ availability: row });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Failed to save availability' });
+  }
+});
+
+router.get('/portal/leave-requests', requireStaffAuth, async (req, res) => {
+  try {
+    const rows = await listLeaveRequests(req.staff.companyUserId, { staffId: req.staffId });
+    res.json({ leaveRequests: rows });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to list leave requests' });
+  }
+});
+
+router.post('/portal/leave-requests', requireStaffAuth, async (req, res) => {
+  try {
+    const row = await createLeaveRequest(req.staff.companyUserId, req.staffId, req.body);
+    res.status(201).json({ leaveRequest: row });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Failed to create leave request' });
+  }
+});
+
+router.post('/portal/leave-requests/:id/review', requireStaffAuth, async (req, res) => {
+  try {
+    if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
+      return res.status(403).json({ error: 'Manager access required' });
+    }
+    const row = await reviewLeaveRequest(req.staff.companyUserId, req.params.id, {
+      ...req.body,
+      reviewerStaffId: req.staffId,
+    });
+    res.json({ leaveRequest: row });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Failed to review leave request' });
+  }
+});
+
+router.get('/portal/expenses', requireStaffAuth, async (req, res) => {
+  try {
+    const rows = await listExpenses(req.staff.companyUserId, { staffId: req.staffId });
+    res.json({ expenses: rows });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to list expenses' });
+  }
+});
+
+router.post('/portal/expenses', requireStaffAuth, async (req, res) => {
+  try {
+    const row = await createExpense(req.staff.companyUserId, req.staffId, req.body);
+    res.status(201).json({ expense: row });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Failed to create expense' });
+  }
+});
+
+router.post('/portal/expenses/:id/review', requireStaffAuth, async (req, res) => {
+  try {
+    if (!['manager', 'payroll_admin'].includes(req.staff.accessRole)) {
+      return res.status(403).json({ error: 'Manager access required' });
+    }
+    const row = await reviewExpense(req.staff.companyUserId, req.params.id, {
+      ...req.body,
+      reviewerStaffId: req.staffId,
+    });
+    res.json({ expense: row });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Failed to review expense' });
+  }
+});
+
+router.get('/portal/notifications', requireStaffAuth, async (req, res) => {
+  try {
+    const rows = await listNotifications(req.staff.companyUserId, {
+      staffId: req.staffId,
+      unreadOnly: req.query.unreadOnly === 'true',
+    });
+    res.json({ notifications: rows });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to list notifications' });
+  }
+});
+
+router.get('/portal/payslips', requireStaffAuth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT p.*, pr.period_start, pr.period_end
+       FROM payslips p
+       JOIN payroll_runs pr ON pr.id = p.payroll_run_id
+       WHERE p.user_id = $1 AND p.staff_id = $2
+       ORDER BY pr.period_start DESC`,
+      [req.staff.companyUserId, req.staffId]
+    );
+    res.json({ payslips: result.rows });
+  } catch (error) {
+    console.error('Portal payslips error:', error);
+    res.status(500).json({ error: 'Failed to list payslips' });
+  }
+});
+
+router.get('/portal/escalation-reports', requireStaffAuth, async (req, res) => {
+  try {
+    const rows = await listEscalationReports(req.staff.companyUserId, {
+      staffId: req.staffId,
+    });
+    res.json({ reports: rows });
+  } catch (error) {
+    console.error('Portal escalation list error:', error);
+    res.status(500).json({ error: 'Failed to list reports' });
+  }
+});
+
+router.post('/portal/escalation-reports', requireStaffAuth, async (req, res) => {
+  try {
+    const row = await createEscalationReport(req.staff.companyUserId, req.staffId, req.body);
+    res.status(201).json({ report: row });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Failed to submit report' });
   }
 });
 

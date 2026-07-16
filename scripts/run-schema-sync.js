@@ -45,6 +45,8 @@ const ADDITIVE_MIGRATIONS = [
   { name: 'shifts created_by user/staff', file: 'add-shift-creator-columns.sql', dir: SCHEMA_DIR },
   { name: 'shifts clock_source', file: 'add-shifts-clock-source.sql', dir: SCHEMA_DIR },
   { name: 'users workspace_slug (employer subdomain)', file: 'add-workspace-subdomain.sql', dir: SCHEMA_DIR },
+  { name: 'HR modules (availability, leave, documents, payroll runs)', file: 'add-hr-modules.sql', dir: SCHEMA_DIR },
+  { name: 'escalation reports', file: 'add-escalation-reports.sql', dir: SCHEMA_DIR },
 ];
 
 // split sql on top-level semicolons (quotes, comments, dollar-quoting)
